@@ -18,24 +18,15 @@ import {
   updatedAt,
 } from '../../shared/db-columns.js';
 import { priceType, professionals, services } from '../catalog/schema.js';
+import { ACTORS, APPOINTMENT_STATUSES } from './appointment-state-machine.js';
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
 
-/** Estados de un turno (sección 4.4). Las transiciones válidas se definen en H3. */
-export const appointmentStatus = pgEnum('appointment_status', [
-  'PENDING_DEPOSIT',
-  'DEPOSIT_REVIEW',
-  'CONFIRMED',
-  'DEPOSIT_REJECTED',
-  'EXPIRED',
-  'COMPLETED',
-  'NO_SHOW',
-  'CANCELLED_BY_CUSTOMER',
-  'CANCELLED_BY_BUSINESS',
-]);
+/** Estados de un turno: se definen en la máquina de estados (CLAUDE.md, regla 4). */
+export const appointmentStatus = pgEnum('appointment_status', APPOINTMENT_STATUSES);
 
 /** Quién hace algo en el sistema: el asistente, la dueña, una tarea programada o el administrador. */
-export const actor = pgEnum('actor', ['assistant', 'owner', 'system', 'admin']);
+export const actor = pgEnum('actor', ACTORS);
 
 export const appointments = pgTable(
   'appointments',
