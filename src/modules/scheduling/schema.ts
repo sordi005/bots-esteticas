@@ -18,7 +18,11 @@ import {
   updatedAt,
 } from '../../shared/db-columns.js';
 import { priceType, professionals, services } from '../catalog/schema.js';
-import { ACTORS, APPOINTMENT_STATUSES } from './appointment-state-machine.js';
+import {
+  ACTORS,
+  APPOINTMENT_EVENT_KINDS,
+  APPOINTMENT_STATUSES,
+} from './appointment-state-machine.js';
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
 
@@ -38,8 +42,9 @@ export const appointments = pgTable(
     professionalId: uuid('professional_id').notNull(),
     /**
      * Tiempo en que la profesional está ocupada: [inicio, inicio + duración + margen).
-     * La restricción que impide superponer turnos (H4) se aplica sobre este rango.
-     * El turno que ve la clienta termina en inicio + duración.
+     * La restricción `appointments_no_overlap` impide que dos turnos que ocupan el horario
+     * se superpongan. Drizzle no sabe declarar restricciones de exclusión: está en la
+     * migración 0003. El turno que ve la clienta termina en inicio + duración.
      */
     timeRange: timestampRange('time_range').notNull(),
     // Copia al momento de reservar: si la dueña cambia el servicio después,
@@ -89,16 +94,25 @@ export const appointments = pgTable(
   ],
 );
 
-/** Auditoría de cada transición de estado (CLAUDE.md, regla 4). Solo se insertan filas. */
+/** `status_change`: cambia el estado. `rescheduled`: cambia el horario, no el estado. */
+export const appointmentEventKind = pgEnum('appointment_event_kind', APPOINTMENT_EVENT_KINDS);
+
+/**
+ * Auditoría de cada cambio de un turno (CLAUDE.md, regla 4). Solo se insertan filas.
+ * Las reprogramaciones de un turno se cuentan con los eventos `rescheduled`.
+ */
 export const appointmentEvents = pgTable(
   'appointment_events',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     tenantId: tenantId(),
     appointmentId: uuid('appointment_id').notNull(),
+    kind: appointmentEventKind('kind').notNull().default('status_change'),
     /** Null en el evento de creación del turno. */
     fromStatus: appointmentStatus('from_status'),
     toStatus: appointmentStatus('to_status').notNull(),
+    /** Solo en una reprogramación: el horario que tenía antes. */
+    previousTimeRange: timestampRange('previous_time_range'),
     actor: actor('actor').notNull(),
     reason: text('reason'),
     occurredAt: instant('occurred_at').notNull().defaultNow(),
@@ -110,6 +124,16 @@ export const appointmentEvents = pgTable(
       foreignColumns: [appointments.tenantId, appointments.id],
     }),
     index('appointment_events_appointment_idx').on(t.tenantId, t.appointmentId, t.occurredAt),
-    check('appointment_events_status_changes', sql`${t.fromStatus} is distinct from ${t.toStatus}`),
+    halfOpenRangeCheck('appointment_events_previous_time_range_valid', t.previousTimeRange),
+    check(
+      'appointment_events_kind_consistent',
+      sql`(${t.kind} = 'status_change'
+          and ${t.fromStatus} is distinct from ${t.toStatus}
+          and ${t.previousTimeRange} is null)
+        or (${t.kind} = 'rescheduled'
+          and ${t.fromStatus} is not null
+          and ${t.fromStatus} = ${t.toStatus}
+          and ${t.previousTimeRange} is not null)`,
+    ),
   ],
 );

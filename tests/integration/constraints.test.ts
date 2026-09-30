@@ -1,10 +1,10 @@
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { workingHours } from '../../src/modules/catalog/schema.js';
 import { handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
-import { appointments } from '../../src/modules/scheduling/schema.js';
+import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { testDatabaseUrl } from './support/database.js';
@@ -126,6 +126,41 @@ describe('reglas que protege la base', () => {
       CHECK_VIOLATION,
       'messages_received_have_whatsapp_id',
     );
+  });
+
+  it.each([
+    ['un cambio de estado que no cambia el estado', { kind: 'status_change', fromStatus: 'CONFIRMED' }],
+    ['una reprogramación sin el horario anterior', { kind: 'rescheduled', fromStatus: 'CONFIRMED' }],
+    [
+      'una reprogramación que cambia el estado',
+      { kind: 'rescheduled', fromStatus: 'PENDING_DEPOSIT', previousTimeRange: FIXTURE_APPOINTMENT_RANGE },
+    ],
+  ] as const)('la auditoría rechaza %s', async (_case, event) => {
+    await expectConstraintViolation(
+      db.insert(appointmentEvents).values({
+        tenantId: fixture.tenantId,
+        appointmentId: fixture.appointmentId,
+        toStatus: 'CONFIRMED',
+        actor: 'owner',
+        ...event,
+      }),
+      CHECK_VIOLATION,
+      'appointment_events_kind_consistent',
+    );
+  });
+
+  it('la auditoría guarda una reprogramación con el horario anterior', async () => {
+    await expect(
+      db.insert(appointmentEvents).values({
+        tenantId: fixture.tenantId,
+        appointmentId: fixture.appointmentId,
+        kind: 'rescheduled',
+        fromStatus: 'CONFIRMED',
+        toStatus: 'CONFIRMED',
+        previousTimeRange: FIXTURE_APPOINTMENT_RANGE,
+        actor: 'assistant',
+      }),
+    ).resolves.toBeDefined();
   });
 
   it('el mismo mensaje de WhatsApp se guarda una sola vez (idempotencia)', async () => {

@@ -15,6 +15,20 @@
       "when": 1790811350798,
       "tag": "0001_feriados_nacionales_2026",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790811866157,
+      "tag": "0002_eventos_de_reprogramacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790811879416,
+      "tag": "0003_turnos_sin_superposicion",
+      "breakpoints": true
     }
   ]
 }
