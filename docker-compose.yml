@@ -1,0 +1,23 @@
+# Postgres para desarrollo y tests de integración.
+# Crea dos bases: bots_esteticas (dev) y bots_esteticas_test (tests).
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bots_esteticas
+    ports:
+      # 5434 por defecto para no chocar con un Postgres local en 5432.
+      - '${POSTGRES_PORT:-5434}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d bots_esteticas']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:

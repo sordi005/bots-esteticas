@@ -11,16 +11,47 @@ Asistente de WhatsApp con IA para centros de estética de Mendoza, ofrecido como
 
 ## Stack
 
-TypeScript estricto · Node.js LTS · Fastify · PostgreSQL · Drizzle ORM (migraciones SQL) · Zod · Vitest · Pino · Docker Compose para desarrollo.
+TypeScript estricto · Node.js 22 LTS · Fastify · PostgreSQL 17 · Drizzle ORM (migraciones SQL) · Zod · Vitest · Pino · Docker Compose para desarrollo · pnpm.
+
+Dependencias de soporte aprobadas:
+
+| Paquete | Para qué |
+|---|---|
+| `pg` | Driver con el que Drizzle habla con Postgres |
+| `drizzle-kit` | Genera las migraciones SQL a partir de los schemas |
+| `tsx` | Corre TypeScript en desarrollo con recarga (`pnpm dev`) |
+| `eslint`, `@eslint/js`, `typescript-eslint` | Lint con reglas que usan los tipos |
+| `@types/node`, `@types/pg` | Tipos |
+
+Entran en su hito, según la especificación: SDK de Anthropic (H7) y Sentry (H14).
 
 No agregar dependencias fuera de esta lista sin proponerlo primero y explicar por qué.
 
+### Dependencias y cadena de suministro
+
+- **Siempre pnpm, nunca npm.** La versión está fijada con hash en `packageManager` (`package.json`); Corepack la descarga sola.
+- Las protecciones viven en `pnpm-workspace.yaml` y no se relajan sin acordarlo:
+  - `allowBuilds`: ninguna dependencia corre scripts de instalación.
+  - `minimumReleaseAge`: nada publicado hace menos de 7 días.
+  - `trustPolicy: no-downgrade`: falla si una versión nueva tiene menos garantías de procedencia.
+- Toda excepción (`allowBuilds: true`, `trustPolicyExclude`) lleva versión exacta y un comentario con el motivo.
+- TypeScript queda en 6.0.x: `typescript-eslint` todavía no soporta TypeScript 7.
+- CI instala con `--frozen-lockfile` y fija las acciones de GitHub por commit SHA.
+
 ## Comandos
 
-Se completan en el hito H1.
-
-```
-# instalar, levantar Postgres, migrar, correr tests, lint, typecheck, dev
+```bash
+cp .env.example .env      # una sola vez; ajustá PORT si el 3000 está ocupado
+pnpm install              # dependencias
+pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté listo
+pnpm dev                  # servidor con recarga en http://localhost:$PORT
+pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
+pnpm test:unit            # solo unitarios (no necesitan base)
+pnpm test:integration     # contra Postgres real (necesita db:up)
+pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
+pnpm build && pnpm start  # compilar a dist/ y correr como en producción
+pnpm db:generate          # generar una migración desde los schemas (desde H2)
+pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 ```
 
 ## Estructura
@@ -31,14 +62,20 @@ src/
     tenants/  catalog/  scheduling/  customers/  payments/
     whatsapp/  conversation/  notifications/  calendar/
     jobs/  reporting/  admin/
-  shared/        # config, db, logger, errores, utilidades de fechas
-  server.ts      # arma Fastify y registra rutas
-  worker.ts      # loop de tareas programadas
+    # cada módulo declara sus tablas en su schema.ts (desde H2)
+  shared/        # config, db, logger, health, errores, utilidades de fechas
+  server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
+  main.ts        # punto de entrada: config, base, listen y apagado ordenado
+  worker.ts      # loop de tareas programadas (H6)
+migrations/      # SQL generado por drizzle-kit (desde H2)
 tests/
   unit/  integration/  contracts/  evals/
+docker/          # scripts de inicio de Postgres (crea la base de tests)
 docs/
   SPEC.md
 ```
+
+Imports relativos con extensión `.js` aunque el archivo sea `.ts`: es ESM de Node (`module: nodenext`), y el código compilado en `dist/` necesita la ruta real.
 
 ## Reglas no negociables
 
@@ -53,12 +90,15 @@ docs/
 9. **Sin datos de salud:** no se agregan campos ni extracción de datos de salud de las clientas.
 10. **Idioma:** identificadores en inglés; textos que ven clientas y dueñas en español rioplatense.
 
+ESLint hace cumplir las reglas 3 y 5 en `src/modules/{scheduling,catalog,customers,payments}`: bloquea imports de Fastify, del SDK de IA y de `whatsapp`/`conversation`/`notifications`, y bloquea `new Date()` sin argumentos y `Date.now()`. Si una regla del lint molesta, se discute; no se desactiva con un comentario.
+
 ## Testing
 
 - Toda lógica de dominio nueva lleva tests unitarios, incluidos los casos borde que lista la sección 11.1 de la especificación.
 - Los tests de integración usan Postgres real (Docker), no mocks de la base.
 - Si cambiás el agente, un prompt o una herramienta, corré las evaluaciones de `tests/evals/` y reportá el resultado.
-- Un hito no está terminado si CI no está en verde.
+- Un hito no está terminado si CI no está en verde. Antes de cada commit: `pnpm check`.
+- Los tests de integración leen `TEST_DATABASE_URL` (base `bots_esteticas_test`, separada de la de desarrollo).
 
 ## Forma de trabajo
 

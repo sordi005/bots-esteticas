@@ -1,0 +1,31 @@
+# Configuración de pnpm. No es un monorepo: este archivo solo guarda settings.
+# Protecciones contra ataques de cadena de suministro (paquetes comprometidos
+# en el registro). Ver CLAUDE.md, sección "Dependencias".
+
+# Ninguna dependencia corre scripts de instalación (postinstall y similares),
+# que es donde se ejecuta el código malicioso de un paquete comprometido.
+# Si una dependencia de verdad los necesita, se agrega acá con `true` y se
+# justifica en el commit. Las listadas con `false` quedan revisadas y denegadas.
+allowBuilds:
+  esbuild: false
+
+# No instalar versiones publicadas hace menos de 7 días (en minutos).
+# Los paquetes comprometidos suelen detectarse y retirarse antes de eso.
+minimumReleaseAge: 10080
+
+# Fallar si una versión nueva de un paquete se publicó con menos garantías
+# que las anteriores (típico de un token de publicación robado).
+trustPolicy: no-downgrade
+
+# Excepciones revisadas a mano, siempre con versión exacta y motivo:
+trustPolicyExclude:
+  # Tipos de undici que exige @types/node@22. Publicada el 13/11/2024 por
+  # matteo.collina (mantenedor de Node) sin attestation de procedencia; otras
+  # versiones sí la tienen. Falso positivo: lleva casi 2 años en uso masivo.
+  - undici-types@6.21.0
+
+# Guardar versiones exactas en package.json: cada actualización es deliberada.
+saveExact: true
+
+# Respetar el campo "engines" (versión de Node).
+engineStrict: true
