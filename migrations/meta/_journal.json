@@ -8,6 +8,13 @@
       "when": 1790789223454,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790811350798,
+      "tag": "0001_feriados_nacionales_2026",
+      "breakpoints": true
     }
   ]
 }
