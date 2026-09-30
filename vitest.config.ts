@@ -20,6 +20,8 @@ export default defineConfig({
         test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
+          // Deja la base de tests vacía y migrada antes de empezar.
+          globalSetup: ['tests/integration/support/global-setup.ts'],
           // Comparten la misma base real: un archivo por vez.
           fileParallelism: false,
         },

@@ -6,17 +6,15 @@ if (existsSync('.env')) {
   process.loadEnvFile('.env');
 }
 
+// Generar migraciones no necesita conexión; `drizzle-kit studio` sí.
 const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error('Falta DATABASE_URL. Copiá .env.example a .env.');
-}
 
 export default defineConfig({
   dialect: 'postgresql',
-  // Cada módulo declara sus tablas en su propio schema.ts (desde H2).
+  // Cada módulo declara sus tablas en su propio schema.ts.
   schema: './src/modules/*/schema.ts',
   out: './migrations',
-  dbCredentials: { url: databaseUrl },
+  ...(databaseUrl ? { dbCredentials: { url: databaseUrl } } : {}),
   strict: true,
   verbose: true,
 });
