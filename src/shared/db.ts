@@ -11,7 +11,12 @@ export interface Database {
 }
 
 export function createDatabase(connectionString: string): Database {
-  const pool = new pg.Pool({ connectionString, connectionTimeoutMillis: 5_000 });
+  const pool = new pg.Pool({
+    connectionString,
+    connectionTimeoutMillis: 5_000,
+    // Toda la sesión en UTC: la base nunca depende de la zona del servidor (regla 5).
+    options: '-c TimeZone=UTC',
+  });
   const db = drizzle({ client: pool });
 
   return {
