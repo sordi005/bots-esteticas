@@ -34,6 +34,9 @@ jobs:
           --health-retries 15
 
     env:
+      # La base del servicio arranca vacía: primero sirve para probar la migración
+      # desde cero y después la reusan los tests de integración.
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/bots_esteticas_test
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/bots_esteticas_test
 
     steps:
@@ -55,6 +58,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+
+      # Si alguien cambió un schema.ts y no generó la migración, falla acá.
+      - name: Migraciones al día con el esquema
+        run: |
+          pnpm db:generate
+          git add --intent-to-add migrations
+          git diff --exit-code -- migrations
+
+      - run: pnpm build
+
+      # Con el código compilado, igual que en producción, sobre la base vacía.
+      - name: Migración desde cero
+        run: node dist/migrate.js
+      - name: Datos de ejemplo
+        run: node dist/seed.js
+
       - run: pnpm test:unit
       - run: pnpm test:integration
-      - run: pnpm build
