@@ -44,15 +44,20 @@ No agregar dependencias fuera de esta lista sin proponerlo primero y explicar po
 cp .env.example .env      # una sola vez; ajustá PORT si el 3000 está ocupado
 pnpm install              # dependencias
 pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté listo
+pnpm db:migrate           # aplica las migraciones pendientes
+pnpm db:seed              # carga o restaura "Estética Ejemplo"
 pnpm dev                  # servidor con recarga en http://localhost:$PORT
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
 pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
 pnpm build && pnpm start  # compilar a dist/ y correr como en producción
-pnpm db:generate          # generar una migración desde los schemas (desde H2)
+pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
+pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 ```
+
+En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.
 
 ## Estructura
 
@@ -62,12 +67,15 @@ src/
     tenants/  catalog/  scheduling/  customers/  payments/
     whatsapp/  conversation/  notifications/  calendar/
     jobs/  reporting/  admin/
-    # cada módulo declara sus tablas en su schema.ts (desde H2)
-  shared/        # config, db, logger, health, errores, utilidades de fechas
+    # cada módulo declara sus tablas en su schema.ts
+  shared/        # config, db, columnas comunes, migraciones, logger, health, fechas
+  seeds/         # datos de ejemplo ("Estética Ejemplo")
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
+  migrate.ts     # punto de entrada: aplica las migraciones
+  seed.ts        # punto de entrada: carga los datos de ejemplo
   worker.ts      # loop de tareas programadas (H6)
-migrations/      # SQL generado por drizzle-kit (desde H2)
+migrations/      # SQL generado por drizzle-kit; nunca se edita a mano
 tests/
   unit/  integration/  contracts/  evals/
 docker/          # scripts de inicio de Postgres (crea la base de tests)
@@ -76,6 +84,14 @@ docs/
 ```
 
 Imports relativos con extensión `.js` aunque el archivo sea `.ts`: es ESM de Node (`module: nodenext`), y el código compilado en `dist/` necesita la ruta real.
+
+## Base de datos
+
+Las convenciones completas están en la sección 7.1 de la especificación. Las que más se olvidan:
+
+- Toda tabla de negocio nueva lleva `tenantId()` (de `modules/tenants/schema.ts`), `unique(tenant_id, id)` si otras tablas la referencian, y claves foráneas compuestas `(tenant_id, id_padre)` hacia sus padres. `tests/integration/tenant-isolation.test.ts` lo verifica solo sobre todas las tablas.
+- Dinero en centavos (`integer`, nombre terminado en `Cents`). Instantes con `instant()`, rangos con `timestampRange()`, ambos de `shared/db-columns.ts`.
+- Después de cambiar un `schema.ts`: `pnpm db:generate` y commitear la migración junto con el cambio. Una migración ya mergeada no se edita: los cambios van en una nueva. CI falla si falta una migración.
 
 ## Reglas no negociables
 
@@ -98,7 +114,8 @@ ESLint hace cumplir las reglas 3 y 5 en `src/modules/{scheduling,catalog,custome
 - Los tests de integración usan Postgres real (Docker), no mocks de la base.
 - Si cambiás el agente, un prompt o una herramienta, corré las evaluaciones de `tests/evals/` y reportá el resultado.
 - Un hito no está terminado si CI no está en verde. Antes de cada commit: `pnpm check`.
-- Los tests de integración leen `TEST_DATABASE_URL` (base `bots_esteticas_test`, separada de la de desarrollo).
+- Los tests de integración leen `TEST_DATABASE_URL` (base `bots_esteticas_test`, separada de la de desarrollo). Arrancan con la base vacía y migrada; cada test crea sus datos con `createTenantFixture` (slugs aleatorios) y no depende del orden de los archivos.
+- Para verificar que la base rechaza algo, usá `expectConstraintViolation` con el nombre exacto de la restricción: así el test falla si rechaza por otro motivo.
 
 ## Forma de trabajo
 

@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.2 · 30/09/2026 · Autor: Yordi
+> **Estado:** borrador v0.3 · 30/09/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -174,8 +174,8 @@ Reglas:
 ### 4.2 Profesionales y horarios
 
 - Cada profesional tiene un **horario semanal** (por ejemplo, lunes a viernes de 9 a 13 y de 15 a 20, sábados de 9 a 13). Puede tener varios bloques por día.
-- **Excepciones:** días cerrados, horarios especiales, vacaciones. Se cargan como bloqueos.
-- **Feriados:** [S] se precargan los feriados nacionales del año y cada negocio indica si trabaja o no.
+- **Excepciones:** días cerrados, horarios especiales, vacaciones. Se cargan como bloqueos. [S] Una excepción de tipo "horario especial" reemplaza el horario semanal de ese día por el rango cargado.
+- **Feriados:** [S] se precargan los feriados nacionales del año en una tabla global, y cada negocio indica si trabaja feriados o no. Un feriado puntual que un negocio sí trabaja se carga como horario especial. La lista oficial del año, incluidos los feriados puente, se carga y verifica en H3.
 - **Bloqueos desde Google Calendar [D]:** si la profesional crea un evento "ocupado" en su calendario (médico, trámite), el asistente no ofrece ese horario. Así la dueña bloquea horarios desde el celular sin tocar nada nuestro.
 - Si la clienta no elige profesional, el asistente asigna la primera disponible. [D]
 - Si la clienta pide una profesional, se respeta. Si no tiene lugar, se ofrece otra profesional o el próximo horario de la pedida. [D]
@@ -254,7 +254,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 **Flujo con Mercado Pago [D]:**
 
 1. El asistente crea la reserva provisoria (`PENDIENTE_SEÑA`) con vencimiento.
-2. Genera una preferencia de pago de Checkout Pro **con las credenciales del negocio**, con el id del turno como `external_reference`.
+2. Genera una preferencia de pago de Checkout Pro **con las credenciales del negocio**, con el id de la seña como `external_reference` (igual que en la sección 8.3; hay una sola seña por turno).
 3. Envía el link a la clienta.
 4. Mercado Pago avisa por webhook. El sistema **consulta el pago a la API** (nunca confía solo en el cuerpo del webhook), verifica monto y estado, y pasa el turno a `CONFIRMADO`.
 5. El asistente confirma a la clienta y el turno aparece en el Google Calendar de la profesional.
@@ -305,7 +305,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 
 1. Le dice a la clienta que una persona le va a responder. Si es fuera del horario de atención, le dice cuándo.
 2. **Pausa el asistente en esa conversación.** No vuelve a responder hasta que se reanude.
-3. Le avisa a la dueña con el nombre de la clienta, el motivo y un resumen de una línea.
+3. Le avisa a la dueña con el nombre de la clienta, el motivo y un resumen de una línea. **[D]** Si el motivo es de salud, alergias, embarazo o contraindicaciones, se registra como "tema sensible" y el resumen no incluye el detalle: no se extraen datos de salud a ningún campo (sección 4.9).
 
 **Cómo se reanuda:**
 
@@ -470,7 +470,7 @@ Un solo proceso de Node con módulos bien separados, y una base Postgres. **No**
 | `tenants` | Negocios, configuración, credenciales cifradas | — |
 | `catalog` | Servicios, profesionales, horarios, excepciones, información del negocio | `tenants` |
 | `scheduling` | Disponibilidad (función pura), turnos, máquina de estados | `catalog` |
-| `customers` | Clientas, historial, consentimientos | `tenants` |
+| `customers` | Clientas, historial, consentimientos | `tenants`, `catalog` (profesional preferida) |
 | `payments` | Señas, Mercado Pago, verificación de transferencias | `scheduling` |
 | `whatsapp` | Adaptador de la API: recibir, enviar, plantillas, firma | — |
 | `conversation` | Agente de IA, herramientas, pausa por derivación, agrupado de mensajes | todos los de dominio |
@@ -531,6 +531,8 @@ ALTER TABLE appointments ADD CONSTRAINT no_overlap
 
 Si la segunda inserción falla por esta restricción, el asistente le dice a la clienta que ese horario se acaba de ocupar y le ofrece otros.
 
+Como el `time_range` de un turno incluye el margen posterior (sección 7), la restricción también protege el tiempo de limpieza entre turnos.
+
 ### 6.7 Tareas programadas
 
 **[D]** Tabla `scheduled_jobs` más un worker que revisa cada 30 segundos las tareas vencidas, las bloquea con `FOR UPDATE SKIP LOCKED` y las ejecuta. Si en el futuro hace falta algo más robusto, se evalúa `pg-boss`, que usa la misma base. No se agrega Redis.
@@ -565,31 +567,46 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 
 ## 7. Modelo de datos
 
-Todas las tablas de negocio tienen `tenant_id`, y **toda consulta filtra por `tenant_id`**. [D] Fechas en `timestamptz` (UTC).
+### 7.1 Convenciones [D]
+
+- **Multi-negocio:** todas las tablas de negocio tienen `tenant_id` y **toda consulta filtra por `tenant_id`**. Solo hay dos tablas globales: `tenants` (es el negocio en sí) y `holidays` (los feriados nacionales son un dato del país).
+- **Aislamiento en la base:** las relaciones entre tablas de negocio usan claves foráneas compuestas `(tenant_id, id)`. Así la base impide que un registro de un negocio apunte a datos de otro, aunque el código tenga un error. Un test recorre todas las tablas y relaciones y verifica la regla, incluidas las que se agreguen después.
+- **IDs:** `uuid` aleatorios. No revelan cuántos registros hay y sirven como referencia externa (por ejemplo, en Mercado Pago).
+- **Dinero:** en centavos, como número entero. Nunca números con coma flotante.
+- **Fechas:** los instantes van en `timestamptz` (UTC), y la conexión a la base trabaja en UTC. Los horarios que se repiten (horario semanal, ventana de recordatorios) van en `time`, en hora local del negocio. Días de la semana según ISO 8601: 1 = lunes … 7 = domingo.
+- **Intervalos:** `tstzrange` semiabiertos `[inicio, fin)`. Un turno que termina a las 11:00 y otro que empieza a las 11:00 no se superponen.
+- **Estados y categorías cerradas:** enums de Postgres.
+- **Auditoría de filas:** las tablas que se modifican tienen `created_at` y `updated_at`. Las de solo inserción (eventos, mensajes, auditoría) guardan la fecha del hecho.
+- **Migraciones:** se generan con drizzle-kit a partir del `schema.ts` de cada módulo. Una migración ya mergeada no se edita nunca: los cambios van en una migración nueva. CI falla si un esquema cambió sin su migración.
+
+### 7.2 Tablas
 
 | Tabla | Campos principales |
 |---|---|
-| `tenants` | id, nombre, slug, zona horaria, estado (activo, pausado, baja), paquete, configuración de tono |
-| `tenant_settings` | reglas de seña, política de cancelación, parámetros de disponibilidad, horario de atención humana, horario de envío de recordatorios |
-| `tenant_credentials` | tipo (whatsapp, mercadopago, google), datos cifrados, fecha de vencimiento |
-| `business_info` | tema (dirección, estacionamiento, medios de pago, promociones, políticas, cuidados), texto |
+| `tenants` | id, nombre, slug, zona horaria, estado (activo, pausado, baja), paquete, configuración de tono (nombre del asistente, emojis, voseo), `phone_number_id` de WhatsApp (sección 6.5), teléfono de la dueña para avisos (sección 8.2) |
+| `tenant_settings` | reglas de seña (a quién, porcentaje o monto fijo, plazo, medios), alias, CBU y titular para transferencias, política de cancelación, parámetros de disponibilidad, si trabaja feriados, horario de atención humana, horario de envío de recordatorios, recordatorio corto |
+| `tenant_credentials` | tipo (whatsapp, mercadopago, google), datos cifrados (texto cifrado, vector de inicialización y etiqueta de AES-256-GCM), fecha de vencimiento |
+| `business_info` | tema (dirección, estacionamiento, medios de pago, promociones, políticas, cuidados), texto. Un texto por tema |
 | `professionals` | nombre, id de Google Calendar, activa |
-| `services` | campos de la sección 4.1 |
+| `services` | campos de la sección 4.1. Las reglas de seña son opcionales: si faltan, hereda las del negocio |
 | `professional_services` | qué profesional hace qué servicio (y si cambia la duración para ella) |
 | `working_hours` | profesional, día de la semana, hora de inicio, hora de fin |
 | `schedule_exceptions` | profesional o todo el negocio, rango, tipo (cerrado, horario especial), motivo |
-| `customers` | teléfono, nombre de perfil, nombre, profesional preferida, ausencias, consentimiento de marketing con fecha, origen, notas |
-| `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), estado, precio al momento de reservar, id del evento de calendario, origen |
+| `holidays` | fecha, nombre. Global: la cargamos nosotros para todos los negocios |
+| `customers` | teléfono (E.164, único por negocio), nombre de perfil, nombre, profesional preferida, ausencias, consentimiento de marketing con fecha, origen, notas |
+| `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), duración y margen al momento de reservar, estado, precio, precio en efectivo y tipo de precio al momento de reservar, id del evento de calendario, origen |
 | `appointment_events` | turno, estado anterior, estado nuevo, actor, motivo, fecha |
-| `deposits` | turno, monto, medio, estado, id de preferencia y de pago de Mercado Pago, vencimiento, id del comprobante |
-| `conversations` | clienta, estado del asistente (activo, pausado), pausado hasta, último mensaje |
-| `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), costo estimado |
-| `handoffs` | conversación, motivo, resumen, estado, fecha de resolución |
-| `scheduled_jobs` | tipo, datos, ejecutar en, estado, intentos, último error |
-| `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables |
-| `audit_log` | quién cambió qué configuración y cuándo |
+| `deposits` | turno (una seña por turno), monto, medio, estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
+| `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje |
+| `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp |
+| `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
+| `scheduled_jobs` | tipo, datos, ejecutar en, estado, intentos, último error. Se crea en H6 |
+| `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables. Las plantillas del número de avisos del servicio (sección 8.2) no son de ningún negocio: se modelan en H9 |
+| `audit_log` | quién cambió qué configuración, qué cambió y cuándo. Nunca guarda valores de credenciales |
 
 **[D]** `appointments` guarda el precio y la duración **al momento de reservar**. Si la dueña cambia el precio después, los turnos ya tomados no cambian.
+
+**[D]** El `time_range` de un turno es el tiempo en que la profesional está ocupada: desde el inicio hasta el inicio más la duración **más el margen posterior**. La base verifica que el rango coincida con la duración y el margen guardados. El turno que ve la clienta termina en inicio más duración.
 
 ---
 
@@ -813,7 +830,7 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | # | Hito | Criterio de terminado |
 |---|---|---|
 | H1 | Esqueleto: repo, TypeScript estricto, Fastify, Drizzle, Docker Compose, Vitest, lint, CI, `/health` (chequea solo la base: el worker todavía no existe) | CI verde |
-| H2 | Modelo de datos del MVP con migraciones y datos de ejemplo de "Estética Ejemplo" | Migración corre desde cero |
+| H2 | Modelo de datos del MVP con migraciones y datos de ejemplo de "Estética Ejemplo" (todas las tablas de la sección 7 menos `scheduled_jobs`, que entra en H6; la restricción de superposición entra en H4) | Migración corre desde cero |
 | H3 | `scheduling`: disponibilidad pura y máquina de estados | Unitarios de 11.1 pasando |
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos | Tests de contrato pasando; eco de mensajes con el número de prueba |
@@ -850,6 +867,8 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | 11 | No guardar datos de salud | Guardarlos en la ficha | Datos sensibles; riesgo legal sin beneficio claro en el MVP |
 | 12 | pnpm con protecciones de cadena de suministro | npm | Bloquear scripts de instalación y demorar versiones recién publicadas frena los ataques a paquetes del registro más comunes |
 | 13 | ESLint + typescript-eslint | Biome | Reglas que usan los tipos y reglas de arquitectura (dominio sin infraestructura, hora inyectada) desde el día uno |
+| 14 | Aislamiento entre negocios con claves foráneas compuestas `(tenant_id, id)` | Confiar solo en que el código filtre por `tenant_id`, o Row Level Security de Postgres | La base impide mezclar negocios aunque haya un bug. Es más simple de operar que RLS, que exige configurar el negocio en cada conexión del pool |
+| 15 | Dinero en centavos, como entero | `numeric` o números con coma | Sin errores de redondeo y sin convertir texto a número en TypeScript |
 
 ---
 
@@ -876,6 +895,7 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
+| Lista oficial de feriados nacionales y feriados puente del año, con su fuente | H3 |
 
 ---
 
