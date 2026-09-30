@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.1 · 29/09/2026 · Autor: Yordi
+> **Estado:** borrador v0.2 · 30/09/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -544,10 +544,12 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 | Pieza | Elección | Por qué |
 |---|---|---|
 | Lenguaje | TypeScript en modo estricto | Ya lo conocés de Next.js; los tipos atrapan errores de dominio |
-| Runtime | Node.js LTS | Estándar |
+| Runtime | Node.js 22 LTS | Estándar |
+| Gestor de paquetes | pnpm, con protecciones de cadena de suministro (scripts de instalación bloqueados, versiones con al menos 7 días de publicadas, control de procedencia) | Los ataques a paquetes del registro de npm son un riesgo real. pnpm usa el mismo registro, así que lo que protege es la configuración |
 | Servidor HTTP | Fastify | Maduro, rápido, buena validación de esquemas |
-| Base de datos | PostgreSQL | Restricciones de exclusión, transacciones, JSON cuando haga falta |
-| Acceso a datos | Drizzle ORM con migraciones SQL | SQL visible, permite restricciones avanzadas sin pelear con el ORM |
+| Base de datos | PostgreSQL 17 | Restricciones de exclusión, transacciones, JSON cuando haga falta |
+| Acceso a datos | Drizzle ORM con migraciones SQL (drizzle-kit) y driver `pg` | SQL visible, permite restricciones avanzadas sin pelear con el ORM |
+| Lint | ESLint + typescript-eslint, con reglas que usan los tipos | Detecta errores reales (promesas sin `await`) y hace cumplir la arquitectura: el dominio no importa infraestructura ni lee la hora directo |
 | Validación | Zod | Valida webhooks, parámetros de herramientas y configuración |
 | IA | API de Claude, modelo chico, con uso de herramientas | Buen seguimiento de instrucciones y costo bajo. Detrás de una interfaz propia para poder cambiar de proveedor |
 | Tests | Vitest + Postgres real en Docker | Los tests de turnos necesitan la restricción real |
@@ -673,7 +675,7 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 
 ### 10.2 Salud del sistema [D]
 
-- Endpoint `/health` que verifica la base de datos y el worker.
+- Endpoint `/health` que verifica la base de datos y el worker. **[D]** Responde `200` si todos los chequeos pasan y `503` si alguno falla o no responde a tiempo (valor inicial: 2 segundos). El cuerpo indica qué chequeo falló, sin el detalle del error (el detalle va al log). Los chequeos se agregan a medida que existen las piezas: la base desde H1 y el worker desde H6.
 - Monitor externo de disponibilidad que avisa a Yordi si `/health` falla.
 - Sentry para excepciones.
 
@@ -744,7 +746,7 @@ Checklist con el número de prueba de Meta antes de cada salida a producción de
 
 ### 11.6 Integración continua
 
-GitHub Actions corre lint, chequeo de tipos, unitarios e integración en cada push. Las evaluaciones del asistente se corren a mano o antes de desplegar, porque cuestan plata.
+GitHub Actions corre lint, chequeo de tipos, unitarios, integración y compilación en cada push. Las evaluaciones del asistente se corren a mano o antes de desplegar, porque cuestan plata.
 
 ---
 
@@ -810,12 +812,12 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 
 | # | Hito | Criterio de terminado |
 |---|---|---|
-| H1 | Esqueleto: repo, TypeScript estricto, Fastify, Drizzle, Docker Compose, Vitest, lint, CI, `/health` | CI verde |
+| H1 | Esqueleto: repo, TypeScript estricto, Fastify, Drizzle, Docker Compose, Vitest, lint, CI, `/health` (chequea solo la base: el worker todavía no existe) | CI verde |
 | H2 | Modelo de datos del MVP con migraciones y datos de ejemplo de "Estética Ejemplo" | Migración corre desde cero |
 | H3 | `scheduling`: disponibilidad pura y máquina de estados | Unitarios de 11.1 pasando |
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos | Tests de contrato pasando; eco de mensajes con el número de prueba |
-| H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación | Tests de integración |
+| H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker | Tests de integración |
 | H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad) | Primeras 10 evaluaciones pasando |
 | H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa | 30 evaluaciones pasando |
 | H9 | Seña por transferencia + número de avisos a la dueña con botones | Flujo completo en el número de prueba |
@@ -846,6 +848,8 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | 9 | Señas directo a la cuenta del negocio | Cobrar y transferir | Sin riesgo impositivo ni de custodia de dinero para Yordi |
 | 10 | Número propio para avisos a las dueñas | Avisar desde el número del negocio | Plantillas únicas, costo controlado, avisos distinguibles |
 | 11 | No guardar datos de salud | Guardarlos en la ficha | Datos sensibles; riesgo legal sin beneficio claro en el MVP |
+| 12 | pnpm con protecciones de cadena de suministro | npm | Bloquear scripts de instalación y demorar versiones recién publicadas frena los ataques a paquetes del registro más comunes |
+| 13 | ESLint + typescript-eslint | Biome | Reglas que usan los tipos y reglas de arquitectura (dominio sin infraestructura, hora inyectada) desde el día uno |
 
 ---
 
