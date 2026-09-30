@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.3 · 30/09/2026 · Autor: Yordi
+> **Estado:** borrador v0.4 · 30/09/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -174,10 +174,12 @@ Reglas:
 ### 4.2 Profesionales y horarios
 
 - Cada profesional tiene un **horario semanal** (por ejemplo, lunes a viernes de 9 a 13 y de 15 a 20, sábados de 9 a 13). Puede tener varios bloques por día.
-- **Excepciones:** días cerrados, horarios especiales, vacaciones. Se cargan como bloqueos. [S] Una excepción de tipo "horario especial" reemplaza el horario semanal de ese día por el rango cargado.
-- **Feriados:** [S] se precargan los feriados nacionales del año en una tabla global, y cada negocio indica si trabaja feriados o no. Un feriado puntual que un negocio sí trabaja se carga como horario especial. La lista oficial del año, incluidos los feriados puente, se carga y verifica en H3.
+- **Excepciones:** días cerrados, horarios especiales, vacaciones. Se cargan como bloqueos. [S] Un "horario especial" de una profesional reemplaza su horario semanal de ese día (por ejemplo, "Mica trabaja este domingo de 10 a 14"). Un "horario especial" de todo el negocio recorta ese día el horario de todas las profesionales al rango cargado.
+- **Feriados:** [S] se precargan los feriados nacionales en una tabla global, y cada negocio indica si trabaja feriados o no. Un feriado puntual que un negocio sí trabaja se abre con un horario especial del negocio.
+  - Se cargan solo los **feriados nacionales** (inamovibles y trasladables, en su fecha efectiva), según [argentina.gob.ar/feriados](https://www.argentina.gob.ar/feriados). Los **días no laborables** (puentes turísticos, días religiosos, feriados solo regionales) no se cargan: para el sector privado son optativos, y un negocio que cierra esos días carga una excepción de cierre.
+  - [D] La lista de cada año se carga con una migración nueva, con la fuente citada, cuando se publica oficialmente. Nunca se cargan fechas que no estén publicadas.
 - **Bloqueos desde Google Calendar [D]:** si la profesional crea un evento "ocupado" en su calendario (médico, trámite), el asistente no ofrece ese horario. Así la dueña bloquea horarios desde el celular sin tocar nada nuestro.
-- Si la clienta no elige profesional, el asistente asigna la primera disponible. [D]
+- Si la clienta no elige profesional, el asistente asigna la primera disponible. [D] [S] Si a la misma hora hay más de una libre, primero la profesional preferida de la clienta y después un orden fijo.
 - Si la clienta pide una profesional, se respeta. Si no tiene lugar, se ofrece otra profesional o el próximo horario de la pedida. [D]
 
 ### 4.3 Cálculo de disponibilidad
@@ -206,6 +208,9 @@ Parámetros por negocio:
 
 - **[D]** Un turno no puede empezar en un bloque y terminar en el siguiente (por ejemplo, empezar 12:30 si el bloque cierra 13:00 y el servicio dura una hora).
 - **[D]** Todas las fechas se guardan en UTC y se muestran en `America/Argentina/Mendoza`.
+- **[S]** Los inicios de turno se alinean al reloj local: con granularidad de 15 minutos, 9:00, 9:15, 9:30… aunque el bloque empiece en un minuto raro.
+- **[D]** Solo la **duración** del servicio tiene que entrar en el bloque de trabajo. El margen posterior puede quedar después del cierre del bloque o de un cierre cargado como excepción: la profesional limpia después de cerrar. Pero ni la duración ni el margen pueden superponerse con otro turno ni con un evento ocupado de su calendario.
+- **[D]** Ocupan el horario los turnos confirmados, los que tienen la seña en verificación y los que tienen la seña pendiente mientras no venció. Una reserva provisoria vencida deja de ocupar el horario aunque la tarea de vencimiento todavía no la haya pasado a `EXPIRADO`: al reservar sobre ese horario, primero se la vence (H4).
 
 ### 4.4 Estados de un turno
 
@@ -236,6 +241,22 @@ Nombres en el código:
 
 - **[D]** Las transiciones permitidas se definen en un solo lugar del código (una máquina de estados). Cualquier otra transición es un error.
 - **[D]** Toda transición queda registrada con fecha, origen (asistente, dueña, sistema, Yordi) y motivo.
+- **[D]** Transiciones permitidas y quién puede hacer cada una. Yordi (administrador) puede hacer todo lo que puede la dueña.
+
+| Desde | Hacia | Quién |
+|---|---|---|
+| (creación) | `PENDING_DEPOSIT` o `CONFIRMED` | asistente, dueña |
+| `PENDING_DEPOSIT` | `DEPOSIT_REVIEW` | asistente (llegó el comprobante), dueña |
+| `PENDING_DEPOSIT` | `CONFIRMED` | sistema (pago de Mercado Pago), dueña |
+| `PENDING_DEPOSIT` | `EXPIRED` | sistema |
+| `PENDING_DEPOSIT`, `DEPOSIT_REVIEW`, `CONFIRMED` | `CANCELLED_BY_CUSTOMER` | asistente, dueña |
+| `PENDING_DEPOSIT`, `DEPOSIT_REVIEW`, `CONFIRMED` | `CANCELLED_BY_BUSINESS` | dueña |
+| `DEPOSIT_REVIEW` | `CONFIRMED` o `DEPOSIT_REJECTED` | dueña (nunca el asistente, sección 4.5) |
+| `CONFIRMED` | `COMPLETED` | sistema (cierre del día), dueña |
+| `CONFIRMED` | `NO_SHOW` | dueña |
+
+- **[D]** Una seña en verificación **no vence sola**: no hay transición de `DEPOSIT_REVIEW` a `EXPIRED`. La clienta ya pagó y no pierde el turno porque la dueña no miró el celular.
+- **[D]** Reprogramar no cambia el estado del turno: cambia el horario y se registra como evento de auditoría (H4).
 - **[S]** A las 21 la dueña recibe los turnos del día para marcar ausentes (sección 4.8). A las 23, la tarea de cierre del día pasa a `COMPLETADO` los turnos confirmados que no se marcaron como ausentes.
 
 ### 4.5 Señas
@@ -262,7 +283,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 **Flujo con transferencia [D]:**
 
 1. Reserva provisoria igual que arriba. El asistente envía el alias o CBU del negocio y el monto.
-2. La clienta manda la foto del comprobante. El turno pasa a `SEÑA_EN_VERIFICACION` y el vencimiento se extiende.
+2. La clienta manda la foto del comprobante. El turno pasa a `SEÑA_EN_VERIFICACION` y deja de vencer: espera la respuesta de la dueña, a la que se le vuelve a avisar si no contesta (H9).
 3. La dueña recibe un aviso con la imagen y dos botones: "Recibida" / "No llegó".
 4. Según la respuesta, el turno pasa a `CONFIRMADO` o `RECHAZADO`, y el asistente avisa a la clienta.
 
@@ -271,6 +292,8 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - **[D]** El sistema nunca "lee" el comprobante con IA para confirmarlo. La confirmación de una transferencia siempre la hace una persona. Un comprobante se falsifica fácil.
 - **[D]** Si la reserva provisoria vence, el turno pasa a `EXPIRADO`, el horario se libera y el asistente le avisa a la clienta, ofreciendo volver a reservar.
 - **[D]** Las devoluciones de seña nunca son automáticas. El asistente informa la política y avisa a la dueña.
+- **[S]** Cálculo del monto: el porcentaje se aplica sobre el precio de lista (en el ejemplo de 5.4, 30 % de $18.000 = $5.400) y se redondea hacia arriba al peso entero. Un monto fijo nunca supera el precio del servicio. Un servicio sin precio no lleva seña.
+- **[S]** "Clienta nueva" es la que todavía no tiene ningún turno completado en ese negocio.
 - **[?]** ¿La seña se pierde o se traspasa cuando la clienta cancela tarde? Depende de cada negocio: validar.
 
 ### 4.6 Cancelación y reprogramación por la clienta
@@ -278,6 +301,8 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - La clienta puede pedir cancelar o reprogramar por texto o con los botones del recordatorio.
 - **[D]** Si está dentro del plazo de la política, el asistente lo resuelve solo: libera el horario y, si reprograma, ofrece nuevos horarios manteniendo la seña.
 - **[D]** Si está fuera de plazo, el asistente informa la política con amabilidad y **deriva a la dueña**. No discute ni decide excepciones.
+- **[S]** "Con al menos X horas de anticipación": justo X horas antes todavía está dentro de plazo. Un turno que ya empezó no lo cancela ni lo reprograma el asistente.
+- **[S]** Si la clienta ya usó las reprogramaciones que conservan la seña, reprogramar de nuevo es una excepción: deriva a la dueña. Sin seña, no hay límite de reprogramaciones.
 - **[D]** Toda cancelación o reprogramación le llega como aviso a la dueña y actualiza Google Calendar.
 
 ### 4.7 Recordatorios
@@ -286,6 +311,8 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - **[S]** Recordatorio corto opcional 2 horas antes, sin botones, con la dirección.
 - **[D]** Horario permitido de envío: entre 9 y 21 h. Si el recordatorio cae fuera de ese rango, se adelanta al último horario permitido.
 - **[D]** Si el turno se reservó con menos de 24 horas de anticipación, se omite el recordatorio del día anterior.
+- **[S]** El recordatorio del día anterior sale a la misma hora local del turno. Si esa hora cae antes de la ventana, se adelanta al cierre de la ventana del día previo (turno del martes a las 8 → recordatorio del domingo a las 21); si cae después, al cierre de ese mismo día. Si al adelantarse queda antes del momento en que se reservó, se omite.
+- **[S]** El recordatorio corto de 2 horas antes se omite si cae fuera de la ventana: adelantarlo le quitaría el sentido.
 - **[D]** Los recordatorios usan **plantillas de utilidad aprobadas por Meta** en la cuenta de cada negocio, porque normalmente se envían fuera de la ventana de 24 horas. Tienen costo por mensaje (lo paga el negocio).
 - **[S]** Si la clienta no responde el recordatorio, no se cancela nada automáticamente. Aparece en el aviso diario a la dueña como "sin confirmar".
 
@@ -706,6 +733,7 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 | Plantilla rechazada o pausada por Meta | Los recordatorios dejan de salir |
 | Sin mensajes eco de un negocio por más de 10 días | La dueña quizás no abrió la app y la coexistencia se puede caer |
 | Derivación sin resolver por más de 4 horas en horario de atención | Una clienta está esperando |
+| Al 1 de diciembre, feriados del año siguiente sin cargar | Sin ellos, el asistente ofrecería turnos en feriados |
 | Tasa de derivaciones de un negocio mayor al 30 % en una semana | Falta información cargada |
 
 ### 10.4 Reporte mensual para la dueña
@@ -831,7 +859,7 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 |---|---|---|
 | H1 | Esqueleto: repo, TypeScript estricto, Fastify, Drizzle, Docker Compose, Vitest, lint, CI, `/health` (chequea solo la base: el worker todavía no existe) | CI verde |
 | H2 | Modelo de datos del MVP con migraciones y datos de ejemplo de "Estética Ejemplo" (todas las tablas de la sección 7 menos `scheduled_jobs`, que entra en H6; la restricción de superposición entra en H4) | Migración corre desde cero |
-| H3 | `scheduling`: disponibilidad pura y máquina de estados | Unitarios de 11.1 pasando |
+| H3 | `scheduling`: disponibilidad pura y máquina de estados, más las políticas de seña, cancelación y reprogramación, el horario de los recordatorios y los feriados oficiales | Unitarios de 11.1 pasando |
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos | Tests de contrato pasando; eco de mensajes con el número de prueba |
 | H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker | Tests de integración |
@@ -869,6 +897,8 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | 13 | ESLint + typescript-eslint | Biome | Reglas que usan los tipos y reglas de arquitectura (dominio sin infraestructura, hora inyectada) desde el día uno |
 | 14 | Aislamiento entre negocios con claves foráneas compuestas `(tenant_id, id)` | Confiar solo en que el código filtre por `tenant_id`, o Row Level Security de Postgres | La base impide mezclar negocios aunque haya un bug. Es más simple de operar que RLS, que exige configurar el negocio en cada conexión del pool |
 | 15 | Dinero en centavos, como entero | `numeric` o números con coma | Sin errores de redondeo y sin convertir texto a número en TypeScript |
+| 16 | Zonas horarias con `Intl`, sin dependencias | Una librería de fechas | Node ya trae la base de datos de zonas; alcanza con una función chica y bien probada, incluido el horario de verano |
+| 17 | Solo feriados nacionales, no días no laborables | Cargar también los puentes turísticos | Para el sector privado los días no laborables son optativos; cargarlos cerraría la agenda de negocios que sí trabajan |
 
 ---
 
@@ -895,7 +925,7 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
-| Lista oficial de feriados nacionales y feriados puente del año, con su fuente | H3 |
+| Lista oficial de feriados nacionales 2027 (todavía no publicada al 30/09/2026) | Diciembre de 2026 |
 
 ---
 
