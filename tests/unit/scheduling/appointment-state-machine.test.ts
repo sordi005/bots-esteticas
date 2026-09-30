@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ACTORS,
   APPOINTMENT_STATUSES,
+  canReschedule,
   canTransition,
   InvalidTransitionError,
   isFinalStatus,
   occupiesSchedule,
+  rescheduleEvent,
   transition,
   type Actor,
   type AppointmentStatus,
@@ -124,20 +126,24 @@ describe('transition', () => {
         at,
       }),
     ).toEqual({
+      kind: 'status_change',
       fromStatus: 'DEPOSIT_REVIEW',
       toStatus: 'CONFIRMED',
       actor: 'owner',
       reason: 'La dueña marcó la transferencia como recibida',
+      previousTimeRange: null,
       occurredAt: at,
     });
   });
 
   it('registra la creación de un turno como transición desde ningún estado', () => {
     expect(transition({ from: null, to: 'CONFIRMED', actor: 'assistant', at })).toEqual({
+      kind: 'status_change',
       fromStatus: null,
       toStatus: 'CONFIRMED',
       actor: 'assistant',
       reason: null,
+      previousTimeRange: null,
       occurredAt: at,
     });
   });
@@ -149,5 +155,54 @@ describe('transition', () => {
     expect(() =>
       transition({ from: 'DEPOSIT_REVIEW', to: 'CONFIRMED', actor: 'assistant', at }),
     ).toThrow('DEPOSIT_REVIEW → CONFIRMED por assistant');
+  });
+});
+
+describe('rescheduleEvent: reprogramar cambia el horario, no el estado', () => {
+  const at = new Date('2026-10-05T15:00:00.000Z');
+  const previousTimeRange = {
+    start: new Date('2026-10-06T13:00:00.000Z'),
+    end: new Date('2026-10-06T14:10:00.000Z'),
+  };
+
+  it('devuelve el evento de auditoría con el horario anterior', () => {
+    expect(
+      rescheduleEvent({
+        status: 'CONFIRMED',
+        previousTimeRange,
+        actor: 'assistant',
+        reason: 'La clienta pidió pasarlo al jueves',
+        at,
+      }),
+    ).toEqual({
+      kind: 'rescheduled',
+      fromStatus: 'CONFIRMED',
+      toStatus: 'CONFIRMED',
+      actor: 'assistant',
+      reason: 'La clienta pidió pasarlo al jueves',
+      previousTimeRange,
+      occurredAt: at,
+    });
+  });
+
+  it.each([['PENDING_DEPOSIT'], ['DEPOSIT_REVIEW'], ['CONFIRMED']] as const)(
+    'un turno %s se puede reprogramar',
+    (status) => {
+      expect(canReschedule(status, 'owner')).toBe(true);
+    },
+  );
+
+  it('un turno que ya terminó o se canceló no se reprograma', () => {
+    const reschedulable = APPOINTMENT_STATUSES.filter((status) => canReschedule(status, 'admin'));
+
+    expect(reschedulable.sort()).toEqual(['CONFIRMED', 'DEPOSIT_REVIEW', 'PENDING_DEPOSIT']);
+    expect(() =>
+      rescheduleEvent({ status: 'COMPLETED', previousTimeRange, actor: 'owner', at }),
+    ).toThrow(InvalidTransitionError);
+  });
+
+  it('una tarea programada no reprograma turnos: lo pide la clienta o la dueña', () => {
+    expect(canReschedule('CONFIRMED', 'system')).toBe(false);
+    expect(canReschedule('CONFIRMED', 'assistant')).toBe(true);
   });
 });
