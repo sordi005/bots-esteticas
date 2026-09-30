@@ -68,7 +68,7 @@ src/
     whatsapp/  conversation/  notifications/  calendar/
     jobs/  reporting/  admin/
     # cada módulo declara sus tablas en su schema.ts
-  shared/        # config, db, columnas comunes, migraciones, logger, health, fechas
+  shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
   seeds/         # datos de ejemplo ("Estética Ejemplo")
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
@@ -92,6 +92,13 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - Toda tabla de negocio nueva lleva `tenantId()` (de `modules/tenants/schema.ts`), `unique(tenant_id, id)` si otras tablas la referencian, y claves foráneas compuestas `(tenant_id, id_padre)` hacia sus padres. `tests/integration/tenant-isolation.test.ts` lo verifica solo sobre todas las tablas.
 - Dinero en centavos (`integer`, nombre terminado en `Cents`). Instantes con `instant()`, rangos con `timestampRange()`, ambos de `shared/db-columns.ts`.
 - Después de cambiar un `schema.ts`: `pnpm db:generate` y commitear la migración junto con el cambio. Una migración ya mergeada no se edita: los cambios van en una nueva. CI falla si falta una migración.
+- Feriados: cada año, una migración de datos nueva (`drizzle-kit generate --custom`) con la lista oficial de argentina.gob.ar/feriados y la fuente citada en el SQL. Nunca fechas no publicadas.
+
+## Fechas y dominio
+
+- La lógica de dominio es pura: recibe la hora actual (`now`) y la zona horaria del negocio por parámetro.
+- Toda conversión entre hora local e instante pasa por `shared/time-zone.ts`. Nunca sumes horas a mano para "pasar a Mendoza": con horario de verano en otra zona, eso da mal.
+- Estados y transiciones de turnos: solo en `modules/scheduling/appointment-state-machine.ts`. El esquema de la base importa los estados de ahí.
 
 ## Reglas no negociables
 
