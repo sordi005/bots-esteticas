@@ -1,6 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
+import {
+  drizzle,
+  type NodePgDatabase,
+  type NodePgQueryResultHKT,
+} from 'drizzle-orm/node-postgres';
+import type { PgDatabase } from 'drizzle-orm/pg-core';
 import pg from 'pg';
+
+/** La base o una transacción abierta: lo que acepta una función que solo hace consultas. */
+export type Queryable = PgDatabase<NodePgQueryResultHKT>;
 
 export interface Database {
   readonly db: NodePgDatabase;

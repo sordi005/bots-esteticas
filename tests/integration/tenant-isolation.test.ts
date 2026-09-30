@@ -170,6 +170,11 @@ describe('aislamiento entre negocios: la base rechaza mezclar datos', () => {
     ['el servicio', 'serviceId', 'appointments_service_fk'],
     ['la profesional', 'professionalId', 'appointments_professional_fk'],
   ] as const)('un turno no usa %s de otro negocio', async (_what, field, constraint) => {
+    // Un horario libre: así la única regla que puede fallar es la de aislamiento.
+    const freeRange = {
+      start: new Date('2026-12-01T13:00:00.000Z'),
+      end: new Date('2026-12-01T14:10:00.000Z'),
+    };
     await expectConstraintViolation(
       db.insert(appointments).values({
         tenantId: a.tenantId,
@@ -177,7 +182,7 @@ describe('aislamiento entre negocios: la base rechaza mezclar datos', () => {
         serviceId: a.serviceId,
         professionalId: a.professionalId,
         [field]: b[field],
-        timeRange: FIXTURE_APPOINTMENT_RANGE,
+        timeRange: freeRange,
         durationMinutes: 60,
         bufferMinutes: 10,
         priceCents: 1_800_000,

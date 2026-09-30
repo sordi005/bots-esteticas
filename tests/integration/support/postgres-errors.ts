@@ -1,29 +1,12 @@
 import { expect } from 'vitest';
+import { findPostgresError } from '../../../src/shared/postgres-errors.js';
 
-export const FOREIGN_KEY_VIOLATION = '23503';
-export const UNIQUE_VIOLATION = '23505';
-export const CHECK_VIOLATION = '23514';
-
-interface PostgresErrorDetails {
-  code: string;
-  constraint: string | undefined;
-}
-
-/** Drizzle envuelve el error del driver: se busca el de Postgres en la cadena de `cause`. */
-function findPostgresError(error: unknown): PostgresErrorDetails | undefined {
-  let current: unknown = error;
-  while (current instanceof Error) {
-    if ('code' in current && typeof current.code === 'string') {
-      const constraint =
-        'constraint' in current && typeof current.constraint === 'string'
-          ? current.constraint
-          : undefined;
-      return { code: current.code, constraint };
-    }
-    current = current.cause;
-  }
-  return undefined;
-}
+export {
+  CHECK_VIOLATION,
+  EXCLUSION_VIOLATION,
+  FOREIGN_KEY_VIOLATION,
+  UNIQUE_VIOLATION,
+} from '../../../src/shared/postgres-errors.js';
 
 /** Verifica que la operación falle por esa restricción puntual de la base, no por otra. */
 export async function expectConstraintViolation(

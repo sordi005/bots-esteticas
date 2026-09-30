@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.4 · 30/09/2026 · Autor: Yordi
+> **Estado:** borrador v0.5 · 30/09/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -159,7 +159,7 @@ Cada servicio tiene:
 | Precio en efectivo o transferencia | Opcional, muy común en Argentina | 16.000 |
 | Tipo de precio | `fijo` o `desde` | `desde` para uñas esculpidas con diseño |
 | Requiere seña | Sí o no, y cuánto (hereda la regla del negocio si no se define) | |
-| Requiere consulta previa | Si es sí, el asistente no agenda directo: deriva | Depilación láser, primer turno |
+| Requiere consulta previa | Si es sí, el asistente no agenda directo: deriva. La dueña sí puede agendarlo | Depilación láser, primer turno |
 | Profesionales que lo hacen | Una o más | |
 | Intervalo de service | Días hasta el próximo mantenimiento (para M6) | 21 |
 | Visible | Si el asistente lo ofrece o no | |
@@ -256,7 +256,8 @@ Nombres en el código:
 | `CONFIRMED` | `NO_SHOW` | dueña |
 
 - **[D]** Una seña en verificación **no vence sola**: no hay transición de `DEPOSIT_REVIEW` a `EXPIRED`. La clienta ya pagó y no pierde el turno porque la dueña no miró el celular.
-- **[D]** Reprogramar no cambia el estado del turno: cambia el horario y se registra como evento de auditoría (H4).
+- **[D]** Reprogramar no cambia el estado del turno: cambia el horario y se registra como evento de auditoría de tipo "reprogramación", con el horario anterior. Las reprogramaciones de un turno se cuentan con esos eventos (sección 4.5). Solo se reprograma un turno que ocupa el horario, y nunca lo hace una tarea programada.
+- **[D]** Marcar un turno como ausente suma una ausencia a la clienta, que usa la regla de seña "solo clientas con ausencias previas".
 - **[S]** A las 21 la dueña recibe los turnos del día para marcar ausentes (sección 4.8). A las 23, la tarea de cierre del día pasa a `COMPLETADO` los turnos confirmados que no se marcaron como ausentes.
 
 ### 4.5 Señas
@@ -560,6 +561,14 @@ Si la segunda inserción falla por esta restricción, el asistente le dice a la 
 
 Como el `time_range` de un turno incluye el margen posterior (sección 7), la restricción también protege el tiempo de limpieza entre turnos.
 
+**[D]** Cómo se reserva (regla "la IA elige, el código decide"):
+
+1. Antes de guardar, el código verifica todo contra la base: que la clienta y el servicio sean de ese negocio, que el servicio se pueda reservar, que la profesional lo haga, que el horario sea un turno válido (horario, grilla, anticipación) y que esté libre. También calcula la seña que corresponde.
+2. En la misma transacción vence las reservas provisorias vencidas que pisan ese horario, guarda el turno, su evento de creación y, si corresponde, la seña.
+3. Si otra clienta ganó el horario entre la verificación y el guardado, la restricción `appointments_no_overlap` rechaza la inserción y la respuesta es "ese horario se acaba de ocupar".
+
+Los estados que ocupan el horario en la restricción son los mismos que define la máquina de estados, y un test verifica que coincidan. La restricción necesita la extensión `btree_gist` de Postgres.
+
 ### 6.7 Tareas programadas
 
 **[D]** Tabla `scheduled_jobs` más un worker que revisa cada 30 segundos las tareas vencidas, las bloquea con `FOR UPDATE SKIP LOCKED` y las ejecuta. Si en el futuro hace falta algo más robusto, se evalúa `pg-boss`, que usa la misma base. No se agrega Redis.
@@ -622,7 +631,7 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 | `holidays` | fecha, nombre. Global: la cargamos nosotros para todos los negocios |
 | `customers` | teléfono (E.164, único por negocio), nombre de perfil, nombre, profesional preferida, ausencias, consentimiento de marketing con fecha, origen, notas |
 | `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), duración y margen al momento de reservar, estado, precio, precio en efectivo y tipo de precio al momento de reservar, id del evento de calendario, origen |
-| `appointment_events` | turno, estado anterior, estado nuevo, actor, motivo, fecha |
+| `appointment_events` | turno, tipo (cambio de estado o reprogramación), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
 | `deposits` | turno (una seña por turno), monto, medio, estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
 | `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje |
 | `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp |

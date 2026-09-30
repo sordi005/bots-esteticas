@@ -1,3 +1,5 @@
+import type { TimestampRange } from '../../shared/timestamp-range.js';
+
 /**
  * Máquina de estados de un turno (sección 4.4, CLAUDE.md regla 4).
  * Es el único lugar del código que define estados y transiciones: el esquema de la base
@@ -88,12 +90,20 @@ export class InvalidTransitionError extends Error {
   override name = 'InvalidTransitionError';
 }
 
-/** Evento de auditoría de una transición: se guarda en `appointment_events`. */
-export interface AppointmentTransition {
+/** Un evento cambia el estado del turno o, sin cambiarlo, su horario. */
+export const APPOINTMENT_EVENT_KINDS = ['status_change', 'rescheduled'] as const;
+
+export type AppointmentEventKind = (typeof APPOINTMENT_EVENT_KINDS)[number];
+
+/** Evento de auditoría (CLAUDE.md, regla 4): se guarda en `appointment_events`. */
+export interface AppointmentEvent {
+  kind: AppointmentEventKind;
   fromStatus: AppointmentStatus | null;
   toStatus: AppointmentStatus;
   actor: Actor;
   reason: string | null;
+  /** Solo en una reprogramación: el horario que tenía antes. */
+  previousTimeRange: TimestampRange | null;
   occurredAt: Date;
 }
 
@@ -103,12 +113,47 @@ export function transition(input: {
   actor: Actor;
   reason?: string;
   at: Date;
-}): AppointmentTransition {
+}): AppointmentEvent {
   const { from, to, actor, reason, at } = input;
   if (!canTransition(from, to, actor)) {
     throw new InvalidTransitionError(
       `Transición no permitida: ${from ?? 'creación'} → ${to} por ${actor}`,
     );
   }
-  return { fromStatus: from, toStatus: to, actor, reason: reason ?? null, occurredAt: at };
+  return {
+    kind: 'status_change',
+    fromStatus: from,
+    toStatus: to,
+    actor,
+    reason: reason ?? null,
+    previousTimeRange: null,
+    occurredAt: at,
+  };
+}
+
+/** Se reprograma un turno que todavía ocupa el horario, a pedido de una persona. */
+export function canReschedule(status: AppointmentStatus, actor: Actor): boolean {
+  return occupiesSchedule(status) && actor !== 'system';
+}
+
+export function rescheduleEvent(input: {
+  status: AppointmentStatus;
+  previousTimeRange: TimestampRange;
+  actor: Actor;
+  reason?: string;
+  at: Date;
+}): AppointmentEvent {
+  const { status, previousTimeRange, actor, reason, at } = input;
+  if (!canReschedule(status, actor)) {
+    throw new InvalidTransitionError(`Reprogramación no permitida: ${status} por ${actor}`);
+  }
+  return {
+    kind: 'rescheduled',
+    fromStatus: status,
+    toStatus: status,
+    actor,
+    reason: reason ?? null,
+    previousTimeRange,
+    occurredAt: at,
+  };
 }
