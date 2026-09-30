@@ -99,6 +99,8 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - La lógica de dominio es pura: recibe la hora actual (`now`) y la zona horaria del negocio por parámetro.
 - Toda conversión entre hora local e instante pasa por `shared/time-zone.ts`. Nunca sumes horas a mano para "pasar a Mendoza": con horario de verano en otra zona, eso da mal.
 - Estados y transiciones de turnos: solo en `modules/scheduling/appointment-state-machine.ts`. El esquema de la base importa los estados de ahí.
+- Reservar, cambiar el estado o reprogramar un turno: solo con las funciones de `modules/scheduling/booking.ts`, nunca con un insert o update directo a `appointments`. Ahí se valida todo contra la base y se registra el evento de auditoría en la misma transacción.
+- La restricción `appointments_no_overlap` vive en la migración 0003 (Drizzle no sabe declararla). Si cambian los estados que ocupan el horario, va una migración nueva; el test `appointment-overlap` avisa si quedaron distintos.
 
 ## Reglas no negociables
 
