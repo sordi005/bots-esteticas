@@ -75,4 +75,5 @@ jobs:
         run: node dist/seed.js
 
       - run: pnpm test:unit
+      - run: pnpm test:contracts
       - run: pnpm test:integration
