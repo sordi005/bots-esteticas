@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.5 · 30/09/2026 · Autor: Yordi
+> **Estado:** borrador v0.6 · 01/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -543,6 +543,16 @@ Herramientas del agente en el MVP:
 5. El worker toma la conversación, espera el tiempo de agrupado (5.2) y procesa.
 6. **[D]** Una sola ejecución por conversación a la vez. Si llegan mensajes mientras se procesa, se suman a la próxima vuelta. Así nunca salen dos respuestas cruzadas.
 
+Detalles del webhook **[D]**:
+
+- La firma se calcula sobre los bytes del cuerpo tal como llegaron. Re-serializar el JSON puede cambiar caracteres escapados, y la firma dejaría de coincidir.
+- Firma inválida: respuesta `401` y no se guarda nada. Número que no es de ningún negocio: respuesta `200` y aviso en el log. Responder un error haría que Meta reintente durante 36 horas.
+- Si falla el guardado (por ejemplo, la base no responde), el webhook responde `500` y Meta reintenta. Por eso guardar tiene que ser idempotente.
+- Una clienta nueva se crea con su número como `+` seguido del `wa_id` y su nombre de perfil. Una conversación por clienta.
+- Los estados de los mensajes enviados guardan la categoría de precio de Meta en el mensaje. Un envío fallido queda en el log como advertencia; la alerta a Yordi llega en H14.
+- Los cambios de otros campos se ignoran hasta su hito, por ejemplo los ecos de la coexistencia (H13).
+- Meta llama con un `GET` al registrar el webhook: se responde el `hub.challenge` si el `hub.verify_token` coincide.
+
 ### 6.6 Turnos simultáneos
 
 Dos clientas pueden elegir el mismo horario al mismo tiempo. **[D]** Esto se resuelve en la base de datos, no en el código de la aplicación, con una restricción de exclusión de Postgres:
@@ -660,7 +670,13 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 - **[D]** Si un negocio no califica para coexistencia, no entra al MVP. Queda en espera hasta la fase 3, cuando exista el panel de la dueña para responder conversaciones.
 - **Plantillas:** se crean y aprueban en la cuenta de cada negocio durante el onboarding. Mínimo: recordatorio del día anterior (utilidad, con 3 botones) y aviso de reserva vencida (utilidad).
 - **Número de prueba:** la demo usa el número de prueba de Meta, que permite mandar mensajes a unos pocos números verificados sin configurar un negocio real.
-- **[D]** Se registra el costo estimado de cada mensaje enviado por categoría, para el reporte y para detectar abusos.
+- **[D]** Se registra el costo estimado de cada mensaje enviado por categoría, para el reporte y para detectar abusos. Desde H5 se guarda la categoría que informa Meta. El costo en dólares necesita la tabla de precios vigente (sección 15) y se calcula cuando exista.
+- **[S]** Credenciales:
+  - El App Secret y el token de verificación del webhook son de la app de Meta del servicio, una sola para todos los negocios, y van en variables de entorno.
+  - El token de acceso es de cada negocio: se guarda cifrado en `tenant_credentials`.
+  - En desarrollo, `pnpm whatsapp:connect <negocio>` conecta un número. Desde H15, eso se hace desde el panel.
+- **[S]** Versión de la Graph API configurable: v25.0 al 01/10/2026.
+- **[D]** Antes de enviar, el código valida los límites de Meta: texto de hasta 4096 caracteres; hasta 3 botones con títulos de hasta 20; listas de hasta 10 filas, con títulos de hasta 24 y descripciones de hasta 72. Un mensaje inválido nunca llega a la API.
 
 ### 8.2 Número de avisos del servicio [S]
 
@@ -700,7 +716,7 @@ La dueña responde a esos avisos con botones ("Recibida", "No llegó", "Ausente"
 ### 9.1 Seguridad técnica [D]
 
 - Validación de firma en todos los webhooks (Meta y Mercado Pago).
-- Credenciales de terceros cifradas en la base (AES-256-GCM, clave en variable de entorno). Nunca en el código ni en logs.
+- Credenciales de terceros cifradas en la base (AES-256-GCM, clave en variable de entorno). Nunca en el código ni en logs. El cifrado lleva como dato asociado el negocio y el tipo de credencial: una credencial copiada a la fila de otro negocio no se puede descifrar. En producción, el servidor no arranca sin clave ni con la clave de ejemplo de `.env.example`.
 - Aislamiento entre negocios: `tenant_id` en toda consulta, y tests que verifican que un negocio no puede ver datos de otro.
 - Límite de mensajes por clienta (por ejemplo, 30 por hora) para frenar abusos y costos descontrolados.
 - Tope de llamadas a herramientas por turno de conversación (por ejemplo, 8) para cortar bucles del modelo.
@@ -773,7 +789,7 @@ Con Postgres real en Docker:
 
 ### 11.3 Contratos [D]
 
-Ejemplos reales de webhooks de Meta y de Mercado Pago guardados como archivos JSON de prueba. El parser se testea contra ellos.
+Ejemplos reales de webhooks de Meta y de Mercado Pago guardados como archivos JSON de prueba. El parser se testea contra ellos. Los de WhatsApp están en `tests/contracts/whatsapp/`, copiados de la documentación oficial; cuando el sistema empiece a soportar un tipo de mensaje nuevo, se agrega su ejemplo oficial.
 
 ### 11.4 Evaluación del asistente [D]
 
@@ -870,7 +886,7 @@ Cada hito se termina con sus tests pasando antes de empezar el siguiente.
 | H2 | Modelo de datos del MVP con migraciones y datos de ejemplo de "Estética Ejemplo" (todas las tablas de la sección 7 menos `scheduled_jobs`, que entra en H6; la restricción de superposición entra en H4) | Migración corre desde cero |
 | H3 | `scheduling`: disponibilidad pura y máquina de estados, más las políticas de seña, cancelación y reprogramación, el horario de los recordatorios y los feriados oficiales | Unitarios de 11.1 pasando |
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
-| H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos | Tests de contrato pasando; eco de mensajes con el número de prueba |
+| H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos. El eco se prueba con `pnpm whatsapp:echo`, una herramienta de desarrollo que reemplaza el worker en H6. Las respuestas al número de avisos (6.5, paso 2) entran en H9 | Tests de contrato pasando; eco de mensajes con el número de prueba |
 | H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker | Tests de integración |
 | H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad) | Primeras 10 evaluaciones pasando |
 | H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa | 30 evaluaciones pasando |
