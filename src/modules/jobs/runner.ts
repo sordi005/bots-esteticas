@@ -52,6 +52,9 @@ export class JobTimeoutError extends Error {
 
 const MAX_ERROR_LENGTH = 1_000;
 
+const STALE_JOB_MESSAGE =
+  'Una tarea terminó cuando ya había vencido su plazo y otra vuelta la había tomado';
+
 export function createJobRunner(options: JobRunnerOptions): JobRunner {
   const {
     db,
@@ -107,8 +110,9 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     } catch (error) {
       const retryAt = nextRetryAt(job.attempts, now(), retryPolicy);
       try {
-        await failJob(db, job, { error: describeError(error), retryAt });
-        if (retryAt) {
+        if (!(await failJob(db, job, { error: describeError(error), retryAt }))) {
+          log.warn({ err: error }, STALE_JOB_MESSAGE);
+        } else if (retryAt) {
           log.warn({ err: error, retryAt }, 'Falló una tarea programada; se reintenta');
         } else {
           log.error({ err: error }, 'Falló una tarea programada y no le quedan intentos');
@@ -120,9 +124,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     }
 
     try {
-      if (!(await completeJob(db, job))) {
-        log.warn('Una tarea terminó cuando ya había vencido su plazo y otra vuelta la había tomado');
-      }
+      if (!(await completeJob(db, job))) log.warn(STALE_JOB_MESSAGE);
     } catch (recordError) {
       log.error({ err: recordError }, 'No se pudo cerrar una tarea programada');
     }
