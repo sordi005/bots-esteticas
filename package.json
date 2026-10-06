@@ -27,8 +27,7 @@
     "db:migrate": "tsx --env-file-if-exists=.env src/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/seed.ts",
     "db:reset": "docker compose down -v && pnpm db:up && pnpm db:migrate && pnpm db:seed",
-    "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts",
-    "whatsapp:echo": "tsx --env-file-if-exists=.env src/cli/whatsapp-echo.ts"
+    "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",

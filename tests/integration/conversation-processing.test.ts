@@ -230,6 +230,27 @@ describe('agrupado de mensajes (5.2) y una ejecución por conversación (6.5)', 
   });
 });
 
+describe('tareas con datos inválidos', () => {
+  it('fallan con un error que se puede leer, sin contestar nada', async () => {
+    const tenant = await readyTenant();
+    await scheduleJob(db, {
+      tenantId: tenant.tenantId,
+      kind: 'process_conversation',
+      key: tenant.conversationId,
+      payload: {},
+      runAt: at(0),
+    });
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+
+    await worker({ client, respond, now: () => at(4) }).runOnce();
+
+    expect(turns).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect((await jobOf(tenant.tenantId)).lastError).toMatch(/^Datos de la tarea inválidos:.*conversationId/s);
+  });
+});
+
 describe('aislamiento entre negocios', () => {
   it('una tarea nunca procesa la conversación de otro negocio', async () => {
     const tenant = await readyTenant();

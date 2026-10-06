@@ -148,7 +148,11 @@ const processConversationPayload = z.object({ conversationId: z.uuid() });
 /** El handler de las tareas `process_conversation` para el worker. */
 export function conversationJobHandler(deps: ConversationDependencies): JobHandler {
   return async (job, { signal }) => {
-    const { conversationId } = processConversationPayload.parse(job.payload);
+    const payload = processConversationPayload.safeParse(job.payload);
+    if (!payload.success) {
+      throw new Error(`Datos de la tarea inválidos: ${z.prettifyError(payload.error)}`);
+    }
+    const { conversationId } = payload.data;
     await processConversation(deps, { tenantId: job.tenantId, conversationId, signal });
   };
 }

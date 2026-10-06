@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withRecipientOverride } from '../../../src/cli/recipient-override.js';
+import { withRecipientOverride } from '../../../src/modules/whatsapp/recipient-override.js';
 import type { SendMessageInput, WhatsAppClient } from '../../../src/modules/whatsapp/client.js';
 
 function recordingClient() {
@@ -16,7 +16,7 @@ function recordingClient() {
 const INPUT: SendMessageInput = {
   phoneNumberId: '1004988256039822',
   accessToken: 'token',
-  to: '+5492615362239',
+  to: '+5492615550000',
   message: { type: 'text', body: 'Eco: hola' },
 };
 
@@ -24,10 +24,10 @@ describe('withRecipientOverride', () => {
   it('manda todo al número indicado y deja el resto del envío igual', async () => {
     const { client, sent } = recordingClient();
 
-    const result = await withRecipientOverride(client, '54261155362239').sendMessage(INPUT);
+    const result = await withRecipientOverride(client, '54261155550000').sendMessage(INPUT);
 
     expect(result).toEqual({ messageId: 'wamid.1' });
-    expect(sent).toEqual([{ ...INPUT, to: '54261155362239' }]);
+    expect(sent).toEqual([{ ...INPUT, to: '54261155550000' }]);
   });
 
   it('sin número, devuelve el mismo cliente', async () => {

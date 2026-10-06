@@ -42,6 +42,17 @@ const envSchema = z
     /** Lo elegimos nosotros y se carga en Meta al registrar el webhook. */
     WHATSAPP_VERIFY_TOKEN: optionalSecret,
     WHATSAPP_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v25.0'),
+    /**
+     * SOLO desarrollo: el número de prueba de Meta solo contesta a los de su lista, que
+     * guarda los celulares argentinos con el 15 (sección 8.1). Todo envío va a este número.
+     */
+    WHATSAPP_TEST_RECIPIENT: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .string()
+        .regex(/^[1-9][0-9]{7,14}$/, 'Solo dígitos, como figura en la lista de prueba de Meta')
+        .optional(),
+    ),
   })
   .superRefine((env, context) => {
     if (Boolean(env.WHATSAPP_APP_SECRET) !== Boolean(env.WHATSAPP_VERIFY_TOKEN)) {
@@ -53,6 +64,13 @@ const envSchema = z
     }
     if (env.NODE_ENV !== 'production') return;
 
+    if (env.WHATSAPP_TEST_RECIPIENT) {
+      context.addIssue({
+        code: 'custom',
+        path: ['WHATSAPP_TEST_RECIPIENT'],
+        message: 'Es solo para desarrollo: en producción mandaría todo a un solo número',
+      });
+    }
     for (const name of REQUIRED_IN_PRODUCTION) {
       if (!env[name]) {
         context.addIssue({ code: 'custom', path: [name], message: 'Obligatoria en producción' });
@@ -78,6 +96,8 @@ export interface Config {
   credentialsKey: Buffer | null;
   /** Null: sin la app de Meta configurada, el webhook de WhatsApp no se registra. */
   whatsapp: { appSecret: string; verifyToken: string; graphApiVersion: string } | null;
+  /** Solo en desarrollo: todo envío de WhatsApp va a este número (sección 8.1). */
+  whatsappTestRecipient: string | null;
 }
 
 export class ConfigError extends Error {
@@ -113,5 +133,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
             graphApiVersion: data.WHATSAPP_GRAPH_API_VERSION,
           }
         : null,
+    whatsappTestRecipient: data.WHATSAPP_TEST_RECIPIENT ?? null,
   };
 }

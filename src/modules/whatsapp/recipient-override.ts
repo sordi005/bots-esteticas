@@ -1,4 +1,4 @@
-import type { WhatsAppClient } from '../modules/whatsapp/client.js';
+import type { WhatsAppClient } from './client.js';
 
 /**
  * SOLO para probar con el número de prueba de Meta: manda todo a `to`, sin importar
