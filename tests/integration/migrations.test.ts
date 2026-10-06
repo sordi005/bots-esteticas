@@ -20,6 +20,7 @@ const MVP_TABLES = [
   'professional_services',
   'professionals',
   'schedule_exceptions',
+  'scheduled_jobs',
   'services',
   'tenant_credentials',
   'tenant_settings',

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { workingHours } from '../../src/modules/catalog/schema.js';
 import { handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
@@ -180,5 +182,56 @@ describe('reglas que protege la base', () => {
       UNIQUE_VIOLATION,
       'messages_whatsapp_message_id_unique',
     );
+  });
+
+  describe('tareas programadas (sección 6.7)', () => {
+    const job = (overrides: Partial<typeof scheduledJobs.$inferInsert> = {}) => ({
+      tenantId: fixture.tenantId,
+      kind: 'process_conversation' as const,
+      key: randomUUID(),
+      runAt: FIXTURE_APPOINTMENT_RANGE.start,
+      ...overrides,
+    });
+
+    it('la misma tarea con la misma clave se guarda una sola vez por negocio', async () => {
+      const first = job();
+      await db.insert(scheduledJobs).values(first);
+
+      await expectConstraintViolation(
+        db.insert(scheduledJobs).values(job({ key: first.key })),
+        UNIQUE_VIOLATION,
+        'scheduled_jobs_tenant_kind_key_key',
+      );
+    });
+
+    it.each([
+      ['en ejecución sin plazo ni token', { status: 'running' as const }],
+      [
+        'pendiente con plazo y token',
+        { lockedUntil: FIXTURE_APPOINTMENT_RANGE.end, lockToken: randomUUID() },
+      ],
+    ])('una tarea no puede estar %s', async (_case, overrides) => {
+      await expectConstraintViolation(
+        db.insert(scheduledJobs).values(job(overrides)),
+        CHECK_VIOLATION,
+        'scheduled_jobs_lock_matches_status',
+      );
+    });
+
+    it('solo una tarea en ejecución anota que hay que volver a ejecutarla', async () => {
+      await expectConstraintViolation(
+        db.insert(scheduledJobs).values(job({ rerunAt: FIXTURE_APPOINTMENT_RANGE.end })),
+        CHECK_VIOLATION,
+        'scheduled_jobs_rerun_only_while_running',
+      );
+    });
+
+    it('los intentos no son negativos', async () => {
+      await expectConstraintViolation(
+        db.insert(scheduledJobs).values(job({ attempts: -1 })),
+        CHECK_VIOLATION,
+        'scheduled_jobs_attempts_non_negative',
+      );
+    });
   });
 });
