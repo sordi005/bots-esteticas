@@ -33,6 +33,7 @@ describe('loadConfig', () => {
       databaseUrl,
       credentialsKey: null,
       whatsapp: null,
+      whatsappTestRecipient: null,
     });
   });
 
@@ -47,7 +48,30 @@ describe('loadConfig', () => {
       databaseUrl,
       credentialsKey: Buffer.from(KEY, 'base64'),
       whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v25.0' },
+      whatsappTestRecipient: null,
     });
+  });
+
+  it('en desarrollo lee el destino de prueba de WhatsApp (sección 8.1)', () => {
+    const config = loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_TEST_RECIPIENT: '54261155550000' });
+
+    expect(config.whatsappTestRecipient).toBe('54261155550000');
+  });
+
+  it('el destino de prueba son solo dígitos, como figura en la lista de Meta', () => {
+    const error = captureError(() =>
+      loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_TEST_RECIPIENT: '+54 261 15 536-2239' }),
+    );
+
+    expect(error.message).toContain('WHATSAPP_TEST_RECIPIENT');
+  });
+
+  it('en producción no se acepta un destino de prueba: mandaría todo a un solo número', () => {
+    const error = captureError(() =>
+      loadConfig({ ...PRODUCTION, WHATSAPP_TEST_RECIPIENT: '54261155550000' }),
+    );
+
+    expect(error.message).toContain('WHATSAPP_TEST_RECIPIENT');
   });
 
   it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY'])(

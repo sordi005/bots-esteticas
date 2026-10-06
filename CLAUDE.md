@@ -46,7 +46,8 @@ pnpm install              # dependencias
 pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté listo
 pnpm db:migrate           # aplica las migraciones pendientes
 pnpm db:seed              # carga o restaura "Estética Ejemplo"
-pnpm dev                  # servidor con recarga en http://localhost:$PORT
+pnpm dev                  # servidor + worker con recarga en http://localhost:$PORT
+                          # en desarrollo, el worker contesta con un eco agrupado (hasta H7)
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
@@ -57,9 +58,9 @@ pnpm db:generate          # después de cambiar un schema.ts: genera la migraci�
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
-pnpm whatsapp:echo <negocio> [destino]  # SOLO desarrollo: contesta cada mensaje (prueba de H5);
-                                        # destino: el número como figura en la lista de prueba de Meta
 ```
+
+Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1).
 
 En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.
 
@@ -74,12 +75,12 @@ src/
     # cada módulo declara sus tablas en su schema.ts
   shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
   seeds/         # datos de ejemplo ("Estética Ejemplo")
-  cli/           # herramientas de línea de comandos (conectar WhatsApp, eco de prueba)
+  cli/           # herramientas de línea de comandos (conectar WhatsApp)
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
   migrate.ts     # punto de entrada: aplica las migraciones
   seed.ts        # punto de entrada: carga los datos de ejemplo
-  worker.ts      # loop de tareas programadas (H6)
+  worker.ts      # arma el worker de tareas programadas con un handler por tipo (no arranca)
 migrations/      # SQL generado por drizzle-kit; nunca se edita a mano
 tests/
   unit/  integration/  contracts/  evals/
@@ -111,12 +112,23 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 
 ## WhatsApp
 
-- El webhook solo valida la firma, guarda y responde: nunca contesta ni llama a la IA (regla 6). Contestar es del worker (H6).
+- El webhook solo valida la firma, guarda y responde: nunca contesta ni llama a la IA (regla 6). Al guardar un mensaje nuevo, el inbox programa la vuelta de su conversación; contestar es del worker.
 - Los formatos de Meta se toman de la documentación oficial, no de memoria. Un tipo de mensaje nuevo entra con su ejemplo oficial en `tests/contracts/whatsapp/`.
 - Para enviar: `sendWhatsAppMessage` de `modules/conversation/outbox.ts`. Valida los límites de Meta, usa el token cifrado del negocio y registra el mensaje.
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
 - Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
 - Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
+
+## Tareas programadas
+
+El detalle está en la sección 6.7 de la especificación.
+
+- Programar algo: solo con `scheduleJob` de `modules/jobs/queue.ts`. Hay una fila por negocio, tipo y clave: programar de nuevo actualiza la fila, nunca crea otra. Elegí la clave para que una tarea repetida sea la misma fila (la de una conversación es su id).
+- Si se programa algo junto con otro cambio, hacelo en la misma transacción (el inbox programa la conversación al guardar el mensaje).
+- Un tipo de tarea nuevo: valor en el enum `job_kind` (con su migración) y su handler en `src/worker.ts`. El worker solo toma los tipos que tienen handler.
+- Un handler puede correr más de una vez (reintentos, plazo vencido): antes de actuar, verifica que la acción siga siendo válida (regla 7). Recibe un `signal` que se cancela a los 60 s.
+- La cola recibe la hora por parámetro: en los tests se mueve el reloj, no se espera.
+- Los tests que toman tareas borran `scheduled_jobs` en `beforeEach`: la cola es una sola para todos los negocios y un claim tomaría las de otro test.
 
 ## Reglas no negociables
 

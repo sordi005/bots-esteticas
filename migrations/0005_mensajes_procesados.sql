@@ -1,0 +1,3 @@
+ALTER TABLE "messages" ADD COLUMN "processed_at" timestamp with time zone;--> statement-breakpoint
+CREATE INDEX "messages_unprocessed_idx" ON "messages" USING btree ("tenant_id","conversation_id") WHERE "messages"."direction" = 'inbound' and "messages"."processed_at" is null;--> statement-breakpoint
+ALTER TABLE "messages" ADD CONSTRAINT "messages_processed_only_inbound" CHECK ("messages"."direction" = 'inbound' or "messages"."processed_at" is null);

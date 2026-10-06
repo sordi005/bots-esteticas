@@ -7,12 +7,13 @@ import type {
   MessageStatusEvent,
   WebhookEvent,
 } from '../whatsapp/webhook-payload.js';
+import { scheduleConversation } from './processing.js';
 import { conversations, messages } from './schema.js';
 
 /**
- * Bandeja de entrada (sección 6.5, pasos 2 y 3): identifica el negocio por el
- * `phone_number_id`, crea la clienta y su conversación si hace falta, y guarda el mensaje
- * una sola vez aunque Meta reintente el webhook.
+ * Bandeja de entrada (sección 6.5, pasos 2, 3 y 5): identifica el negocio por el
+ * `phone_number_id`, crea la clienta y su conversación si hace falta, guarda el mensaje
+ * una sola vez aunque Meta reintente el webhook y programa la vuelta de la conversación.
  */
 export interface InboxSummary {
   stored: number;
@@ -30,6 +31,7 @@ const WA_ID = /^[1-9][0-9]{7,14}$/;
 export async function recordWebhookEvents(
   db: NodePgDatabase,
   events: WebhookEvent[],
+  options: { now: Date },
 ): Promise<InboxSummary> {
   const summary: InboxSummary = {
     stored: 0,
@@ -59,7 +61,7 @@ export async function recordWebhookEvents(
     } else if (event.kind === 'message') {
       if (!WA_ID.test(event.from)) {
         summary.invalid += 1;
-      } else if (await storeInboundMessage(db, tenantId, event)) {
+      } else if (await storeInboundMessage(db, tenantId, event, options.now)) {
         summary.stored += 1;
       } else {
         summary.duplicates += 1;
@@ -75,11 +77,16 @@ export async function recordWebhookEvents(
   return summary;
 }
 
-/** true si el mensaje es nuevo; false si ya estaba guardado. */
+/**
+ * true si el mensaje es nuevo; false si ya estaba guardado. Un mensaje nuevo programa la
+ * vuelta de su conversación en la misma transacción: si se guardó, alguien lo va a contestar.
+ * Uno repetido no la toca, así un reintento de Meta no vuelve a correr la espera.
+ */
 async function storeInboundMessage(
   db: NodePgDatabase,
   tenantId: string,
   event: InboundMessageEvent,
+  receivedAt: Date,
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
     const [customer] = await tx
@@ -119,8 +126,10 @@ async function storeInboundMessage(
       })
       .onConflictDoNothing({ target: messages.whatsappMessageId })
       .returning({ id: messages.id });
+    if (inserted.length === 0) return false;
 
-    return inserted.length > 0;
+    await scheduleConversation(tx, { tenantId, conversationId: conversation.id, receivedAt });
+    return true;
   });
 }
 

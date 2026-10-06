@@ -26,7 +26,7 @@ const server = buildServer({
     appSecret: APP_SECRET,
     verifyToken: VERIFY_TOKEN,
     onEvents: async (events) => {
-      await recordWebhookEvents(db, events);
+      await recordWebhookEvents(db, events, { now: new Date() });
     },
   },
 });

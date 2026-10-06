@@ -29,6 +29,27 @@
       "when": 1790811879416,
       "tag": "0003_turnos_sin_superposicion",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791310607408,
+      "tag": "0004_cola_de_tareas",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791311149539,
+      "tag": "0005_mensajes_procesados",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791311151627,
+      "tag": "0006_mensajes_anteriores_procesados",
+      "breakpoints": true
     }
   ]
 }
