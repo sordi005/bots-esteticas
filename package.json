@@ -18,6 +18,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:contracts": "vitest run --project contracts",
     "test:watch": "vitest",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "db:up": "docker compose up -d --wait",
@@ -25,7 +26,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=.env src/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/seed.ts",
-    "db:reset": "docker compose down -v && pnpm db:up && pnpm db:migrate && pnpm db:seed"
+    "db:reset": "docker compose down -v && pnpm db:up && pnpm db:migrate && pnpm db:seed",
+    "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts",
+    "whatsapp:echo": "tsx --env-file-if-exists=.env src/cli/whatsapp-echo.ts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",

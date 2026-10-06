@@ -50,11 +50,15 @@ pnpm dev                  # servidor con recarga en http://localhost:$PORT
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
+pnpm test:contracts       # parsers contra ejemplos reales de Meta (sin red ni base)
 pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
 pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
+pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
+pnpm whatsapp:echo <negocio> [destino]  # SOLO desarrollo: contesta cada mensaje (prueba de H5);
+                                        # destino: el número como figura en la lista de prueba de Meta
 ```
 
 En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.
@@ -70,6 +74,7 @@ src/
     # cada módulo declara sus tablas en su schema.ts
   shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
   seeds/         # datos de ejemplo ("Estética Ejemplo")
+  cli/           # herramientas de línea de comandos (conectar WhatsApp, eco de prueba)
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
   migrate.ts     # punto de entrada: aplica las migraciones
@@ -78,6 +83,7 @@ src/
 migrations/      # SQL generado por drizzle-kit; nunca se edita a mano
 tests/
   unit/  integration/  contracts/  evals/
+  # contracts/whatsapp/: ejemplos oficiales de Meta, copiados tal cual
 docker/          # scripts de inicio de Postgres (crea la base de tests)
 docs/
   SPEC.md
@@ -97,10 +103,20 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 ## Fechas y dominio
 
 - La lógica de dominio es pura: recibe la hora actual (`now`) y la zona horaria del negocio por parámetro.
+- Un `Date` leído de Postgres pierde los microsegundos: nunca lo uses como cursor de `created_at > cursor`, porque la última fila vuelve para siempre. Usá el valor como texto de Postgres (`created_at::text`) o un id.
 - Toda conversión entre hora local e instante pasa por `shared/time-zone.ts`. Nunca sumes horas a mano para "pasar a Mendoza": con horario de verano en otra zona, eso da mal.
 - Estados y transiciones de turnos: solo en `modules/scheduling/appointment-state-machine.ts`. El esquema de la base importa los estados de ahí.
 - Reservar, cambiar el estado o reprogramar un turno: solo con las funciones de `modules/scheduling/booking.ts`, nunca con un insert o update directo a `appointments`. Ahí se valida todo contra la base y se registra el evento de auditoría en la misma transacción.
 - La restricción `appointments_no_overlap` vive en la migración 0003 (Drizzle no sabe declararla). Si cambian los estados que ocupan el horario, va una migración nueva; el test `appointment-overlap` avisa si quedaron distintos.
+
+## WhatsApp
+
+- El webhook solo valida la firma, guarda y responde: nunca contesta ni llama a la IA (regla 6). Contestar es del worker (H6).
+- Los formatos de Meta se toman de la documentación oficial, no de memoria. Un tipo de mensaje nuevo entra con su ejemplo oficial en `tests/contracts/whatsapp/`.
+- Para enviar: `sendWhatsAppMessage` de `modules/conversation/outbox.ts`. Valida los límites de Meta, usa el token cifrado del negocio y registra el mensaje.
+- Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
+- Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
+- Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
 
 ## Reglas no negociables
 

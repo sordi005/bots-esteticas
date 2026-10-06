@@ -18,6 +18,13 @@ export default defineConfig({
       },
       {
         test: {
+          // Contratos con servicios externos: sus ejemplos reales, sin red ni base (11.3).
+          name: 'contracts',
+          include: ['tests/contracts/**/*.test.ts'],
+        },
+      },
+      {
+        test: {
           name: 'integration',
           include: ['tests/integration/**/*.test.ts'],
           // Deja la base de tests vacía y migrada antes de empezar.

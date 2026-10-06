@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../../../src/shared/config.js';
 
 const databaseUrl = 'postgres://postgres:secreta@localhost:5434/bots_esteticas';
+const KEY = Buffer.alloc(32, 7).toString('base64');
+
+/** Todo lo que producción exige. */
+const PRODUCTION = {
+  NODE_ENV: 'production',
+  DATABASE_URL: databaseUrl,
+  CREDENTIALS_ENCRYPTION_KEY: KEY,
+  WHATSAPP_APP_SECRET: 'secreto-de-la-app',
+  WHATSAPP_VERIFY_TOKEN: 'token-de-verificacion',
+};
 
 function captureError(action: () => unknown): Error {
   try {
@@ -21,17 +31,13 @@ describe('loadConfig', () => {
       port: 3000,
       logLevel: 'info',
       databaseUrl,
+      credentialsKey: null,
+      whatsapp: null,
     });
   });
 
   it('lee los valores del entorno y convierte PORT a número', () => {
-    const config = loadConfig({
-      NODE_ENV: 'production',
-      HOST: '127.0.0.1',
-      PORT: '8080',
-      LOG_LEVEL: 'warn',
-      DATABASE_URL: databaseUrl,
-    });
+    const config = loadConfig({ ...PRODUCTION, HOST: '127.0.0.1', PORT: '8080', LOG_LEVEL: 'warn' });
 
     expect(config).toEqual({
       nodeEnv: 'production',
@@ -39,7 +45,56 @@ describe('loadConfig', () => {
       port: 8080,
       logLevel: 'warn',
       databaseUrl,
+      credentialsKey: Buffer.from(KEY, 'base64'),
+      whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v25.0' },
     });
+  });
+
+  it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY'])(
+    'en producción %s es obligatoria',
+    (name) => {
+      const error = captureError(() => loadConfig({ ...PRODUCTION, [name]: undefined }));
+
+      expect(error.message).toContain(name);
+    },
+  );
+
+  it('en producción rechaza la clave de ejemplo de .env.example (todos ceros)', () => {
+    const error = captureError(() =>
+      loadConfig({ ...PRODUCTION, CREDENTIALS_ENCRYPTION_KEY: Buffer.alloc(32).toString('base64') }),
+    );
+
+    expect(error.message).toContain('CREDENTIALS_ENCRYPTION_KEY');
+  });
+
+  it('el secreto de la app y el token de verificación se configuran juntos', () => {
+    const error = captureError(() =>
+      loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_APP_SECRET: 'secreto-de-la-app' }),
+    );
+
+    expect(error.message).toContain('WHATSAPP_VERIFY_TOKEN');
+  });
+
+  it('en desarrollo, una variable vacía de .env cuenta como no definida', () => {
+    const config = loadConfig({
+      DATABASE_URL: databaseUrl,
+      WHATSAPP_APP_SECRET: '',
+      WHATSAPP_VERIFY_TOKEN: '',
+      CREDENTIALS_ENCRYPTION_KEY: '',
+    });
+
+    expect(config.whatsapp).toBeNull();
+    expect(config.credentialsKey).toBeNull();
+  });
+
+  it('rechaza una clave de cifrado que no tiene 32 bytes, sin mostrarla', () => {
+    const shortKey = Buffer.from('clave-corta-secreta').toString('base64');
+    const error = captureError(() =>
+      loadConfig({ DATABASE_URL: databaseUrl, CREDENTIALS_ENCRYPTION_KEY: shortKey }),
+    );
+
+    expect(error.message).toContain('CREDENTIALS_ENCRYPTION_KEY');
+    expect(error.message).not.toContain(shortKey);
   });
 
   it('falla con ConfigError si falta DATABASE_URL', () => {
