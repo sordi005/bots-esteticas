@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.6 · 01/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.7 · 06/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -670,12 +670,18 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 - **[D]** Si un negocio no califica para coexistencia, no entra al MVP. Queda en espera hasta la fase 3, cuando exista el panel de la dueña para responder conversaciones.
 - **Plantillas:** se crean y aprueban en la cuenta de cada negocio durante el onboarding. Mínimo: recordatorio del día anterior (utilidad, con 3 botones) y aviso de reserva vencida (utilidad).
 - **Número de prueba:** la demo usa el número de prueba de Meta, que permite mandar mensajes a unos pocos números verificados sin configurar un negocio real.
+  - La lista de permitidos compara el número como texto. A un celular argentino WhatsApp lo identifica como `549` + área + número, pero la lista lo guarda como `54` + área + `15` + número, y contestarle al `wa_id` da el error 131030. Es solo del modo de prueba: en producción no hay lista. Para probar, `pnpm whatsapp:echo <negocio> <número-como-figura-en-la-lista>`.
+  - El token de acceso que da el panel de prueba vence en pocas horas. Para cualquier uso que no sea una prueba corta hace falta un token que no venza (usuario del sistema o el que entrega el registro del negocio).
+- **[D] El webhook necesita dos suscripciones** (aprendido en la prueba de H5: el panel mostró el paso como hecho sin haber guardado ninguna):
+  1. La app, al objeto `whatsapp_business_account` con el campo `messages`: `POST /{app-id}/subscriptions`. Es una sola vez para todo el servicio.
+  2. **La cuenta de WhatsApp Business de cada negocio, a la app**: `POST /{waba-id}/subscribed_apps`. Va en el onboarding de cada negocio (H15) y se verifica con un `GET` al mismo endpoint.
+- **[?] Identificación sin número de teléfono.** Los webhooks reales ya traen `user_id` / `from_user_id` además de `wa_id`: es el identificador que Meta asocia a los nombres de usuario de WhatsApp. Si una clienta con nombre de usuario puede escribir sin que llegue su número, hoy el mensaje se descarta como inválido (las clientas se identifican por teléfono, sección 7). Revisar la documentación oficial de Meta y decidir el modelo de identidad antes del piloto.
 - **[D]** Se registra el costo estimado de cada mensaje enviado por categoría, para el reporte y para detectar abusos. Desde H5 se guarda la categoría que informa Meta. El costo en dólares necesita la tabla de precios vigente (sección 15) y se calcula cuando exista.
 - **[S]** Credenciales:
   - El App Secret y el token de verificación del webhook son de la app de Meta del servicio, una sola para todos los negocios, y van en variables de entorno.
   - El token de acceso es de cada negocio: se guarda cifrado en `tenant_credentials`.
   - En desarrollo, `pnpm whatsapp:connect <negocio>` conecta un número. Desde H15, eso se hace desde el panel.
-- **[S]** Versión de la Graph API configurable: v25.0 al 01/10/2026.
+- **[S]** Versión de la Graph API configurable: v25.0 al 01/10/2026. Al 06/10/2026 Meta ya registra los campos del webhook en v26.0: revisar el registro de cambios y actualizar al empezar H6.
 - **[D]** Antes de enviar, el código valida los límites de Meta: texto de hasta 4096 caracteres; hasta 3 botones con títulos de hasta 20; listas de hasta 10 filas, con títulos de hasta 24 y descripciones de hasta 72. Un mensaje inválido nunca llega a la API.
 
 ### 8.2 Número de avisos del servicio [S]

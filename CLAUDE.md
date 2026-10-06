@@ -103,6 +103,7 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 ## Fechas y dominio
 
 - La lógica de dominio es pura: recibe la hora actual (`now`) y la zona horaria del negocio por parámetro.
+- Un `Date` leído de Postgres pierde los microsegundos: nunca lo uses como cursor de `created_at > cursor`, porque la última fila vuelve para siempre. Usá el valor como texto de Postgres (`created_at::text`) o un id.
 - Toda conversión entre hora local e instante pasa por `shared/time-zone.ts`. Nunca sumes horas a mano para "pasar a Mendoza": con horario de verano en otra zona, eso da mal.
 - Estados y transiciones de turnos: solo en `modules/scheduling/appointment-state-machine.ts`. El esquema de la base importa los estados de ahí.
 - Reservar, cambiar el estado o reprogramar un turno: solo con las funciones de `modules/scheduling/booking.ts`, nunca con un insert o update directo a `appointments`. Ahí se valida todo contra la base y se registra el evento de auditoría en la misma transacción.
@@ -114,6 +115,8 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - Los formatos de Meta se toman de la documentación oficial, no de memoria. Un tipo de mensaje nuevo entra con su ejemplo oficial en `tests/contracts/whatsapp/`.
 - Para enviar: `sendWhatsAppMessage` de `modules/conversation/outbox.ts`. Valida los límites de Meta, usa el token cifrado del negocio y registra el mensaje.
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
+- Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
+- Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
 
 ## Reglas no negociables
 
