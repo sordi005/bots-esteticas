@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.7 · 06/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.8 · 06/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -884,7 +884,14 @@ Panel de la dueña, bandeja de conversaciones propia (para negocios sin coexiste
 
 ### Hitos para Claude Code
 
-Cada hito se termina con sus tests pasando antes de empezar el siguiente.
+Cada hito se termina antes de empezar el siguiente. **[D] Definición de terminado:**
+
+- Se cumple el criterio de la tabla.
+- El hito entró a `main` por Pull Request, con CI en verde en el PR y después en `main`.
+- Tiene su tag `v0.N.0` y su release en GitHub (N = número de hito; `v1.0.0` queda para el piloto).
+- El reporte de avance y el resumen del hito están escritos.
+
+El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 
 | # | Hito | Criterio de terminado |
 |---|---|---|

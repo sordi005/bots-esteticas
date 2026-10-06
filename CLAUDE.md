@@ -147,3 +147,17 @@ ESLint hace cumplir las reglas 3 y 5 en `src/modules/{scheduling,catalog,custome
 - El desarrollador está aprendiendo. Al terminar cada hito, escribí un resumen breve con: qué se hizo, qué patrones o principios se aplicaron y por qué, y qué conceptos conviene estudiar para entenderlo a fondo.
 - Preferí la solución más simple que cumpla la especificación. Si creés que algo necesita más complejidad (una cola externa, un cache, otro servicio), justificalo con un requisito concreto antes de agregarlo.
 - Commits chicos y descriptivos, en español.
+
+### Git y GitHub
+
+`main` está protegida: solo se entra por Pull Request, con el check de CI ("Lint, tipos, tests y build") en verde y la rama al día con `main`. La regla vale también para administradores. No hay force-push.
+
+- **Ramas:** `hN-tema` para un hito (`h6-jobs`), `fix/tema`, `docs/tema` o `chore/tema` para lo demás. Siempre desde `main` actualizada.
+- **Commits:** chicos, en español, con prefijo `feat:`, `fix:`, `test:`, `docs:`, `refactor:` o `chore:`. El título dice qué cambia; el cuerpo, por qué. `pnpm check` antes de cada uno.
+- **Pull Request:** uno por hito o por cambio suelto, con la plantilla de `.github/pull_request_template.md`. El título es el del hito (`H6 · Tareas programadas`). Se mergea desde GitHub con merge commit (squash y rebase están desactivados, para conservar los commits chicos); la rama se borra sola.
+- **Cierre de un hito**, en este orden:
+  1. PR mergeado con CI en verde, y CI en verde también sobre `main`.
+  2. Tag anotado `v0.N.0` (N = número de hito) sobre el merge, y release en GitHub con un resumen y la cantidad de tests.
+  3. Reporte de avance actualizado (Claude Doc).
+  4. Resumen para el desarrollador: qué se hizo, patrones y conceptos para estudiar.
+- **Sesiones:** una sesión de Claude Code por hito. Al empezar una sesión nueva, avisarle al desarrollador que es una sesión nueva y qué contexto se recuperó (engram, `SPEC.md`, último tag). Al cerrar un hito, recomendar abrir una sesión nueva para el siguiente.
