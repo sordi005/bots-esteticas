@@ -1,12 +1,12 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { and, asc, eq, gt } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { sendWhatsAppMessage } from '../modules/conversation/outbox.js';
-import { conversations, messages } from '../modules/conversation/schema.js';
 import { tenants } from '../modules/tenants/schema.js';
 import { createWhatsAppClient } from '../modules/whatsapp/client.js';
 import { loadConfig } from '../shared/config.js';
 import { createDatabase } from '../shared/db.js';
 import { createLogger } from '../shared/logger.js';
+import { pendingInboundMessages } from './echo-pending.js';
 import { echoReply } from './echo-reply.js';
 
 /**
@@ -47,34 +47,16 @@ if (config.nodeEnv === 'production' || !slug || !config.credentialsKey) {
       stop.abort();
     });
 
-    // Solo contesta lo que llega desde ahora.
-    let since = new Date();
+    // Solo contesta lo que llega desde ahora. Si un envío falla, no se reintenta:
+    // el cursor ya avanzó (reintentar con backoff es trabajo del worker de H6).
+    let after = new Date().toISOString();
     logger.info({ tenant: slug }, 'Eco escuchando. Mandá "hola", "botones" o "lista". Ctrl+C para salir.');
 
     while (!stop.signal.aborted) {
-      const pending = await db
-        .select({
-          id: messages.id,
-          customerId: conversations.customerId,
-          content: messages.content,
-          createdAt: messages.createdAt,
-        })
-        .from(messages)
-        .innerJoin(
-          conversations,
-          and(eq(conversations.tenantId, messages.tenantId), eq(conversations.id, messages.conversationId)),
-        )
-        .where(
-          and(
-            eq(messages.tenantId, tenant.id),
-            eq(messages.direction, 'inbound'),
-            gt(messages.createdAt, since),
-          ),
-        )
-        .orderBy(asc(messages.createdAt));
+      const pending = await pendingInboundMessages(db, { tenantId: tenant.id, after });
 
       for (const message of pending) {
-        since = message.createdAt;
+        after = message.cursor;
         const content = (message.content ?? {}) as Record<string, unknown>;
         try {
           const result = await sendWhatsAppMessage(
