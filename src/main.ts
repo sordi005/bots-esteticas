@@ -21,7 +21,9 @@ const whatsappWebhook: WhatsAppWebhookOptions | undefined = config.whatsapp
       appSecret: config.whatsapp.appSecret,
       verifyToken: config.whatsapp.verifyToken,
       onEvents: async (events, log) => {
-        const { failedDeliveries, ...counts } = await recordWebhookEvents(database.db, events);
+        const { failedDeliveries, ...counts } = await recordWebhookEvents(database.db, events, {
+          now: new Date(),
+        });
         log[counts.unknownNumber > 0 ? 'warn' : 'info'](counts, 'Webhook de WhatsApp guardado');
         for (const failure of failedDeliveries) {
           log.warn(failure, 'Meta no pudo entregar un mensaje');

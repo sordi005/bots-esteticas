@@ -16,7 +16,7 @@ async function receive(phoneNumberId: string, messageId: string, text: string) {
   const { events } = parseWebhook(
     JSON.parse(textMessageWebhook({ phoneNumberId, from: '5492614000001', messageId, text })),
   );
-  await recordWebhookEvents(db, events);
+  await recordWebhookEvents(db, events, { now: new Date() });
 }
 
 describe('pendingInboundMessages: lo que el eco todavía no contestó', () => {

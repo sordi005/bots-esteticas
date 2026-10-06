@@ -184,6 +184,22 @@ describe('reglas que protege la base', () => {
     );
   });
 
+  it('solo un mensaje entrante se marca como procesado', async () => {
+    await expectConstraintViolation(
+      db.insert(messages).values({
+        tenantId: fixture.tenantId,
+        conversationId: fixture.conversationId,
+        direction: 'outbound',
+        type: 'text',
+        content: { body: 'hola' },
+        occurredAt: FIXTURE_APPOINTMENT_RANGE.start,
+        processedAt: FIXTURE_APPOINTMENT_RANGE.start,
+      }),
+      CHECK_VIOLATION,
+      'messages_processed_only_inbound',
+    );
+  });
+
   describe('tareas programadas (sección 6.7)', () => {
     const job = (overrides: Partial<typeof scheduledJobs.$inferInsert> = {}) => ({
       tenantId: fixture.tenantId,

@@ -12,6 +12,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, single } from './support/fixtures.js';
+import { gate } from './support/gate.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -37,15 +38,6 @@ function fakeClock() {
     },
     later: (ms: number) => new Date(current.getTime() + ms),
   };
-}
-
-/** Una promesa que el test resuelve cuando quiere: sirve para frenar un handler. */
-function gate() {
-  let open: () => void = () => undefined;
-  const opened = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { open, opened };
 }
 
 function schedule(key: string, runAt: Date, payload: Record<string, unknown> = {}) {

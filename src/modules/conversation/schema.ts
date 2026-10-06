@@ -76,7 +76,7 @@ export const messages = pgTable(
     direction: messageDirection('direction').notNull(),
     /** Tipo de mensaje según la API de WhatsApp: text, interactive, image, audio… */
     type: text('type').notNull(),
-    content: jsonb('content').notNull(),
+    content: jsonb('content').$type<Record<string, unknown>>().notNull(),
     /**
      * Id del mensaje en WhatsApp. Único: Meta reintenta webhooks y cada mensaje se
      * guarda una sola vez (sección 6.5). Un saliente lo recibe recién al enviarse.
@@ -87,6 +87,8 @@ export const messages = pgTable(
     estimatedCostUsd: numeric('estimated_cost_usd', { precision: 10, scale: 4 }),
     /** Cuándo se envió o recibió según WhatsApp. */
     occurredAt: instant('occurred_at').notNull(),
+    /** Cuándo lo procesó el worker (sección 6.7). Solo los entrantes; null = todavía no. */
+    processedAt: instant('processed_at'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -96,11 +98,19 @@ export const messages = pgTable(
       foreignColumns: [conversations.tenantId, conversations.id],
     }),
     index('messages_conversation_idx').on(t.tenantId, t.conversationId, t.occurredAt),
+    // Lo que el worker busca en cada vuelta: los entrantes de una conversación sin procesar.
+    index('messages_unprocessed_idx')
+      .on(t.tenantId, t.conversationId)
+      .where(sql`${t.direction} = 'inbound' and ${t.processedAt} is null`),
     check(
       'messages_received_have_whatsapp_id',
       sql`${t.direction} = 'outbound' or ${t.whatsappMessageId} is not null`,
     ),
     check('messages_cost_non_negative', sql`${t.estimatedCostUsd} >= 0`),
+    check(
+      'messages_processed_only_inbound',
+      sql`${t.direction} = 'inbound' or ${t.processedAt} is null`,
+    ),
   ],
 );
 
