@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.8 · 06/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.9 · 06/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -540,8 +540,8 @@ Herramientas del agente en el MVP:
 2. Se identifica el negocio por el `phone_number_id`. Si es el número de avisos del servicio (8.2), el mensaje es una respuesta de una dueña y va al módulo `notifications`.
 3. Se guarda el mensaje. Si ya existía ese id de mensaje, se ignora (Meta reintenta webhooks: **idempotencia**).
 4. Se responde `200` enseguida. El procesamiento pesado nunca se hace dentro del webhook.
-5. El worker toma la conversación, espera el tiempo de agrupado (5.2) y procesa.
-6. **[D]** Una sola ejecución por conversación a la vez. Si llegan mensajes mientras se procesa, se suman a la próxima vuelta. Así nunca salen dos respuestas cruzadas.
+5. Al guardar un mensaje nuevo, en la misma transacción se programa la tarea "procesar conversación" para cuando termine el tiempo de agrupado (5.2). Cada mensaje nuevo la corre hacia adelante. Cuando vence, el worker procesa juntos todos los mensajes de la conversación que todavía no se procesaron (sección 6.7).
+6. **[D]** Una sola ejecución por conversación a la vez. Si llegan mensajes mientras se procesa, se suman a la próxima vuelta. Así nunca salen dos respuestas cruzadas. Lo garantiza la base: hay una sola tarea por conversación (6.7).
 
 Detalles del webhook **[D]**:
 
@@ -581,9 +581,32 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 ### 6.7 Tareas programadas
 
-**[D]** Tabla `scheduled_jobs` más un worker que revisa cada 30 segundos las tareas vencidas, las bloquea con `FOR UPDATE SKIP LOCKED` y las ejecuta. Si en el futuro hace falta algo más robusto, se evalúa `pg-boss`, que usa la misma base. No se agrega Redis.
+**[D]** Tabla `scheduled_jobs` más un worker, dentro del mismo proceso que el servidor (6.2), que busca las tareas vencidas, las bloquea con `FOR UPDATE SKIP LOCKED` y las ejecuta. Si en el futuro hace falta algo más robusto, se evalúa `pg-boss`, que usa la misma base. No se agrega Redis.
 
-Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario, cierre del día (marcar completados), reanudar asistente, reporte mensual, sincronizar calendario.
+**[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
+
+Tipos de tarea: procesar conversación, recordatorio, vencimiento de reserva provisoria, resumen diario, cierre del día (marcar completados), reanudar asistente, reporte mensual, sincronizar calendario.
+
+**[D]** Una fila por tarea y clave. Cada tarea tiene una clave (la de procesar conversación es el id de la conversación), y la base no permite dos filas con el mismo negocio, tipo y clave. Programar una tarea que ya existe la actualiza:
+
+| La tarea estaba | Al programarla de nuevo |
+|---|---|
+| No existe, terminada o fallida | Queda pendiente para la hora pedida, con los intentos en cero |
+| Pendiente | Se mueve a la hora pedida. Así funciona el agrupado: cada mensaje corre la tarea hasta 4 segundos después de él |
+| Ejecutándose | Se anota que hay que volver a ejecutarla; al terminar queda pendiente para esa hora |
+
+Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la base y no depende del código.
+
+**[D]** Cómo se ejecuta:
+
+- El worker marca la tarea como en ejecución, con un plazo y un token de bloqueo nuevo, y la ejecuta fuera de la transacción. Al terminar, solo la cierra si el token coincide: un worker que se colgó no pisa una tarea que ya tomó otro.
+- Si el plazo vence sin que termine (por ejemplo, se cayó el proceso), la tarea se vuelve a tomar y cuenta como un intento.
+- El worker solo toma los tipos de tarea que sabe ejecutar.
+- Al apagar el servidor, deja de tomar tareas y espera a que terminen las que están en curso.
+- **[S]** Hasta 3 intentos (la alerta de 10.3 salta con el tercero). Los reintentos esperan 30 segundos y 2 minutos. Después del tercer fallo la tarea queda fallida con su último error, que nunca incluye tokens ni el contenido de los mensajes (10.1).
+- **[S]** Plazo de ejecución: 2 minutos. Cada tarea tiene 60 segundos para terminar; si no, cuenta como un fallo. Hasta 5 tareas a la vez.
+
+**[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la envía y los marca como procesados. Si el envío sale pero falla la marca, el reintento puede repetir la respuesta: es preferible contestar dos veces a no contestar. Hasta que exista el agente (H7), la respuesta es un eco de desarrollo; en producción no se procesan conversaciones.
 
 **[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado).
 
@@ -644,9 +667,9 @@ Tipos de tarea: recordatorio, vencimiento de reserva provisoria, resumen diario,
 | `appointment_events` | turno, tipo (cambio de estado o reprogramación), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
 | `deposits` | turno (una seña por turno), monto, medio, estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
 | `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje |
-| `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp |
+| `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp, fecha en que se procesó (solo entrantes, sección 6.7) |
 | `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
-| `scheduled_jobs` | tipo, datos, ejecutar en, estado, intentos, último error. Se crea en H6 |
+| `scheduled_jobs` | tipo, clave (única por negocio y tipo, sección 6.7), datos, ejecutar en, volver a ejecutar en (si se programó mientras corría), estado (pendiente, en ejecución, terminada, fallida), intentos, último error, bloqueada hasta y token de bloqueo. Se crea en H6 |
 | `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables. Las plantillas del número de avisos del servicio (sección 8.2) no son de ningún negocio: se modelan en H9 |
 | `audit_log` | quién cambió qué configuración, qué cambió y cuándo. Nunca guarda valores de credenciales |
 
@@ -750,7 +773,7 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 
 ### 10.2 Salud del sistema [D]
 
-- Endpoint `/health` que verifica la base de datos y el worker. **[D]** Responde `200` si todos los chequeos pasan y `503` si alguno falla o no responde a tiempo (valor inicial: 2 segundos). El cuerpo indica qué chequeo falló, sin el detalle del error (el detalle va al log). Los chequeos se agregan a medida que existen las piezas: la base desde H1 y el worker desde H6.
+- Endpoint `/health` que verifica la base de datos y el worker. **[D]** Responde `200` si todos los chequeos pasan y `503` si alguno falla o no responde a tiempo (valor inicial: 2 segundos). El cuerpo indica qué chequeo falló, sin el detalle del error (el detalle va al log). Los chequeos se agregan a medida que existen las piezas: la base desde H1 y el worker desde H6. **[S]** El worker está sano si completó una vuelta en los últimos 30 segundos.
 - Monitor externo de disponibilidad que avisa a Yordi si `/health` falla.
 - Sentry para excepciones.
 
@@ -900,7 +923,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H3 | `scheduling`: disponibilidad pura y máquina de estados, más las políticas de seña, cancelación y reprogramación, el horario de los recordatorios y los feriados oficiales | Unitarios de 11.1 pasando |
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos. El eco se prueba con `pnpm whatsapp:echo`, una herramienta de desarrollo que reemplaza el worker en H6. Las respuestas al número de avisos (6.5, paso 2) entran en H9 | Tests de contrato pasando; eco de mensajes con el número de prueba |
-| H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker | Tests de integración |
+| H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker. El eco de H5 pasa a ser la respuesta del worker en desarrollo hasta H7, y `pnpm whatsapp:echo` se borra | Tests de integración |
 | H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad) | Primeras 10 evaluaciones pasando |
 | H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa | 30 evaluaciones pasando |
 | H9 | Seña por transferencia + número de avisos a la dueña con botones | Flujo completo en el número de prueba |
@@ -937,6 +960,8 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 15 | Dinero en centavos, como entero | `numeric` o números con coma | Sin errores de redondeo y sin convertir texto a número en TypeScript |
 | 16 | Zonas horarias con `Intl`, sin dependencias | Una librería de fechas | Node ya trae la base de datos de zonas; alcanza con una función chica y bien probada, incluido el horario de verano |
 | 17 | Solo feriados nacionales, no días no laborables | Cargar también los puentes turísticos | Para el sector privado los días no laborables son optativos; cargarlos cerraría la agenda de negocios que sí trabajan |
+| 18 | Una fila por tarea y clave, que se reprograma | Una fila nueva por cada ejecución | La base garantiza una sola ejecución por conversación, el agrupado es solo mover una fecha y la tabla no crece con cada mensaje |
+| 19 | Worker en el mismo proceso que el servidor, revisando cada 1 segundo | Un proceso aparte, o revisar cada 30 segundos | Monolito (6.2): un solo proceso que desplegar y monitorear. El agrupado de mensajes necesita contestar en segundos |
 
 ---
 
