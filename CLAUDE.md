@@ -57,7 +57,8 @@ pnpm db:generate          # después de cambiar un schema.ts: genera la migraci�
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
-pnpm whatsapp:echo <negocio>     # SOLO desarrollo: contesta cada mensaje (prueba de H5)
+pnpm whatsapp:echo <negocio> [destino]  # SOLO desarrollo: contesta cada mensaje (prueba de H5);
+                                        # destino: el número como figura en la lista de prueba de Meta
 ```
 
 En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.

@@ -8,10 +8,14 @@ import { createDatabase } from '../shared/db.js';
 import { createLogger } from '../shared/logger.js';
 import { pendingInboundMessages } from './echo-pending.js';
 import { echoReply } from './echo-reply.js';
+import { withRecipientOverride } from './recipient-override.js';
 
 /**
  * Herramienta de DESARROLLO para el criterio de H5: contesta cada mensaje que llega al
- * número de prueba de Meta. Uso: `pnpm whatsapp:echo <slug-del-negocio>`.
+ * número de prueba de Meta. Uso: `pnpm whatsapp:echo <slug-del-negocio> [destino]`.
+ *
+ * `destino` (opcional): el número tal como figura en la lista de permitidos de Meta. Con
+ * celulares argentinos hace falta (ver recipient-override.ts): por ejemplo 54261155362239.
  *
  * Respeta la regla 6: el webhook solo guarda; esta herramienta lee lo guardado y contesta,
  * fuera del webhook. En H6 la reemplaza el worker. No corre en producción.
@@ -21,10 +25,17 @@ const POLL_MS = 2_000;
 const config = loadConfig(process.env);
 const logger = createLogger(config);
 const slug = process.argv[2];
+const testRecipient = process.argv[3];
 
-if (config.nodeEnv === 'production' || !slug || !config.credentialsKey) {
+if (
+  config.nodeEnv === 'production' ||
+  !slug ||
+  !config.credentialsKey ||
+  (testRecipient !== undefined && !/^[1-9][0-9]{7,14}$/.test(testRecipient))
+) {
   logger.error(
-    'Uso: pnpm whatsapp:echo <slug-del-negocio>, con CREDENTIALS_ENCRYPTION_KEY en .env. ' +
+    'Uso: pnpm whatsapp:echo <slug-del-negocio> [destino solo con dígitos], con ' +
+        'CREDENTIALS_ENCRYPTION_KEY en .env. ' +
       'Solo para desarrollo.',
   );
   process.exitCode = 1;
@@ -32,9 +43,10 @@ if (config.nodeEnv === 'production' || !slug || !config.credentialsKey) {
   const credentialsKey = config.credentialsKey;
   const database = createDatabase(config.databaseUrl);
   const { db } = database;
-  const client = createWhatsAppClient({
-    graphApiVersion: config.whatsapp?.graphApiVersion ?? 'v25.0',
-  });
+  const client = withRecipientOverride(
+    createWhatsAppClient({ graphApiVersion: config.whatsapp?.graphApiVersion ?? 'v25.0' }),
+    testRecipient,
+  );
 
   const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, slug));
   if (!tenant) {
