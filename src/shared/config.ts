@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { parseEncryptionKey } from './encryption.js';
 
 /** En .env, una variable vacía es lo mismo que no definida. */
+/** Versión de la Graph API de Meta (sección 8.1). Revisar su registro de cambios antes de subirla. */
+export const DEFAULT_GRAPH_API_VERSION = 'v26.0';
+
 const optionalSecret = z.preprocess(
   (value) => (value === '' ? undefined : value),
   z.string().min(1).optional(),
@@ -41,7 +44,7 @@ const envSchema = z
     WHATSAPP_APP_SECRET: optionalSecret,
     /** Lo elegimos nosotros y se carga en Meta al registrar el webhook. */
     WHATSAPP_VERIFY_TOKEN: optionalSecret,
-    WHATSAPP_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v25.0'),
+    WHATSAPP_GRAPH_API_VERSION: z.string().regex(/^v\d+\.\d+$/).default(DEFAULT_GRAPH_API_VERSION),
     /**
      * SOLO desarrollo: el número de prueba de Meta solo contesta a los de su lista, que
      * guarda los celulares argentinos con el 15 (sección 8.1). Todo envío va a este número.
