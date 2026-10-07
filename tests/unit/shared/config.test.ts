@@ -47,7 +47,7 @@ describe('loadConfig', () => {
       logLevel: 'warn',
       databaseUrl,
       credentialsKey: Buffer.from(KEY, 'base64'),
-      whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v25.0' },
+      whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v26.0' },
       whatsappTestRecipient: null,
     });
   });

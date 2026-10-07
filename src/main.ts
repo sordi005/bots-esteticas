@@ -4,7 +4,7 @@ import { createWhatsAppClient } from './modules/whatsapp/client.js';
 import { withRecipientOverride } from './modules/whatsapp/recipient-override.js';
 import type { WhatsAppWebhookOptions } from './modules/whatsapp/webhook-routes.js';
 import { buildServer } from './server.js';
-import { loadConfig } from './shared/config.js';
+import { DEFAULT_GRAPH_API_VERSION, loadConfig } from './shared/config.js';
 import { createDatabase } from './shared/db.js';
 import { createLogger } from './shared/logger.js';
 import { buildWorker, type WorkerDependencies } from './worker.js';
@@ -48,7 +48,7 @@ if (config.nodeEnv === 'production') {
   logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY el worker no puede contestar conversaciones');
 } else {
   const client = createWhatsAppClient({
-    graphApiVersion: config.whatsapp?.graphApiVersion ?? 'v25.0',
+    graphApiVersion: config.whatsapp?.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION,
   });
   conversations = {
     client: withRecipientOverride(client, config.whatsappTestRecipient ?? undefined),

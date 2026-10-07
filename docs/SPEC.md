@@ -704,7 +704,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
   - El App Secret y el token de verificación del webhook son de la app de Meta del servicio, una sola para todos los negocios, y van en variables de entorno.
   - El token de acceso es de cada negocio: se guarda cifrado en `tenant_credentials`.
   - En desarrollo, `pnpm whatsapp:connect <negocio>` conecta un número. Desde H15, eso se hace desde el panel.
-- **[S]** Versión de la Graph API configurable: v25.0 al 01/10/2026. Al 06/10/2026 Meta ya registra los campos del webhook en v26.0: revisar el registro de cambios y actualizar al empezar H6.
+- **[S]** Versión de la Graph API configurable: v26.0 desde el 07/10/2026 (publicada el 29/07/2026). Su registro de cambios no toca la Cloud API de WhatsApp; los protocolos heredados que elimina (`pretty`, `debug`, `date_format`, `ETag`, `GET /?ids=`) no se usan. Antes de subir de versión, revisar el registro de cambios de la Graph API y el de la plataforma de WhatsApp.
 - **[D]** Antes de enviar, el código valida los límites de Meta: texto de hasta 4096 caracteres; hasta 3 botones con títulos de hasta 20; listas de hasta 10 filas, con títulos de hasta 24 y descripciones de hasta 72. Un mensaje inválido nunca llega a la API.
 
 ### 8.2 Número de avisos del servicio [S]

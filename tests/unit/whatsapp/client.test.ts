@@ -35,13 +35,13 @@ const send = (client: ReturnType<typeof createWhatsAppClient>) =>
 describe('createWhatsAppClient().sendMessage', () => {
   it('hace POST a la API de Meta con el token y devuelve el id del mensaje', async () => {
     const captured: Captured[] = [];
-    const client = createWhatsAppClient({ graphApiVersion: 'v25.0', fetch: fakeFetch(200, OK_RESPONSE, captured) });
+    const client = createWhatsAppClient({ graphApiVersion: 'v26.0', fetch: fakeFetch(200, OK_RESPONSE, captured) });
 
     const result = await send(client);
 
     expect(result).toEqual({ messageId: 'wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA' });
     const [request] = captured;
-    expect(request?.url).toBe('https://graph.facebook.com/v25.0/106540352242922/messages');
+    expect(request?.url).toBe('https://graph.facebook.com/v26.0/106540352242922/messages');
     expect(request?.init.method).toBe('POST');
     expect(new Headers(request?.init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
     const body = request?.init.body;
@@ -51,7 +51,7 @@ describe('createWhatsAppClient().sendMessage', () => {
 
   it('un error de Meta se convierte en un error con su código, sin el token', async () => {
     const client = createWhatsAppClient({
-      graphApiVersion: 'v25.0',
+      graphApiVersion: 'v26.0',
       fetch: fakeFetch(400, {
         error: { message: '(#131030) Recipient phone number not in allowed list', type: 'OAuthException', code: 131030 },
       }),
@@ -66,14 +66,14 @@ describe('createWhatsAppClient().sendMessage', () => {
   });
 
   it('una respuesta exitosa sin id de mensaje es un error, no un éxito silencioso', async () => {
-    const client = createWhatsAppClient({ graphApiVersion: 'v25.0', fetch: fakeFetch(200, { messages: [] }) });
+    const client = createWhatsAppClient({ graphApiVersion: 'v26.0', fetch: fakeFetch(200, { messages: [] }) });
 
     await expect(send(client)).rejects.toThrow(WhatsAppApiError);
   });
 
   it('no llama a Meta si el mensaje no cumple los límites', async () => {
     const captured: Captured[] = [];
-    const client = createWhatsAppClient({ graphApiVersion: 'v25.0', fetch: fakeFetch(200, OK_RESPONSE, captured) });
+    const client = createWhatsAppClient({ graphApiVersion: 'v26.0', fetch: fakeFetch(200, OK_RESPONSE, captured) });
 
     await expect(
       client.sendMessage({
