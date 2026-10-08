@@ -542,7 +542,7 @@ Detalle de las herramientas de consulta (H7):
 - **[D]** Los precios y las fechas salen escritos por el código ("$18.000", "viernes 9/10 15:30", en la zona horaria del negocio). El modelo no hace cuentas ni convierte horarios.
 - `buscar_servicios(texto?)` busca en nombre y alias sin distinguir tildes ni mayúsculas. Sin texto, devuelve el catálogo visible completo. Cada servicio trae su id, precio, precio en efectivo, tipo de precio, duración, si requiere consulta previa y qué profesionales lo hacen.
 - `consultar_informacion(tema)` acepta los temas de `business_info` más `horarios`, que el código arma con el horario semanal de las profesionales activas. Un tema sin texto cargado se informa como "no cargado".
-- `consultar_disponibilidad(servicio, profesional?, desde, hasta, franja?)` recibe fechas locales y una franja opcional (mañana, tarde, noche). **[S]** El rango es de hasta 7 días. Un servicio que no es visible o requiere consulta previa no devuelve horarios: devuelve el motivo.
+- `consultar_disponibilidad(servicio, profesional?, desde, hasta, franja?, despues_de?)` recibe fechas locales y una franja opcional (mañana, tarde, noche). `despues_de` es el inicio del último horario ofrecido: con él, "Ver otros horarios" trae los siguientes en vez de repetir los mismos. **[S]** El rango es de hasta 7 días. Un servicio que no es visible o requiere consulta previa no devuelve horarios: devuelve el motivo. Si no hay lugar en el rango, ofrece el próximo horario libre.
 - **[D]** La respuesta del modelo es un texto más, opcionalmente, opciones para elegir. Las opciones solo pueden ser ids que devolvió una herramienta en esa misma vuelta: el código lo verifica y arma los botones o la lista (8.1). Un id que no salió de una herramienta se descarta.
 
 ### 6.5 Recepción de mensajes
@@ -751,6 +751,7 @@ La dueña responde a esos avisos con botones ("Recibida", "No llegó", "Ausente"
 - **[D]** Se registra por respuesta, en `agent_runs`: modelo, tokens usados, herramientas llamadas y latencia.
 - **[S]** Modelo: `claude-haiku-5-5` (US$ 0,10 / 0,50 por millón de tokens al 06/10/2026), configurable con `ANTHROPIC_MODEL`. La clave va en `ANTHROPIC_API_KEY`. Comparado el 08/10/2026 con OpenAI, Google y DeepSeek: en la gama barata todos cuestan menos de US$ 1,50 cada 1.000 respuestas, así que el precio no decide; decide pasar las evaluaciones (11.4). DeepSeek se descarta porque procesa los datos en China (9.2).
 - **[S]** Esfuerzo de razonamiento bajo (`low`): es una charla y la latencia importa. El modelo ve hasta los últimos 20 mensajes de las últimas 24 horas. Cada llamada a la API tiene 20 segundos y un reintento, para entrar en los 60 segundos de la tarea (6.7), y hasta 4.096 tokens de respuesta.
+- **[S]** Si el modelo se niega a responder, se corta por largo o devuelve una respuesta que no cumple el formato, la clienta recibe un texto fijo: "Perdón, no te entendí bien. ¿Me lo escribís de otra forma?". Desde H8, el segundo intento fallido deriva a una persona (4.8).
 - Revisar precios y modelos vigentes antes de cambiar de modelo.
 
 ---
