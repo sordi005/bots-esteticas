@@ -49,6 +49,13 @@ export function formatLocalSlot(instant: Date, timeZone: string): string {
   return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)} ${clockTime(local.time)}`;
 }
 
+/** "viernes 9/10/2026 15:30": con el año, para decirle al asistente qué día es hoy. */
+export function formatLocalDateTime(instant: Date, timeZone: string): string {
+  const local = instantToLocal(instant, timeZone);
+  const year = local.date.slice(0, 4);
+  return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)}/${year} ${clockTime(local.time)}`;
+}
+
 /** "vie 9/10 15:30": entra en el título de un botón o de una fila de lista (20 caracteres). */
 export function formatShortSlot(instant: Date, timeZone: string): string {
   const local = instantToLocal(instant, timeZone);

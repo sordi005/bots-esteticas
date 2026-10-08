@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatLocalDate,
+  formatLocalDateTime,
   formatLocalSlot,
   formatPesos,
   formatShortSlot,
@@ -59,6 +60,17 @@ describe('formatLocalSlot: fechas y horas en español rioplatense, en la zona de
   it('usa los nombres con tilde de miércoles y sábado, y domingo en el 7', () => {
     expect(formatLocalSlot(new Date('2026-10-14T13:00:00.000Z'), MENDOZA)).toBe('miércoles 14/10 10:00');
     expect(formatLocalSlot(new Date('2026-10-11T13:00:00.000Z'), MENDOZA)).toBe('domingo 11/10 10:00');
+  });
+});
+
+describe('formatLocalDateTime: el momento actual con año, para el contexto del asistente', () => {
+  it('escribe día de la semana, fecha con año y hora en la zona del negocio', () => {
+    expect(formatLocalDateTime(new Date('2026-10-05T12:00:00.000Z'), MENDOZA)).toBe('lunes 5/10/2026 9:00');
+  });
+
+  it('cerca de la medianoche el día es el local, no el de UTC', () => {
+    expect(formatLocalDateTime(new Date('2026-12-31T23:59:00.000Z'), MENDOZA)).toBe('jueves 31/12/2026 20:59');
+    expect(formatLocalDateTime(new Date('2027-01-01T02:30:00.000Z'), MENDOZA)).toBe('jueves 31/12/2026 23:30');
   });
 });
 
