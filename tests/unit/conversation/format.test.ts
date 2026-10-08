@@ -4,6 +4,7 @@ import {
   formatLocalSlot,
   formatPesos,
   formatShortSlot,
+  truncateText,
 } from '../../../src/modules/conversation/format.js';
 
 const MENDOZA = 'America/Argentina/Mendoza';
@@ -82,5 +83,29 @@ describe('formatLocalDate: un día cargado como AAAA-MM-DD', () => {
 
   it('rechaza una fecha que no existe', () => {
     expect(() => formatLocalDate('2026-02-30')).toThrow();
+  });
+});
+
+describe('truncateText: títulos que entran en el límite de WhatsApp', () => {
+  it('un texto que entra queda como está, también el que justo mide el límite', () => {
+    expect(truncateText('Depilación láser', 20)).toBe('Depilación láser');
+    expect(truncateText('12345', 5)).toBe('12345');
+  });
+
+  it('corta en el límite de una palabra y agrega puntos suspensivos', () => {
+    expect(truncateText('Esmaltado semipermanente', 20)).toBe('Esmaltado…');
+    expect(truncateText('Manos y pies semipermanente', 20)).toBe('Manos y pies…');
+  });
+
+  it('una sola palabra larga se corta en seco, sin pasarse del límite', () => {
+    const cut = truncateText('Supercalifragilisticoexpialidoso', 10);
+    expect(cut).toBe('Supercali…');
+    expect(cut).toHaveLength(10);
+  });
+
+  it('nunca devuelve más que el límite', () => {
+    for (const text of ['a b c d e f g h i j k l m n o p', 'Uñas esculpidas con diseño', 'xxxxxxxxxxxxxxxxxxxxxxx']) {
+      expect(truncateText(text, 12).length).toBeLessThanOrEqual(12);
+    }
   });
 });

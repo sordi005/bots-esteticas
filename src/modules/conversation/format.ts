@@ -59,3 +59,15 @@ export function formatShortSlot(instant: Date, timeZone: string): string {
 export function formatLocalDate(date: LocalDate): string {
   return `${weekdayName(isoWeekday(date))} ${dayAndMonth(date)}`;
 }
+
+/**
+ * Acorta `text` a `max` caracteres para un título de botón o fila de lista: corta en el
+ * límite de una palabra y agrega "…". Una palabra sola más larga que el límite se corta en seco.
+ */
+export function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const room = text.slice(0, max - 1);
+  const lastSpace = room.lastIndexOf(' ');
+  const cut = lastSpace > 0 ? room.slice(0, lastSpace) : room;
+  return `${cut.trimEnd()}…`;
+}
