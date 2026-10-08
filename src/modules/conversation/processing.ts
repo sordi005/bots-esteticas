@@ -36,7 +36,7 @@ export interface ConversationTurn {
 
 /**
  * Arma la respuesta a una vuelta: un solo mensaje (5.1, principio 4), o null para no
- * contestar. Hasta H7 es el eco de desarrollo; después, el agente.
+ * contestar. Desde H7 lo arma el agente (`agent/agent-responder.ts`).
  */
 export type Responder = (
   turn: ConversationTurn,

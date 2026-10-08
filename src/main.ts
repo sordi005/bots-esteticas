@@ -1,8 +1,10 @@
-import { echoResponder } from './modules/conversation/echo-responder.js';
+import { createAgentResponder } from './modules/conversation/agent/agent-responder.js';
+import { createAnthropicLlmClient } from './modules/conversation/agent/anthropic-client.js';
 import { recordWebhookEvents } from './modules/conversation/inbox.js';
 import { createWhatsAppClient } from './modules/whatsapp/client.js';
 import { withRecipientOverride } from './modules/whatsapp/recipient-override.js';
 import type { WhatsAppWebhookOptions } from './modules/whatsapp/webhook-routes.js';
+import { chooseConversationMode } from './conversation-mode.js';
 import { buildServer } from './server.js';
 import { DEFAULT_GRAPH_API_VERSION, loadConfig } from './shared/config.js';
 import { createDatabase } from './shared/db.js';
@@ -39,26 +41,47 @@ if (!whatsappWebhook) {
   logger.warn('WhatsApp no está configurado: el webhook no se registra');
 }
 
-// Worker de tareas programadas, en el mismo proceso (sección 6.7). Hasta que exista el
-// agente (H7), las conversaciones se contestan solo en desarrollo, con el eco.
+// Worker de tareas programadas, en el mismo proceso (sección 6.7). Las conversaciones las contesta
+// el agente (8.5), solo en desarrollo y con las claves puestas: en producción, hasta H8 no.
 let conversations: WorkerDependencies['conversations'];
-if (config.nodeEnv === 'production') {
-  logger.warn('Las conversaciones no se procesan hasta que exista el agente (H7)');
-} else if (!config.credentialsKey) {
-  logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY el worker no puede contestar conversaciones');
-} else {
-  const client = createWhatsAppClient({
-    graphApiVersion: config.whatsapp?.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION,
-  });
-  conversations = {
-    client: withRecipientOverride(client, config.whatsappTestRecipient ?? undefined),
-    credentialsKey: config.credentialsKey,
-    respond: echoResponder,
-  };
-  logger.info(
-    { testRecipient: config.whatsappTestRecipient !== null },
-    'El worker contesta las conversaciones con el eco de desarrollo',
-  );
+const conversationMode = chooseConversationMode(config);
+switch (conversationMode.kind) {
+  case 'disabled':
+    switch (conversationMode.reason) {
+      case 'production':
+        logger.warn('Las conversaciones no se procesan hasta H8: falta la derivación a una persona');
+        break;
+      case 'missing_credentials_key':
+        logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY el worker no puede contestar conversaciones');
+        break;
+      case 'missing_anthropic_key':
+        logger.warn('Sin ANTHROPIC_API_KEY el worker no contesta conversaciones');
+        break;
+    }
+    break;
+  case 'agent': {
+    const client = createWhatsAppClient({
+      graphApiVersion: config.whatsapp?.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION,
+    });
+    conversations = {
+      client: withRecipientOverride(client, config.whatsappTestRecipient ?? undefined),
+      credentialsKey: conversationMode.credentialsKey,
+      respond: createAgentResponder({
+        db: database.db,
+        llm: createAnthropicLlmClient({
+          apiKey: conversationMode.anthropicApiKey,
+          model: config.anthropicModel,
+        }),
+        logger,
+        now: () => new Date(),
+      }),
+    };
+    logger.info(
+      { model: config.anthropicModel, testRecipient: config.whatsappTestRecipient !== null },
+      'El worker contesta las conversaciones con el agente',
+    );
+    break;
+  }
 }
 const worker = buildWorker({
   db: database.db,

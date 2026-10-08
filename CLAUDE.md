@@ -47,7 +47,7 @@ pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté
 pnpm db:migrate           # aplica las migraciones pendientes
 pnpm db:seed              # carga o restaura "Estética Ejemplo"
 pnpm dev                  # servidor + worker con recarga en http://localhost:$PORT
-                          # en desarrollo, el worker contesta con un eco agrupado (hasta H7)
+                          # en desarrollo, el worker contesta con el agente si hay ANTHROPIC_API_KEY en .env
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
