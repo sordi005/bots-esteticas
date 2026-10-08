@@ -30,6 +30,7 @@
     "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "drizzle-orm": "0.45.3",
     "fastify": "5.12.5",
     "pg": "8.23.0",
