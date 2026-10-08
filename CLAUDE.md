@@ -52,6 +52,7 @@ pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
 pnpm test:contracts       # parsers contra ejemplos reales de Meta (sin red ni base)
+pnpm test:evals           # evaluaciones del agente contra la API real (cuesta plata; necesita ANTHROPIC_API_KEY y db:up)
 pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
 pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
