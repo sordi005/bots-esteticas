@@ -50,6 +50,13 @@
       "when": 1791311151627,
       "tag": "0006_mensajes_anteriores_procesados",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791478726808,
+      "tag": "0007_respuestas_del_agente",
+      "breakpoints": true
     }
   ]
 }

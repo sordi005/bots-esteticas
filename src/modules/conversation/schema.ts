@@ -3,6 +3,7 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   jsonb,
   numeric,
   pgEnum,
@@ -14,6 +15,7 @@ import {
 import { createdAt, instant, updatedAt } from '../../shared/db-columns.js';
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
+import { agentOutcomes } from './agent/outcome.js';
 
 export const assistantStatus = pgEnum('assistant_status', ['active', 'paused']);
 
@@ -37,6 +39,9 @@ export const handoffReason = pgEnum('handoff_reason', [
 ]);
 
 export const handoffStatus = pgEnum('handoff_status', ['open', 'resolved']);
+
+/** Cómo terminó una respuesta del agente. La lista y su significado están en `agent/outcome.ts`. */
+export const agentOutcome = pgEnum('agent_outcome', agentOutcomes);
 
 /** Una conversación por clienta y negocio. */
 export const conversations = pgTable(
@@ -139,5 +144,46 @@ export const handoffs = pgTable(
       'handoffs_resolved_at_matches_status',
       sql`(${t.status} = 'resolved') = (${t.resolvedAt} is not null)`,
     ),
+  ],
+);
+
+/**
+ * Una fila por respuesta del agente (7.2, 8.5): qué modelo, cuántos tokens, qué herramientas y
+ * cuánto tardó. Sirve para costos, latencia y detectar abusos. Nunca guarda contenido: ni los
+ * mensajes ni los argumentos ni los resultados de las herramientas (10.1). Es de solo inserción.
+ */
+export const agentRuns = pgTable(
+  'agent_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    conversationId: uuid('conversation_id').notNull(),
+    /** Modelo de la última llamada. Null si no se llamó al modelo (límite por hora). */
+    model: text('model'),
+    llmCalls: integer('llm_calls').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
+    cacheWriteTokens: integer('cache_write_tokens').notNull().default(0),
+    /** Solo los nombres, en el orden en que se ejecutaron. */
+    toolCalls: text('tool_calls').array().notNull().default([]),
+    latencyMs: integer('latency_ms').notNull().default(0),
+    outcome: agentOutcome('outcome').notNull(),
+    /** Cuándo se hizo la respuesta (tabla de solo inserción). */
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'agent_runs_conversation_fk',
+      columns: [t.tenantId, t.conversationId],
+      foreignColumns: [conversations.tenantId, conversations.id],
+    }),
+    index('agent_runs_conversation_idx').on(t.tenantId, t.conversationId, t.createdAt),
+    check(
+      'agent_runs_usage_non_negative',
+      sql`${t.inputTokens} >= 0 and ${t.outputTokens} >= 0 and ${t.cacheReadTokens} >= 0 and ${t.cacheWriteTokens} >= 0`,
+    ),
+    check('agent_runs_calls_and_latency_non_negative', sql`${t.llmCalls} >= 0 and ${t.latencyMs} >= 0`),
+    check('agent_runs_model_matches_calls', sql`(${t.llmCalls} = 0) = (${t.model} is null)`),
   ],
 );

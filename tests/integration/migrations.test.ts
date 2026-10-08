@@ -6,6 +6,7 @@ import { runMigrations } from '../../src/shared/migrations.js';
 import { testDatabaseUrl, withDatabaseName } from './support/database.js';
 
 const MVP_TABLES = [
+  'agent_runs',
   'appointment_events',
   'appointments',
   'audit_log',
