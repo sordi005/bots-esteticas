@@ -40,7 +40,7 @@ export type SlotCheck = 'ok' | 'slot_unavailable' | 'slot_taken';
  * `slot_unavailable`: el horario no es un turno válido (fuera de horario, fuera de la
  * grilla, sin la anticipación). `slot_taken`: sería válido, pero ya está ocupado.
  */
-function checkSlot(
+export function checkSlot(
   context: AvailabilityContext,
   professional: ProfessionalSchedule,
   start: Date,
