@@ -11,6 +11,7 @@ const PRODUCTION = {
   CREDENTIALS_ENCRYPTION_KEY: KEY,
   WHATSAPP_APP_SECRET: 'secreto-de-la-app',
   WHATSAPP_VERIFY_TOKEN: 'token-de-verificacion',
+  ANTHROPIC_API_KEY: 'sk-ant-clave-de-prueba',
 };
 
 function captureError(action: () => unknown): Error {
@@ -51,7 +52,7 @@ describe('loadConfig', () => {
       credentialsKey: Buffer.from(KEY, 'base64'),
       whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v26.0' },
       whatsappTestRecipient: null,
-      anthropicApiKey: null,
+      anthropicApiKey: 'sk-ant-clave-de-prueba',
       anthropicModel: 'claude-haiku-5-5',
     });
   });
@@ -78,7 +79,7 @@ describe('loadConfig', () => {
     expect(error.message).toContain('WHATSAPP_TEST_RECIPIENT');
   });
 
-  it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY'])(
+  it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY', 'ANTHROPIC_API_KEY'])(
     'en producción %s es obligatoria',
     (name) => {
       const error = captureError(() => loadConfig({ ...PRODUCTION, [name]: undefined }));
@@ -183,11 +184,23 @@ describe('loadConfig', () => {
       expect(config.anthropicModel).toBe('claude-haiku-5-5');
     });
 
-    it('no es obligatoria en producción: ahí no se procesan conversaciones hasta H8', () => {
+    it('en producción es obligatoria: desde H8 se procesan conversaciones y sin ella el servidor no arranca (6.7)', () => {
+      const error = captureError(() => loadConfig({ ...PRODUCTION, ANTHROPIC_API_KEY: '' }));
+
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error.message).toContain('ANTHROPIC_API_KEY');
+      expect(error.message).not.toContain('sk-ant');
+    });
+
+    it('en producción con la clave puesta, arranca', () => {
       const config = loadConfig(PRODUCTION);
 
       expect(config.nodeEnv).toBe('production');
-      expect(config.anthropicApiKey).toBeNull();
+      expect(config.anthropicApiKey).toBe('sk-ant-clave-de-prueba');
+    });
+
+    it('en desarrollo sigue siendo opcional', () => {
+      expect(loadConfig({ DATABASE_URL: databaseUrl }).anthropicApiKey).toBeNull();
     });
 
     it('un modelo en blanco se rechaza sin mostrar la clave en el mensaje', () => {
