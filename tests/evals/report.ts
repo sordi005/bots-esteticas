@@ -83,6 +83,19 @@ function table(reports: CaseReport[]): string[] {
   );
 }
 
+/**
+ * Lo que contestó el agente en los casos que fallaron: sin eso no se puede saber si falló el
+ * modelo, el prompt o la expectativa. Son datos de prueba, no conversaciones de clientas.
+ */
+function failedReplies(reports: CaseReport[]): string[] {
+  const lines = reports.flatMap(({ nombre, resultado, motivos }) => {
+    if (!resultado || motivos.length === 0) return [];
+    const options = resultado.opciones.length > 0 ? ` [${resultado.opciones.map((o) => o.titulo).join(' | ')}]` : '';
+    return [`${nombre}: «${resultado.texto}»${options}`];
+  });
+  return lines.length > 0 ? ['', 'Respuestas de los casos que fallaron:', ...lines] : [];
+}
+
 export function formatReport(reports: CaseReport[], model: string): string {
   const total = { entrada: 0, salida: 0, cacheLectura: 0, cacheEscritura: 0 };
   for (const { resultado } of reports) {
@@ -98,6 +111,7 @@ export function formatReport(reports: CaseReport[], model: string): string {
     `Evaluaciones del agente (modelo: ${model})`,
     '',
     ...table(reports),
+    ...failedReplies(reports),
     '',
     `Aciertos: ${String(hits)}/${String(reports.length)}`,
     `Tokens: ${integer.format(total.entrada)} de entrada, ${integer.format(total.salida)} de salida, ` +

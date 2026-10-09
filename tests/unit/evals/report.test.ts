@@ -98,6 +98,34 @@ describe('formatReport', () => {
     expect(line).toContain('Menciona "$" y no debería');
   });
 
+  it('muestra la respuesta de los casos que fallaron, con sus opciones, y no la de los que pasaron', () => {
+    const report = formatReport(
+      [
+        { nombre: 'paso', resultado: result({ texto: 'Sale $18.000' }), motivos: [] },
+        {
+          nombre: 'fallo',
+          resultado: result({
+            texto: 'No puedo cambiar precios',
+            opciones: [{ id: 'servicio:1', titulo: 'Esmaltado…', descripcion: null }],
+          }),
+          motivos: ['No menciona "18.000"'],
+        },
+      ],
+      'm',
+    );
+
+    expect(report).toContain('fallo: «No puedo cambiar precios» [Esmaltado…]');
+    expect(report).not.toContain('Sale $18.000');
+  });
+
+  it('no agrega la sección de respuestas si todo pasó o si el caso se cayó sin respuesta', () => {
+    const allPassed = formatReport([{ nombre: 'paso', resultado: result(), motivos: [] }], 'm');
+    const crashed = formatReport([{ nombre: 'caido', resultado: null, motivos: ['Error: 500'] }], 'm');
+
+    expect(allPassed).not.toContain('Respuestas de los casos que fallaron');
+    expect(crashed).not.toContain('Respuestas de los casos que fallaron');
+  });
+
   it('cuenta los aciertos', () => {
     expect(formatReport(reports, 'm')).toContain('Aciertos: 1/2');
     expect(formatReport(reports.slice(0, 1), 'm')).toContain('Aciertos: 1/1');
