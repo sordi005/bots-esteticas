@@ -60,5 +60,6 @@ export async function deriveForPolicy(
         'Explicale la política con amabilidad y decile cuándo le responde una persona; no discutas ni prometas excepciones.',
     },
     options: [],
+    handedOff: true,
   };
 }

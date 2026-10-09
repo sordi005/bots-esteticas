@@ -66,12 +66,23 @@ describe('derivar_a_persona', () => {
     const result = await derive(f, { motivo: 'queja', resumen: 'Se quejó del turno de ayer' });
 
     expect(result.content).toMatchObject({ derivada: true, cuando: 'en este horario' });
+    expect(result.handedOff).toBe(true);
     expect(result.options).toEqual([]);
     const [handoff] = await handoffsOf(f);
     expect(handoff).toMatchObject({ reason: 'complaint', summary: 'Se quejó del turno de ayer' });
     const [conversation] = await db.select().from(conversations).where(eq(conversations.id, f.conversationId));
     expect(conversation).toMatchObject({ assistantStatus: 'paused' });
     expect(conversation?.pausedUntil).toEqual(new Date(NOW.getTime() + 12 * 60 * 60 * 1_000));
+  });
+
+  it('si la conversación ya tenía una derivación abierta, también cuenta como derivada en esta vuelta', async () => {
+    const f = await setup();
+
+    await derive(f, { motivo: 'queja', resumen: 'Se quejó del turno de ayer' });
+    const again = await derive(f, { motivo: 'pedido_de_la_clienta', resumen: 'Pide hablar con alguien' });
+
+    expect(await handoffsOf(f)).toHaveLength(1);
+    expect(again.handedOff).toBe(true);
   });
 
   it('fuera de horario, el modelo recibe el próximo inicio escrito por el código', async () => {
@@ -124,6 +135,7 @@ describe('derivar_a_persona', () => {
     const result = await derive(f, { motivo: 'queja', resumen });
 
     expect(result.isError).toBe(true);
+    expect(result.handedOff).toBeFalsy();
     expect(result.content).toMatchObject({ error: 'Entrada inválida' });
     expect(JSON.stringify(result.content)).toMatch(/resumen.*qué necesita la clienta/);
     expect(await handoffsOf(f)).toEqual([]);

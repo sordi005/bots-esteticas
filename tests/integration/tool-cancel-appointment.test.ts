@@ -229,6 +229,7 @@ describe('cancelar_turno: fuera de plazo no toca el turno y deriva sola (4.6)', 
 
     expect(result.isError).toBeFalsy();
     expect(result.options).toEqual([]);
+    expect(result.handedOff).toBe(true);
     expect(result.content).toMatchObject({
       cancelado: false,
       derivada: true,
@@ -267,6 +268,7 @@ describe('cancelar_turno: fuera de plazo no toca el turno y deriva sola (4.6)', 
     const result = await cancel(f, { turno_id: id, confirmada: true }, at('2026-10-05', '10:00'));
 
     expect(result.content).toMatchObject({ cancelado: true });
+    expect(result.handedOff).toBeFalsy();
     expect(await handoffsOf(f)).toEqual([]);
   });
 
@@ -301,9 +303,11 @@ describe('cancelar_turno: fuera de plazo no toca el turno y deriva sola (4.6)', 
     const id = await book(f);
 
     await cancel(f, { turno_id: id, confirmada: false }, LATE);
-    await cancel(f, { turno_id: id, confirmada: true }, LATE);
+    const again = await cancel(f, { turno_id: id, confirmada: true }, LATE);
 
     expect(await handoffsOf(f)).toHaveLength(1);
+    // La derivación sigue abierta: en esta vuelta también hay una persona avisada.
+    expect(again.handedOff).toBe(true);
   });
 
   it('fuera del horario de atención, dice cuándo responde una persona', async () => {

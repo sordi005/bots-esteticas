@@ -244,6 +244,7 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
     const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '11:00'), []);
 
     expect(result.content).toMatchObject({ reprogramado: false, derivada: true });
+    expect(result.handedOff).toBe(true);
     expect(await handoffsOf(f)).toHaveLength(1);
   });
 
@@ -335,6 +336,8 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
 
     expect(first.content).toMatchObject({ reprogramado: true });
     expect(second.content).toMatchObject({ reprogramado: true });
+    expect([first.handedOff, second.handedOff]).toEqual([undefined, undefined]);
+    expect(third.handedOff).toBe(true);
     expect(third.content).toMatchObject({ derivada: true, motivo: 'ya usaste las 2 reprogramaciones que conservan la seña' });
   });
 

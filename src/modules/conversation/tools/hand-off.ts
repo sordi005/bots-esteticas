@@ -79,6 +79,7 @@ export const handOffTool: AgentTool<z.infer<typeof input>> = {
         mensaje: `La conversación quedó derivada a una persona del equipo, que le va a responder por este chat ${when}.`,
       },
       options: [],
+      handedOff: true,
     };
   },
 };
