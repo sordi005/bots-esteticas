@@ -329,6 +329,98 @@ describe('createAgentResponder: conversación nueva y contexto de la vuelta (5.1
   });
 });
 
+describe('createAgentResponder: qué opciones eligió la clienta, para las herramientas que cambian turnos (6.4)', () => {
+  const tuesday = at('2026-10-06', '09:00');
+  const wednesday = at('2026-10-07', '09:00');
+
+  /** Corre una vuelta con una herramienta espía y devuelve lo que ella vio como elegido. */
+  async function chosenSeenByTools(f: Fixture, pending: ReceivedMessage[]): Promise<ReadonlySet<string>> {
+    const seen: ToolContext[] = [];
+    const spy: AgentTool<unknown> = {
+      name: 'buscar_servicios',
+      description: 'Espía.',
+      input: z.object({}),
+      run: (_input, ctx) => {
+        seen.push(ctx);
+        return Promise.resolve({ content: { ok: true }, options: [] });
+      },
+    };
+    const { result } = reply(f, pending, [callTools([{ name: 'buscar_servicios' }]), finalAnswer('Listo')], { tools: [spy] });
+    await result;
+    return seen[0]?.chosenOptionIds ?? new Set(['la herramienta no corrió']);
+  }
+
+  const choiceMessage = (f: Fixture, id: string, when: Date, processed: boolean) =>
+    addInbound(f, { type: 'interactive', content: interactiveReply(id, 'un botón'), at: when, processed });
+
+  it('la elección de esta vuelta cuenta', async () => {
+    const f = await setup();
+    const slot = choiceIds.slot(f.semi, f.mica, tuesday);
+    const pending = [await choiceMessage(f, slot, minutesAgo(1), false)];
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set([slot]));
+  });
+
+  it('la de un mensaje anterior de las últimas 24 horas también cuenta (pidió el nombre después de elegir)', async () => {
+    const f = await setup();
+    const slot = choiceIds.slot(f.semi, f.mica, tuesday);
+    await choiceMessage(f, slot, hoursAgo(23), true);
+    const pending = await pendingTexts(f, 'Caro Pérez');
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set([slot]));
+  });
+
+  it('suma las de la vuelta y las del historial, y cada una es un horario distinto', async () => {
+    const f = await setup();
+    const before = choiceIds.slot(f.semi, f.mica, tuesday);
+    const now = choiceIds.slot(f.semi, f.mica, wednesday);
+    await choiceMessage(f, before, hoursAgo(2), true);
+    const pending = [await choiceMessage(f, now, minutesAgo(1), false)];
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set([before, now]));
+  });
+
+  it('una elección de hace más de 24 horas no cuenta', async () => {
+    const f = await setup();
+    await choiceMessage(f, choiceIds.slot(f.semi, f.mica, tuesday), hoursAgo(25), true);
+    const pending = await pendingTexts(f, 'Hola');
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set());
+  });
+
+  it('cuenta aunque el historial que ve el modelo (20 mensajes) ya no la incluya', async () => {
+    const f = await setup();
+    const slot = choiceIds.slot(f.semi, f.mica, tuesday);
+    await choiceMessage(f, slot, hoursAgo(10), true);
+    for (let index = 0; index < 22; index += 1) {
+      await addInbound(f, { text: `mensaje ${String(index)}`, at: minutesAgo(590 - index) });
+    }
+    const pending = await pendingTexts(f, 'Hola');
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set([slot]));
+  });
+
+  it('no cuentan los mensajes de texto, ni lo que escribe la clienta aunque parezca un id', async () => {
+    const f = await setup();
+    const slot = choiceIds.slot(f.semi, f.mica, tuesday);
+    await addInbound(f, { text: slot, at: hoursAgo(1) });
+    const pending = await pendingTexts(f, `reservame ${slot}`);
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set());
+  });
+
+  it('no cuentan las elecciones de otra conversación ni las que todavía no se procesaron y no son de esta vuelta', async () => {
+    const f = await setup();
+    const other = await setup();
+    await choiceMessage(other, choiceIds.slot(other.semi, other.mica, tuesday), hoursAgo(1), true);
+    // Llegó mientras se armaba la vuelta: es de la próxima.
+    await choiceMessage(f, choiceIds.slot(f.semi, f.mica, wednesday), new Date(NOW.getTime() - 500), false);
+    const pending = await pendingTexts(f, 'Hola');
+
+    expect(await chosenSeenByTools(f, pending)).toEqual(new Set());
+  });
+});
+
 describe('createAgentResponder: las elecciones con botones se resuelven antes de llegar al modelo (5.3)', () => {
   it('un horario que sigue libre: el modelo no ve el título del botón, ve la elección ya resuelta', async () => {
     const f = await setup();

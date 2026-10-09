@@ -21,6 +21,7 @@ const toolContext: ToolContext = {
   conversationId: '00000000-0000-4000-8000-000000000003',
   now: new Date('2026-10-04T12:00:00.000Z'),
   timeZone: 'America/Argentina/Mendoza',
+  chosenOptionIds: new Set<string>(),
   signal: new AbortController().signal,
 };
 

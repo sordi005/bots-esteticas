@@ -125,13 +125,17 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     // recibe la elección ya resuelta y nunca interpreta el título del botón (5.3).
     const choices: ResolvedChoice[] = [];
     const pendingMessages: LlmMessage[] = [];
+    const chosenOptionIds = new Set<string>();
     for (const message of turn.messages) {
       const described = describeInbound(message.type, message.content);
       pendingMessages.push({ role: 'user', text: described.text });
       if (described.replyId) {
+        chosenOptionIds.add(described.replyId);
         choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
       }
     }
+    // Y lo que eligió antes, en las últimas 24 horas: crear_reserva y reprogramar_turno solo actúan sobre eso.
+    for (const id of await loadEarlierChoiceIds(db, turn, at)) chosenOptionIds.add(id);
 
     const { message, run } = await runAgent(
       { llm, tools, logger, ...(deps.monotonicNow ? { monotonicNow: deps.monotonicNow } : {}) },
@@ -147,7 +151,16 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           choices,
         }),
         history: [...history, ...pendingMessages],
-        toolContext: { db, tenantId, customerId, conversationId, now: at, timeZone: tenant.timeZone, signal },
+        toolContext: {
+          db,
+          tenantId,
+          customerId,
+          conversationId,
+          now: at,
+          timeZone: tenant.timeZone,
+          chosenOptionIds,
+          signal,
+        },
       },
     );
 
@@ -225,6 +238,31 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
   // La API exige que la conversación empiece con la clienta.
   while (history[0]?.role === 'assistant') history.shift();
   return history;
+}
+
+/**
+ * Los ids de las opciones que la clienta eligió con un botón o una lista en las últimas 24 horas,
+ * sin contar esta vuelta. Mismo criterio que el historial (entrantes ya procesados, de esta
+ * conversación) pero sin tope de mensajes: la ventana es la que manda, no cuántos ve el modelo.
+ */
+async function loadEarlierChoiceIds(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<string[]> {
+  const rows = await db
+    .select({ type: messages.type, content: messages.content })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, turn.tenantId),
+        eq(messages.conversationId, turn.conversationId),
+        eq(messages.direction, 'inbound'),
+        isNotNull(messages.processedAt),
+        gt(messages.occurredAt, new Date(at.getTime() - HISTORY_WINDOW_MS)),
+        notInArray(
+          messages.id,
+          turn.messages.map((message: ReceivedMessage) => message.id),
+        ),
+      ),
+    );
+  return rows.flatMap((row) => describeInbound(row.type, row.content).replyId ?? []);
 }
 
 /**

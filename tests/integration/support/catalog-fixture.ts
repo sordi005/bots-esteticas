@@ -154,6 +154,8 @@ export function toolContext(
     conversationId: randomUUID(),
     now: at('2026-10-04', '09:00'),
     timeZone: MENDOZA,
+    // Por defecto la clienta no eligió nada con botones: los tests de reservar y reprogramar pasan lo que eligió.
+    chosenOptionIds: new Set<string>(),
     signal: new AbortController().signal,
     ...overrides,
   };

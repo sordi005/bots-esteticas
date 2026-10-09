@@ -19,6 +19,12 @@ export interface ToolContext {
   now: Date;
   /** Zona horaria del negocio: se usa solo para escribir fechas y horas. */
   timeZone: string;
+  /**
+   * Los ids de las opciones que la clienta eligió con un botón o una lista: los de los mensajes de
+   * esta vuelta y los de sus mensajes de las últimas 24 horas. Lo arma el servidor; `crear_reserva`
+   * y `reprogramar_turno` solo actúan sobre un horario que está acá (6.4).
+   */
+  chosenOptionIds: ReadonlySet<string>;
   /** Se cancela si el ciclo del agente se corta (por ejemplo, por tiempo). */
   signal: AbortSignal;
 }
