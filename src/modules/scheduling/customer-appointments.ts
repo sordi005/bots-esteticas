@@ -129,3 +129,40 @@ export async function listUpcomingCustomerAppointments(
     )
     .slice(0, limit);
 }
+
+/**
+ * El turno de esta clienta que ocupa el horario con ese mismo servicio, profesional e inicio, o
+ * null. Sirve para que reservar dos veces lo mismo (un reintento) devuelva el turno que ya está
+ * en vez de decir que el horario se ocupó.
+ */
+export async function findCustomerAppointmentAt(
+  db: Queryable,
+  input: {
+    tenantId: string;
+    customerId: string;
+    serviceId: string;
+    professionalId: string;
+    start: Date;
+    now: Date;
+  },
+): Promise<CustomerAppointment | null> {
+  const candidates = await selectCustomerAppointments(
+    db,
+    and(
+      eq(appointments.tenantId, input.tenantId),
+      eq(appointments.customerId, input.customerId),
+      eq(appointments.serviceId, input.serviceId),
+      eq(appointments.professionalId, input.professionalId),
+      inArray(appointments.status, OCCUPYING_STATUSES),
+      eq(sql`lower(${appointments.timeRange})`, input.start),
+    ),
+  );
+  return (
+    candidates.find((appointment) =>
+      holdsSchedule(
+        { status: appointment.status, depositExpiresAt: appointment.deposit?.expiresAt ?? null },
+        input.now,
+      ),
+    ) ?? null
+  );
+}

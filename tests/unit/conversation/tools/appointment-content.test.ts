@@ -4,6 +4,7 @@ import {
   describeAppointmentStatus,
   describeChangeRefusal,
   describeDepositMethod,
+  describeDepositStatus,
   describePolicy,
   formatDeadline,
 } from '../../../../src/modules/conversation/tools/appointment-content.js';
@@ -25,6 +26,16 @@ describe('describeAppointmentStatus: el estado del turno en español para la cli
 
     expect(new Set(texts).size).toBe(APPOINTMENT_STATUSES.length);
     for (const text of texts) expect(text).not.toMatch(/[A-Z_]{4,}/);
+  });
+});
+
+describe('describeDepositStatus: el estado de la seña en español', () => {
+  it('cada estado tiene su texto', () => {
+    expect(describeDepositStatus('pending')).toBe('pendiente de pago');
+    expect(describeDepositStatus('in_review')).toBe('en verificación');
+    expect(describeDepositStatus('approved')).toBe('pagada');
+    expect(describeDepositStatus('rejected')).toBe('rechazada');
+    expect(describeDepositStatus('expired')).toBe('vencida');
   });
 });
 

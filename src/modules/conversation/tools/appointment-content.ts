@@ -1,6 +1,7 @@
 import { instantToLocal } from '../../../shared/time-zone.js';
 import type { AppointmentStatus } from '../../scheduling/appointment-state-machine.js';
 import type { ChangeRefusal } from '../../scheduling/change-policy.js';
+import type { depositStatus } from '../../payments/schema.js';
 import type { depositPaymentOptions } from '../../tenants/schema.js';
 import { formatClockTime, formatLocalDate } from '../format.js';
 
@@ -23,6 +24,18 @@ const STATUS_TEXT: Record<AppointmentStatus, string> = {
 
 export function describeAppointmentStatus(status: AppointmentStatus): string {
   return STATUS_TEXT[status];
+}
+
+const DEPOSIT_STATUS_TEXT: Record<(typeof depositStatus.enumValues)[number], string> = {
+  pending: 'pendiente de pago',
+  in_review: 'en verificación',
+  approved: 'pagada',
+  rejected: 'rechazada',
+  expired: 'vencida',
+};
+
+export function describeDepositStatus(status: (typeof depositStatus.enumValues)[number]): string {
+  return DEPOSIT_STATUS_TEXT[status];
 }
 
 /** El medio de la seña lo elige el negocio, uno solo (4.5). */

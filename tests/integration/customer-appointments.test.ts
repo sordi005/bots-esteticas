@@ -3,6 +3,7 @@ import { customers } from '../../src/modules/customers/schema.js';
 import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
 import {
   findCustomerAppointment,
+  findCustomerAppointmentAt,
   listUpcomingCustomerAppointments,
 } from '../../src/modules/scheduling/customer-appointments.js';
 import { createDatabase } from '../../src/shared/db.js';
@@ -186,5 +187,69 @@ describe('listUpcomingCustomerAppointments: los turnos futuros que ocupan horari
     const f = await createCatalogFixture(db);
 
     expect(await list(f)).toEqual([]);
+  });
+});
+
+describe('findCustomerAppointmentAt: el turno de la clienta con ese servicio, profesional e inicio', () => {
+  const lookup = (f: CatalogFixture, date: string, time: string, overrides: { now?: Date; customerId?: string } = {}) =>
+    findCustomerAppointmentAt(db, {
+      tenantId: f.tenantId,
+      customerId: overrides.customerId ?? f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at(date, time),
+      now: overrides.now ?? at('2026-10-04', '09:30'),
+    });
+
+  it('lo encuentra si ocupa el horario', async () => {
+    const f = await createCatalogFixture(db);
+    const id = await book(f, '2026-10-05', '09:00');
+
+    expect(await lookup(f, '2026-10-05', '09:00')).toMatchObject({ id, status: 'PENDING_DEPOSIT' });
+  });
+
+  it('no encuentra otro inicio, otra profesional ni otro servicio', async () => {
+    const f = await createCatalogFixture(db);
+    await book(f, '2026-10-05', '09:00');
+
+    expect(await lookup(f, '2026-10-05', '09:15')).toBeNull();
+    expect(
+      await findCustomerAppointmentAt(db, {
+        tenantId: f.tenantId,
+        customerId: f.customerId,
+        serviceId: f.semi,
+        professionalId: f.sofi,
+        start: at('2026-10-05', '09:00'),
+        now: NOW,
+      }),
+    ).toBeNull();
+    expect(
+      await findCustomerAppointmentAt(db, {
+        tenantId: f.tenantId,
+        customerId: f.customerId,
+        serviceId: f.sculpted,
+        professionalId: f.mica,
+        start: at('2026-10-05', '09:00'),
+        now: NOW,
+      }),
+    ).toBeNull();
+  });
+
+  it('no encuentra uno cancelado ni uno con la seña vencida', async () => {
+    const f = await createCatalogFixture(db);
+    const cancelled = await book(f, '2026-10-05', '09:00');
+    await setStatus(f, cancelled, 'CANCELLED_BY_CUSTOMER', 'assistant');
+    await book(f, '2026-10-05', '15:00');
+
+    expect(await lookup(f, '2026-10-05', '09:00')).toBeNull();
+    // La seña de las 15:00 vencía a las 10:00 del domingo.
+    expect(await lookup(f, '2026-10-05', '15:00', { now: at('2026-10-04', '10:30') })).toBeNull();
+  });
+
+  it('el turno de otra clienta no cuenta', async () => {
+    const f = await createCatalogFixture(db);
+    await book(f, '2026-10-05', '09:00', await otherCustomer(f));
+
+    expect(await lookup(f, '2026-10-05', '09:00')).toBeNull();
   });
 });
