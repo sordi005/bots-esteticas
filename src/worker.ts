@@ -29,7 +29,7 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
   const handlers: Partial<Record<JobKind, JobHandler>> = {};
 
   if (conversations) {
-    handlers.process_conversation = conversationJobHandler({ db, now, ...conversations });
+    handlers.process_conversation = conversationJobHandler({ db, logger, now, ...conversations });
   }
 
   return createJobRunner({ db, logger, now, handlers, ...dependencies.options });

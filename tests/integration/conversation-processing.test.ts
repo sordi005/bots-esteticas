@@ -4,10 +4,12 @@ import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from '
 import { createAgentResponder } from '../../src/modules/conversation/agent/agent-responder.js';
 import { recordWebhookEvents } from '../../src/modules/conversation/inbox.js';
 import type { ConversationTurn, Responder } from '../../src/modules/conversation/processing.js';
-import { agentRuns, messages } from '../../src/modules/conversation/schema.js';
+import { processConversation } from '../../src/modules/conversation/processing.js';
+import { agentRuns, conversations, messages } from '../../src/modules/conversation/schema.js';
 import { scheduleJob } from '../../src/modules/jobs/queue.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { saveCredential } from '../../src/modules/tenants/credentials.js';
+import { tenants } from '../../src/modules/tenants/schema.js';
 import {
   WhatsAppApiError,
   type SendMessageInput,
@@ -116,6 +118,15 @@ async function unprocessedOf(tenantId: string) {
     );
 }
 
+async function pendingReplyOf(conversationId: string) {
+  return single(
+    await db
+      .select({ pendingReply: conversations.pendingReply, pendingReplyAt: conversations.pendingReplyAt })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId)),
+  );
+}
+
 async function jobOf(tenantId: string) {
   return single(await db.select().from(scheduledJobs).where(eq(scheduledJobs.tenantId, tenantId)));
 }
@@ -192,10 +203,10 @@ describe('agrupado de mensajes (5.2) y una ejecución por conversación (6.5)', 
     });
   });
 
-  it('si el envío falla, los mensajes siguen sin procesar y se reintenta a los 30 segundos', async () => {
+  it('si el envío falla, la respuesta queda guardada y se reintenta a los 30 segundos sin volver a llamar al respondedor', async () => {
     const tenant = await readyTenant();
     const { client, delivered } = fakeWhatsApp(1);
-    const { respond } = recordingResponder();
+    const { turns, respond } = recordingResponder();
     let clock = at(4);
     const run = worker({ client, respond, now: () => clock });
 
@@ -207,13 +218,19 @@ describe('agrupado de mensajes (5.2) y una ejecución por conversación (6.5)', 
       runAt: at(34),
       lastError: expect.stringContaining('not in allowed list') as unknown,
     });
-    expect(await unprocessedOf(tenant.tenantId)).toHaveLength(1);
+    // Los mensajes ya quedaron procesados: lo que falta enviar es la respuesta guardada (6.7).
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toMatchObject({
+      pendingReply: { type: 'text', body: 'hola' },
+      pendingReplyAt: at(4),
+    });
 
     clock = at(34);
     await run.runOnce();
 
+    expect(turns).toHaveLength(1);
     expect(delivered.map(bodyOf)).toEqual(['hola']);
-    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
   });
 
   it('si el respondedor decide no contestar, los mensajes quedan procesados igual', async () => {
@@ -229,6 +246,279 @@ describe('agrupado de mensajes (5.2) y una ejecución por conversación (6.5)', 
     expect(delivered).toEqual([]);
     expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
     expect((await jobOf(tenant.tenantId)).status).toBe('done');
+  });
+});
+
+/** Procesa la conversación directamente, con un log que se puede leer. */
+function directly(input: { client: WhatsAppClient; respond: Responder; now: () => Date }) {
+  const lines: string[] = [];
+  const captured = createLogger(
+    { logLevel: 'debug' },
+    {
+      write(chunk: string) {
+        lines.push(chunk);
+      },
+    },
+  );
+  const deps = { db, credentialsKey, logger: captured, ...input };
+  const process = (tenantId: string, conversationId: string) =>
+    processConversation(deps, { tenantId, conversationId, signal: new AbortController().signal });
+  return { process, lines };
+}
+
+const pauseConversation = (conversationId: string, pausedUntil: Date | null) =>
+  db
+    .update(conversations)
+    .set({ assistantStatus: 'paused', pausedUntil })
+    .where(eq(conversations.id, conversationId));
+
+const savePendingReply = (conversationId: string, body: string, savedAt: Date) =>
+  db
+    .update(conversations)
+    .set({ pendingReply: { type: 'text', body }, pendingReplyAt: savedAt })
+    .where(eq(conversations.id, conversationId));
+
+describe('asistente pausado por una derivación (4.8)', () => {
+  it('con la pausa vigente, los mensajes se marcan como procesados sin llamar al respondedor ni contestar', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+    const run = worker({ client, respond, now: () => at(4) });
+    await pauseConversation(tenant.conversationId, at(3_600));
+
+    await receive(tenant.phoneNumberId, 'hola, ¿están?', at(0));
+    await run.runOnce();
+
+    expect(turns).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+    expect((await jobOf(tenant.tenantId)).status).toBe('done');
+  });
+
+  it('una pausa sin fecha dura hasta que se reanude a mano', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+    const run = worker({ client, respond, now: () => at(4) });
+    await pauseConversation(tenant.conversationId, null);
+
+    await receive(tenant.phoneNumberId, 'hola', at(0));
+    await run.runOnce();
+
+    expect(turns).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+
+  it('el resultado dice que estaba pausada, y la pausa sigue', async () => {
+    const tenant = await readyTenant();
+    const { client } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await pauseConversation(tenant.conversationId, at(3_600));
+    await receive(tenant.phoneNumberId, 'hola', at(0));
+
+    const { process } = directly({ client, respond, now: () => at(4) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('paused');
+    expect(await db.select().from(conversations).where(eq(conversations.id, tenant.conversationId))).toEqual([
+      expect.objectContaining({ assistantStatus: 'paused', pausedUntil: at(3_600) }),
+    ]);
+  });
+
+  it('con la pausa vencida, el asistente vuelve a estar activo y contesta', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+    const run = worker({ client, respond, now: () => at(4) });
+    await pauseConversation(tenant.conversationId, at(3));
+
+    await receive(tenant.phoneNumberId, 'hola', at(0));
+    await run.runOnce();
+
+    expect(turns).toHaveLength(1);
+    expect(delivered.map(bodyOf)).toEqual(['hola']);
+    expect(await db.select().from(conversations).where(eq(conversations.id, tenant.conversationId))).toEqual([
+      expect.objectContaining({ assistantStatus: 'active', pausedUntil: null }),
+    ]);
+  });
+
+  it('la pausa que vence justo ahora ya no pausa', async () => {
+    const tenant = await readyTenant();
+    const { client } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await pauseConversation(tenant.conversationId, at(4));
+    await receive(tenant.phoneNumberId, 'hola', at(0));
+
+    const { process } = directly({ client, respond, now: () => at(4) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('replied');
+  });
+
+  it('si el respondedor deriva durante la vuelta, la respuesta igual sale: es el aviso de la derivación', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const respond: Responder = async (turn) => {
+      await pauseConversation(turn.conversationId, at(3_600));
+      return { type: 'text', body: 'Una persona te va a responder por acá.' };
+    };
+    const run = worker({ client, respond, now: () => at(4) });
+
+    await receive(tenant.phoneNumberId, 'quiero hablar con alguien', at(0));
+    await run.runOnce();
+
+    expect(delivered.map(bodyOf)).toEqual(['Una persona te va a responder por acá.']);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+});
+
+describe('negocio que no está activo (6.7)', () => {
+  it.each(['paused', 'cancelled'] as const)(
+    'con el negocio en estado %s, marca los mensajes como procesados sin contestar y avisa en el log',
+    async (status) => {
+      const tenant = await readyTenant();
+      await db.update(tenants).set({ status }).where(eq(tenants.id, tenant.tenantId));
+      const { client, delivered } = fakeWhatsApp();
+      const { turns, respond } = recordingResponder();
+      await receive(tenant.phoneNumberId, 'un dato personal', at(0));
+      const { process, lines } = directly({ client, respond, now: () => at(4) });
+
+      expect(await process(tenant.tenantId, tenant.conversationId)).toBe('tenant_inactive');
+
+      expect(turns).toEqual([]);
+      expect(delivered).toEqual([]);
+      expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+      const warning = lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.level === 40);
+      expect(warning).toMatchObject({ tenant_id: tenant.tenantId, conversation_id: tenant.conversationId, status });
+      expect(lines.join('')).not.toContain('un dato personal');
+    },
+  );
+});
+
+describe('respuesta guardada sin enviar (6.7)', () => {
+  it('el reintento reenvía lo guardado y no llama al respondedor, aunque llegue otro mensaje en el medio', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp(1);
+    const { turns, respond } = recordingResponder((turn) => ({
+      type: 'text',
+      body: textsOf(turn).includes('gracias') ? 'De nada.' : 'Cancelé tu turno del martes.',
+    }));
+    let clock = at(4);
+    const run = worker({ client, respond, now: () => clock });
+
+    await receive(tenant.phoneNumberId, 'cancelame el turno', at(0));
+    await run.runOnce();
+    expect(delivered).toEqual([]);
+
+    await receive(tenant.phoneNumberId, 'gracias', at(10));
+    clock = at(34);
+    await run.runOnce();
+
+    // Primero sale lo guardado; el mensaje nuevo se atiende en la misma tarea, con una vuelta propia.
+    expect(delivered.map(bodyOf)).toEqual(['Cancelé tu turno del martes.', 'De nada.']);
+    expect(turns.map(textsOf)).toEqual([['cancelame el turno'], ['gracias']]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
+  });
+
+  it('si el envío de lo guardado falla otra vez, el error sube y no se llama al modelo', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp(1);
+    const { turns, respond } = recordingResponder();
+    await savePendingReply(tenant.conversationId, 'Respuesta de antes', at(0));
+    await receive(tenant.phoneNumberId, 'hola de nuevo', at(1));
+    const { process } = directly({ client, respond, now: () => at(10) });
+
+    await expect(process(tenant.tenantId, tenant.conversationId)).rejects.toThrow('not in allowed list');
+
+    expect(turns).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toHaveLength(1);
+    expect((await pendingReplyOf(tenant.conversationId)).pendingReply).toEqual({
+      type: 'text',
+      body: 'Respuesta de antes',
+    });
+  });
+
+  it('una respuesta guardada de hace más de 5 minutos se descarta con un aviso, sin contenido', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await savePendingReply(tenant.conversationId, 'Tu turno quedó para el martes', at(0));
+    const { process, lines } = directly({ client, respond, now: () => at(5 * 60 + 1) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('nothing_new');
+
+    expect(delivered).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
+    const warning = lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.level === 40);
+    expect(warning).toMatchObject({ tenant_id: tenant.tenantId, conversation_id: tenant.conversationId });
+    expect(lines.join('')).not.toContain('martes');
+  });
+
+  it('con exactamente 5 minutos todavía se envía', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await savePendingReply(tenant.conversationId, 'Justo a tiempo', at(0));
+    const { process } = directly({ client, respond, now: () => at(5 * 60) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('replied');
+
+    expect(delivered.map(bodyOf)).toEqual(['Justo a tiempo']);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
+  });
+
+  it('se envía aunque la conversación esté pausada: puede ser el mensaje de la derivación', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+    await pauseConversation(tenant.conversationId, at(43_200));
+    await savePendingReply(tenant.conversationId, 'Una persona te responde mañana a las 9:00.', at(0));
+    await receive(tenant.phoneNumberId, 'ok', at(1));
+    const { process } = directly({ client, respond, now: () => at(30) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('paused');
+
+    expect(delivered.map(bodyOf)).toEqual(['Una persona te responde mañana a las 9:00.']);
+    expect(turns).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+
+  it('una respuesta guardada que no es un mensaje válido se descarta en vez de trabar la conversación', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await db
+      .update(conversations)
+      .set({ pendingReply: { type: 'text' } as never, pendingReplyAt: at(0) })
+      .where(eq(conversations.id, tenant.conversationId));
+    const { process, lines } = directly({ client, respond, now: () => at(10) });
+
+    await process(tenant.tenantId, tenant.conversationId);
+
+    expect(delivered).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
+    expect(lines.map((line) => JSON.parse(line) as Record<string, unknown>).some((line) => line.level === 40)).toBe(true);
+  });
+
+  it('si llegó una respuesta guardada nueva mientras se enviaba la vieja, no se borra la nueva', async () => {
+    const tenant = await readyTenant();
+    const { client } = fakeWhatsApp();
+    const sendingOld: WhatsAppClient = {
+      sendMessage: async (input) => {
+        await savePendingReply(tenant.conversationId, 'Respuesta nueva', at(20));
+        return client.sendMessage(input);
+      },
+    };
+    const { respond } = recordingResponder();
+    await savePendingReply(tenant.conversationId, 'Respuesta vieja', at(0));
+    const { process } = directly({ client: sendingOld, respond, now: () => at(10) });
+
+    await process(tenant.tenantId, tenant.conversationId);
+
+    expect(await pendingReplyOf(tenant.conversationId)).toMatchObject({
+      pendingReply: { type: 'text', body: 'Respuesta nueva' },
+      pendingReplyAt: at(20),
+    });
   });
 });
 
