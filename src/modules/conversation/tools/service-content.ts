@@ -47,6 +47,8 @@ export function describeDuration(
 export function serviceContent(service: CatalogService): Record<string, unknown> {
   return {
     id: service.id,
+    // El id del botón para elegirlo: distinto del `id`, que es el que se pasa a las herramientas.
+    opcionId: choiceIds.service(service.id),
     nombre: service.name,
     categoria: service.category,
     precio: formatPesos(service.priceCents),

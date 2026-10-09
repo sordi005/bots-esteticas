@@ -52,6 +52,8 @@ export const listAppointmentsTool: AgentTool<z.infer<typeof input>> = {
       content: {
         turnos: upcoming.map((appointment) => ({
           ...summarizeAppointment(appointment, summaryContext),
+          // El id para ofrecer el turno como opción (es el mismo que `turnoId`).
+          opcionId: choiceIds.appointment(appointment.id),
           // Para reprogramar: se consulta la disponibilidad con el mismo servicio y la misma profesional.
           servicioId: appointment.serviceId,
           profesionalId: appointment.professionalId,

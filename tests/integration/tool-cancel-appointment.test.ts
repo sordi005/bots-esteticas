@@ -11,6 +11,7 @@ import { appointmentEvents, appointments } from '../../src/modules/scheduling/sc
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 import { single } from './support/fixtures.js';
 
 const database = createDatabase(testDatabaseUrl());
@@ -81,6 +82,9 @@ describe('cancelar_turno: confirmada=false pide la confirmación sin cambiar nad
       turno: { turnoId: `turno:${id}`, servicio: 'Esmaltado semipermanente', profesional: 'Mica', fecha: 'martes 6/10 10:00' },
     });
     expect(result.options).toEqual([{ id: choiceIds.cancel(id), title: 'Sí, cancelar' }]);
+    // El modelo solo lee el contenido: sin el id del botón ahí, ofrece el id del turno y el botón se descarta.
+    expect(result.content).toMatchObject({ opcionId: `cancelar:${id}` });
+    expectOptionsShownToModel(result);
     expect(await statusOf(id)).toBe('PENDING_DEPOSIT');
     expect(await eventsOf(id)).toHaveLength(1);
   });
@@ -92,6 +96,7 @@ describe('cancelar_turno: confirmada=false pide la confirmación sin cambiar nad
     const result = await cancel(f, { turno_id: id, confirmada: false });
 
     expect(result.options).toEqual([{ id: choiceIds.cancel(id), title: 'Sí, cancelar' }]);
+    expectOptionsShownToModel(result);
   });
 });
 

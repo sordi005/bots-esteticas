@@ -237,7 +237,10 @@ export const checkAvailabilityTool: AgentTool<AvailabilityInput> = {
       const last = chosen[chosen.length - 1];
       const options: OfferableOption[] = entries.map((entry) => entry.option);
       if (hasMore && last) {
-        options.push({ id: choiceIds.more(service.id, requested?.id ?? null, last.start), title: SEE_MORE_TITLE });
+        const more = { id: choiceIds.more(service.id, requested?.id ?? null, last.start), title: SEE_MORE_TITLE };
+        options.push(more);
+        // El modelo solo lee el contenido: sin este id no puede ofrecer el botón.
+        content.verMas = { opcionId: more.id, texto: more.title };
       }
       return { content, options } satisfies ToolResult;
     }

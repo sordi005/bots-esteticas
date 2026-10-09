@@ -8,6 +8,7 @@ import { bookAppointment, changeAppointmentStatus } from '../../src/modules/sche
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 import { single } from './support/fixtures.js';
 
 const database = createDatabase(testDatabaseUrl());
@@ -37,6 +38,7 @@ const list = (f: CatalogFixture, now = BOOKED_AT) =>
 
 interface ListedAppointment {
   turnoId: string;
+  opcionId: string;
   servicioId: string;
   profesionalId: string;
   servicio: string;
@@ -61,6 +63,7 @@ describe('listar_turnos_de_la_clienta', () => {
     expect(listed(result)).toEqual([
       {
         turnoId: `turno:${id}`,
+        opcionId: `turno:${id}`,
         servicioId: f.semi,
         profesionalId: f.mica,
         servicio: 'Esmaltado semipermanente',
@@ -71,6 +74,7 @@ describe('listar_turnos_de_la_clienta', () => {
         cancelarOReprogramarSinCostoHasta: 'hasta el lunes 5/10 a las 10:00',
       },
     ]);
+    expectOptionsShownToModel(result);
   });
 
   it('un turno confirmado sin seña no lleva datos de seña', async () => {

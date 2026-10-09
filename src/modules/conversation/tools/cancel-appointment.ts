@@ -121,16 +121,19 @@ export const cancelAppointmentTool: AgentTool<Input> = {
     }
 
     if (!confirmada) {
+      const button = { id: choiceIds.cancel(appointment.id), title: CANCEL_BUTTON_TITLE };
       return {
         content: {
           cancelado: false,
           faltaConfirmar: true,
           turno: summarizeAppointment(appointment, { now, timeZone: ctx.timeZone, settings }),
+          // El modelo solo lee el contenido: sin este id ofrecería el del turno y el botón se descartaría.
+          opcionId: button.id,
           mensaje:
             'Todavía no se canceló nada. Mostrale a la clienta el turno y preguntale si lo cancela; ofrecé el ' +
-            `botón «${CANCEL_BUTTON_TITLE}» (en «opciones», con el id que devuelve esta herramienta).`,
+            `botón «${CANCEL_BUTTON_TITLE}»: poné en «opciones» el opcionId de esta respuesta (no el turnoId).`,
         },
-        options: [{ id: choiceIds.cancel(appointment.id), title: CANCEL_BUTTON_TITLE }],
+        options: [button],
       };
     }
 
