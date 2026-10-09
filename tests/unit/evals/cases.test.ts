@@ -38,6 +38,7 @@ function resultWith(...starts: Date[]): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 1, salida: 1, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 1,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
   };
 }
 
@@ -74,7 +75,7 @@ describe('evalCases', () => {
   it('cada una tiene mensajes de la clienta y al menos una expectativa', () => {
     for (const { nombre, mensajes, espera } of evalCases) {
       expect(mensajes.length, nombre).toBeGreaterThan(0);
-      expect(mensajes.every((mensaje) => mensaje.trim() !== ''), nombre).toBe(true);
+      expect(mensajes.every((mensaje) => typeof mensaje !== 'string' || mensaje.trim() !== ''), nombre).toBe(true);
       expect(Object.keys(espera).length, nombre).toBeGreaterThan(0);
     }
   });

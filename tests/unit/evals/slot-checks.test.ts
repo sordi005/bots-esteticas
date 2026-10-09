@@ -3,7 +3,14 @@ import { choiceIds } from '../../../src/modules/conversation/tools/choice-ids.js
 import type { ResolvedChoice } from '../../../src/modules/conversation/tools/choices.js';
 import { localDateTimeToInstant } from '../../../src/shared/time-zone.js';
 import type { EvalOption, EvalResult } from '../../evals/evaluate.js';
-import { verifyNoSlotsOnDay, verifySlotsOnDayFrom } from '../../evals/slot-checks.js';
+import {
+  verifyCancelButtonOffered,
+  verifyNoSlotsOnDay,
+  verifyOffersFreeSlots,
+  verifySlotNotOffered,
+  verifySlotsOfProfessional,
+  verifySlotsOnDayFrom,
+} from '../../evals/slot-checks.js';
 
 const MENDOZA = 'America/Argentina/Mendoza';
 const at = (date: string, time: string) => localDateTimeToInstant(date, time, MENDOZA);
@@ -11,13 +18,13 @@ const at = (date: string, time: string) => localDateTimeToInstant(date, time, ME
 const SERVICE = '00000000-0000-4000-8000-000000000201';
 const MICA = '00000000-0000-4000-8000-000000000101';
 
-function resolved(start: Date, sigueLibre = true): ResolvedChoice {
+function resolved(start: Date, sigueLibre = true, professional = 'Mica'): ResolvedChoice {
   return {
     tipo: 'horario',
     servicioId: SERVICE,
     servicioNombre: 'Esmaltado semipermanente',
     profesionalId: MICA,
-    profesionalNombre: 'Mica',
+    profesionalNombre: professional,
     inicio: start.toISOString(),
     texto: 'texto',
     duracionMinutos: 60,
@@ -51,6 +58,7 @@ function result(opciones: EvalOption[]): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 1, salida: 1, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 1,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
   };
 }
 
@@ -143,5 +151,110 @@ describe('verifyNoSlotsOnDay', () => {
     const mondayNight = new Date('2026-10-13T02:00:00.000Z');
 
     expect(verifyNoSlotsOnDay(result([slot(mondayNight)]), '2026-10-12', MENDOZA)).toContain('2026-10-12 23:00');
+  });
+});
+
+describe('verifyOffersFreeSlots', () => {
+  it('pasa si ofreció al menos un horario y todos siguen libres', () => {
+    expect(verifyOffersFreeSlots(result([slot(at('2026-10-09', '15:00')), seeMore]), MENDOZA)).toBeNull();
+  });
+
+  it('no mira el día ni la hora: sirven de cualquier día', () => {
+    expect(verifyOffersFreeSlots(result([slot(at('2026-10-20', '09:00'))]), MENDOZA)).toBeNull();
+  });
+
+  it('falla si no ofreció ningún horario', () => {
+    expect(verifyOffersFreeSlots(result([seeMore]), MENDOZA)).toBe('No ofreció ningún horario');
+  });
+
+  it('falla si uno de los horarios ya no está libre', () => {
+    const start = at('2026-10-09', '15:00');
+
+    expect(verifyOffersFreeSlots(result([slot(start, { resuelta: resolved(start, false) })]), MENDOZA)).toBe(
+      'El horario 2026-10-09 15:00 (hora local) no está libre según la base',
+    );
+  });
+});
+
+describe('verifySlotsOfProfessional', () => {
+  const sofi = (start: Date) => slot(start, { resuelta: resolved(start, true, 'Sofi') });
+
+  it('pasa si hay horarios y todos son de esa profesional', () => {
+    expect(verifySlotsOfProfessional(result([sofi(at('2026-10-09', '15:00')), sofi(at('2026-10-09', '16:00'))]), 'Sofi', MENDOZA)).toBeNull();
+  });
+
+  it('falla si alguno es de otra profesional, y dice cuál', () => {
+    const options = [sofi(at('2026-10-09', '15:00')), slot(at('2026-10-09', '16:00'))];
+
+    expect(verifySlotsOfProfessional(result(options), 'Sofi', MENDOZA)).toBe(
+      'Ofreció un horario con Mica (2026-10-09 16:00, hora local) y se pedía Sofi',
+    );
+  });
+
+  it('falla si no ofreció ningún horario', () => {
+    expect(verifySlotsOfProfessional(result([seeMore]), 'Sofi', MENDOZA)).toBe('No ofreció ningún horario');
+  });
+});
+
+describe('verifySlotNotOffered', () => {
+  const taken = { profesional: 'Mica', inicio: '2026-10-09 15:00' };
+
+  it('pasa si no ofreció ese horario con esa profesional', () => {
+    expect(verifySlotNotOffered(result([slot(at('2026-10-09', '16:30'))]), taken, MENDOZA)).toBeNull();
+    expect(verifySlotNotOffered(result([]), taken, MENDOZA)).toBeNull();
+  });
+
+  it('a la misma hora con otra profesional sí se puede ofrecer', () => {
+    const start = at('2026-10-09', '15:00');
+
+    expect(verifySlotNotOffered(result([slot(start, { resuelta: resolved(start, true, 'Sofi') })]), taken, MENDOZA)).toBeNull();
+  });
+
+  it('falla si lo ofreció', () => {
+    expect(verifySlotNotOffered(result([slot(at('2026-10-09', '15:00'))]), taken, MENDOZA)).toBe(
+      'Ofreció el horario 2026-10-09 15:00 con Mica, que ya estaba ocupado',
+    );
+  });
+});
+
+describe('verifyCancelButtonOffered', () => {
+  const appointmentId = '00000000-0000-4000-8000-0000000000aa';
+  const cancelOption = (overrides: Partial<EvalOption> = {}): EvalOption => ({
+    id: choiceIds.cancel(appointmentId),
+    titulo: 'Sí, cancelar',
+    descripcion: null,
+    resuelta: {
+      tipo: 'cancelar',
+      turnoId: appointmentId,
+      servicioId: SERVICE,
+      profesionalId: MICA,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      texto: 'martes 13/10 17:00',
+      estado: 'pendiente de seña',
+      ocupaHorario: true,
+    },
+    ...overrides,
+  });
+
+  it('pasa si ofreció el botón de cancelar de un turno de la clienta que sigue activo', () => {
+    expect(verifyCancelButtonOffered(result([cancelOption()]))).toBeNull();
+  });
+
+  it('falla si no ofreció ningún botón de cancelar', () => {
+    expect(verifyCancelButtonOffered(result([seeMore]))).toBe('No ofreció el botón «Sí, cancelar»');
+  });
+
+  it('falla si el id no es de un turno de la clienta (no se resuelve)', () => {
+    expect(verifyCancelButtonOffered(result([cancelOption({ resuelta: { tipo: 'desconocido' } })]))).toBe(
+      'El botón de cancelar no es de un turno de la clienta',
+    );
+  });
+
+  it('falla si el turno ya no ocupa el horario', () => {
+    const inactive = cancelOption();
+    if (inactive.resuelta?.tipo === 'cancelar') inactive.resuelta = { ...inactive.resuelta, ocupaHorario: false };
+
+    expect(verifyCancelButtonOffered(result([inactive]))).toBe('El botón de cancelar es de un turno que ya no está activo');
   });
 });

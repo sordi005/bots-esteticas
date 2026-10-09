@@ -13,6 +13,7 @@ function result(overrides: Partial<EvalResult> = {}): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 1_000, salida: 200, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 1_234,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
     ...overrides,
   };
 }
@@ -116,6 +117,73 @@ describe('formatReport', () => {
 
     expect(report).toContain('fallo: «No puedo cambiar precios» [Esmaltado…]');
     expect(report).not.toContain('Sale $18.000');
+  });
+
+  it('de los que fallaron muestra también las herramientas que llamó, con un guion si no llamó ninguna', () => {
+    const report = formatReport(
+      [
+        { nombre: 'fallo_con', resultado: result({ herramientas: ['listar_turnos_de_la_clienta', 'cancelar_turno'] }), motivos: ['x'] },
+        { nombre: 'fallo_sin', resultado: result(), motivos: ['y'] },
+      ],
+      'm',
+    );
+
+    expect(report).toContain('  herramientas: listar_turnos_de_la_clienta, cancelar_turno');
+    expect(report).toContain('  herramientas: -');
+  });
+
+  it('de los que fallaron muestra el estado que quedó en la base', () => {
+    const report = formatReport(
+      [
+        {
+          nombre: 'fallo_estado',
+          resultado: result({
+            estado: {
+              turnos: [
+                {
+                  clave: 'martes',
+                  de: 'clienta',
+                  servicio: 'Esmaltado semipermanente',
+                  profesional: 'Mica',
+                  inicio: '2026-10-13 17:00',
+                  estado: 'PENDING_DEPOSIT',
+                },
+                {
+                  clave: null,
+                  de: 'otra',
+                  servicio: 'Perfilado de cejas',
+                  profesional: 'Sofi',
+                  inicio: '2026-10-14 11:00',
+                  estado: 'CONFIRMED',
+                },
+              ],
+              derivaciones: [{ motivo: 'policy_exception', resumen: 'Pide cancelar fuera de plazo' }],
+              pausada: true,
+              nombreClienta: 'Caro Pérez',
+            },
+          }),
+          motivos: ['x'],
+        },
+      ],
+      'm',
+    );
+
+    expect(report).toContain(
+      '  turnos: [martes] Esmaltado semipermanente con Mica el 2026-10-13 17:00 (PENDING_DEPOSIT); ' +
+        '(de otra) Perfilado de cejas con Sofi el 2026-10-14 11:00 (CONFIRMED)',
+    );
+    expect(report).toContain('  derivaciones: policy_exception «Pide cancelar fuera de plazo»');
+    expect(report).toContain('  conversación: pausada');
+    expect(report).toContain('  nombre de la clienta: Caro Pérez');
+  });
+
+  it('sin turnos, derivaciones ni nombre lo dice, y una conversación activa también', () => {
+    const report = formatReport([{ nombre: 'fallo_vacio', resultado: result(), motivos: ['x'] }], 'm');
+
+    expect(report).toContain('  turnos: ninguno');
+    expect(report).toContain('  derivaciones: ninguna');
+    expect(report).toContain('  conversación: activa');
+    expect(report).toContain('  nombre de la clienta: ninguno');
   });
 
   it('no agrega la sección de respuestas si todo pasó o si el caso se cayó sin respuesta', () => {

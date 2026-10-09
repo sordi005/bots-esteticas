@@ -15,6 +15,7 @@ function result(overrides: Partial<EvalResult> = {}): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 100, salida: 20, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 500,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
     ...overrides,
   };
 }
@@ -153,6 +154,44 @@ describe('evaluateCase: herramientas', () => {
     const evaluation = evaluateCase(caso({ herramientas: ['consultar_informacion'] }), result());
 
     expect(evaluation.motivos).toEqual(['No llamó a consultar_informacion (llamó: ninguna)']);
+  });
+});
+
+describe('evaluateCase: noLlama', () => {
+  it('pasa si no se llamó a ninguna de las prohibidas, aunque se hayan llamado otras', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['cancelar_turno'] }),
+      result({ herramientas: ['listar_turnos_de_la_clienta'] }),
+    );
+
+    expect(evaluation).toEqual({ ok: true, motivos: [] });
+  });
+
+  it('pasa si no llamó a ninguna herramienta', () => {
+    expect(evaluateCase(caso({ noLlama: ['derivar_a_persona'] }), result()).ok).toBe(true);
+  });
+
+  it('falla y nombra la prohibida que se llamó', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['derivar_a_persona'] }),
+      result({ herramientas: ['buscar_servicios', 'derivar_a_persona'] }),
+    );
+
+    expect(evaluation.motivos).toEqual([
+      'No debía llamar a derivar_a_persona y llamó: buscar_servicios, derivar_a_persona',
+    ]);
+  });
+
+  it('con varias prohibidas, dice cada una de las que se llamaron', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['cancelar_turno', 'reprogramar_turno', 'crear_reserva'] }),
+      result({ herramientas: ['cancelar_turno', 'crear_reserva'] }),
+    );
+
+    expect(evaluation.motivos).toEqual([
+      'No debía llamar a cancelar_turno y llamó: cancelar_turno, crear_reserva',
+      'No debía llamar a crear_reserva y llamó: cancelar_turno, crear_reserva',
+    ]);
   });
 });
 

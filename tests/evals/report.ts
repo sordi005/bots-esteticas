@@ -1,4 +1,4 @@
-import type { EvalResult } from './evaluate.js';
+import type { EvalResult, EvalState } from './evaluate.js';
 
 /**
  * El resumen que imprime `pnpm test:evals` al terminar: una tabla con cada caso, los aciertos,
@@ -83,15 +83,35 @@ function table(reports: CaseReport[]): string[] {
   );
 }
 
+/** Lo que quedó en la base después de la vuelta, una línea por cosa: sin esto no se sabe si el agente cambió algo. */
+function describeState(estado: EvalState): string[] {
+  const appointments = estado.turnos.map((turno) => {
+    const prefix = [turno.clave ? `[${turno.clave}]` : null, turno.de === 'otra' ? '(de otra)' : null]
+      .filter((part) => part !== null)
+      .join(' ');
+    const description = `${turno.servicio} con ${turno.profesional} el ${turno.inicio} (${turno.estado})`;
+    return prefix ? `${prefix} ${description}` : description;
+  });
+  const handoffs = estado.derivaciones.map((handoff) => `${handoff.motivo} «${handoff.resumen}»`);
+  return [
+    `  turnos: ${appointments.length > 0 ? appointments.join('; ') : 'ninguno'}`,
+    `  derivaciones: ${handoffs.length > 0 ? handoffs.join('; ') : 'ninguna'}`,
+    `  conversación: ${estado.pausada ? 'pausada' : 'activa'}`,
+    `  nombre de la clienta: ${estado.nombreClienta ?? 'ninguno'}`,
+  ];
+}
+
 /**
- * Lo que contestó el agente en los casos que fallaron: sin eso no se puede saber si falló el
- * modelo, el prompt o la expectativa. Son datos de prueba, no conversaciones de clientas.
+ * Lo que contestó el agente en los casos que fallaron, con las herramientas que llamó y lo que
+ * quedó en la base: sin eso no se puede saber si falló el modelo, el prompt o la expectativa.
+ * Son datos de prueba, no conversaciones de clientas.
  */
 function failedReplies(reports: CaseReport[]): string[] {
   const lines = reports.flatMap(({ nombre, resultado, motivos }) => {
     if (!resultado || motivos.length === 0) return [];
     const options = resultado.opciones.length > 0 ? ` [${resultado.opciones.map((o) => o.titulo).join(' | ')}]` : '';
-    return [`${nombre}: «${resultado.texto}»${options}`];
+    const tools = resultado.herramientas.length > 0 ? resultado.herramientas.join(', ') : '-';
+    return [`${nombre}: «${resultado.texto}»${options}`, `  herramientas: ${tools}`, ...describeState(resultado.estado)];
   });
   return lines.length > 0 ? ['', 'Respuestas de los casos que fallaron:', ...lines] : [];
 }
