@@ -264,20 +264,27 @@ export interface ExistingAppointment {
 }
 
 /**
- * Qué turnos ocupan el horario: confirmados, con la seña en verificación (no vence sola)
+ * ¿Este turno ocupa el horario ahora? Confirmados, con la seña en verificación (no vence sola)
  * y con la seña pendiente mientras siga vigente (sección 4.3).
  */
+export function holdsSchedule(
+  appointment: Pick<ExistingAppointment, 'status' | 'depositExpiresAt'>,
+  now: Date,
+): boolean {
+  return (
+    occupiesSchedule(appointment.status) &&
+    !(
+      appointment.status === 'PENDING_DEPOSIT' &&
+      appointment.depositExpiresAt !== null &&
+      appointment.depositExpiresAt.getTime() <= now.getTime()
+    )
+  );
+}
+
+/** Los rangos que ocupan los turnos que ocupan el horario. */
 export function occupiedRanges(appointments: ExistingAppointment[], now: Date): TimestampRange[] {
   return appointments
-    .filter(
-      (appointment) =>
-        occupiesSchedule(appointment.status) &&
-        !(
-          appointment.status === 'PENDING_DEPOSIT' &&
-          appointment.depositExpiresAt !== null &&
-          appointment.depositExpiresAt.getTime() <= now.getTime()
-        ),
-    )
+    .filter((appointment) => holdsSchedule(appointment, now))
     .map((appointment) => appointment.timeRange);
 }
 
