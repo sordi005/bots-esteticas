@@ -28,6 +28,9 @@ export type ChoiceContext = Pick<ToolContext, 'tenantId' | 'customerId' | 'now' 
 interface ResolvedAppointment {
   /** El uuid del turno; el id para las herramientas es `turno:<uuid>`. */
   turnoId: string;
+  /** Para consultar la disponibilidad al reprogramar: el mismo servicio y la misma profesional. */
+  servicioId: string;
+  profesionalId: string;
   servicioNombre: string;
   profesionalNombre: string;
   texto: string;
@@ -161,6 +164,8 @@ export async function resolveChoice(
       return {
         tipo: choice.kind === 'appointment' ? 'turno' : 'cancelar',
         turnoId: appointment.id,
+        servicioId: appointment.serviceId,
+        profesionalId: appointment.professionalId,
         servicioNombre: appointment.serviceName,
         profesionalNombre: appointment.professionalName,
         texto: formatLocalSlot(appointment.start, timeZone),

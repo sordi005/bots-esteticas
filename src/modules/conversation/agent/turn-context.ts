@@ -41,9 +41,13 @@ export function describeChoice(choice: ResolvedChoice, timeZone: string): string
     case 'cancelar': {
       const turn = `${choice.texto} (${choice.servicioNombre} con ${choice.profesionalNombre}, ${choice.estado}), turno_id=${choiceIds.appointment(choice.turnoId)}`;
       const inactive = choice.ocupaHorario ? '' : ` Ojo: ese turno ya no está activo (${choice.estado}).`;
-      return choice.tipo === 'turno'
-        ? `Eligió su turno del ${turn}: seguí con lo que venía pidiendo (cancelar o reprogramar ese turno).${inactive}`
-        : `Confirmó que quiere cancelar el turno del ${turn}: llamá a cancelar_turno con confirmada=true.${inactive}`;
+      if (choice.tipo === 'cancelar') {
+        return `Confirmó que quiere cancelar el turno del ${turn}: llamá a cancelar_turno con confirmada=true.${inactive}`;
+      }
+      return (
+        `Eligió su turno del ${turn}, servicio_id=${choice.servicioId}, profesional_id=${choice.profesionalId}: ` +
+        `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá la disponibilidad con ese servicio_id y profesional_id).${inactive}`
+      );
     }
     case 'desconocido':
       return 'Eligió una opción que ya no es válida (puede ser de una conversación vieja).';

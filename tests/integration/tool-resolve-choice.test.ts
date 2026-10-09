@@ -255,6 +255,8 @@ describe('resolveChoice: un turno elegido o la confirmación de cancelarlo (4.6)
     expect(choice).toEqual({
       tipo: 'turno',
       turnoId: appointmentId,
+      servicioId: fixture.semi,
+      profesionalId: fixture.mica,
       servicioNombre: 'Esmaltado semipermanente',
       profesionalNombre: 'Mica',
       texto: 'lunes 5/10 9:00',
@@ -272,6 +274,8 @@ describe('resolveChoice: un turno elegido o la confirmación de cancelarlo (4.6)
     expect(choice).toEqual({
       tipo: 'cancelar',
       turnoId: appointmentId,
+      servicioId: fixture.semi,
+      profesionalId: fixture.mica,
       servicioNombre: 'Esmaltado semipermanente',
       profesionalNombre: 'Mica',
       texto: 'lunes 5/10 9:00',

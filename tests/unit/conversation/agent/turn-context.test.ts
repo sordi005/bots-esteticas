@@ -91,6 +91,8 @@ const appointment = (tipo: 'turno' | 'cancelar') =>
   ({
     tipo,
     turnoId: APPOINTMENT,
+    servicioId: 'srv-1',
+    profesionalId: 'pro-1',
     servicioNombre: 'Esmaltado semipermanente',
     profesionalNombre: 'Mica',
     texto: 'martes 13/10 17:00',
@@ -192,7 +194,9 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
 
     expect(text).toBe(
       'Eligió su turno del martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), ' +
-        `turno_id=turno:${APPOINTMENT}: seguí con lo que venía pidiendo (cancelar o reprogramar ese turno).`,
+        `turno_id=turno:${APPOINTMENT}, servicio_id=srv-1, profesional_id=pro-1: ` +
+        'seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá la ' +
+        'disponibilidad con ese servicio_id y profesional_id).',
     );
   });
 
