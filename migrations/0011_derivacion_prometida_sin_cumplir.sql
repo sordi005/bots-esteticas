@@ -1,0 +1,1 @@
+ALTER TYPE "public"."agent_outcome" ADD VALUE 'fallback_unfulfilled_handoff';
