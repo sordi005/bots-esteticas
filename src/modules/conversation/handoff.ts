@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { addDaysToLocalDate, instantToLocal } from '../../shared/time-zone.js';
 import { listHolidays } from '../catalog/queries.js';
@@ -88,6 +88,7 @@ export interface HandOffInput {
 }
 
 export interface HandOffResult {
+  /** La derivación abierta de esta pausa: si ya había una, es esa (no se duplica). */
   handoffId: string;
   /** Cuándo le responde una persona, escrito para la clienta ("en este horario", "el viernes 9/10 a las 9:00"). */
   when: string;
@@ -101,15 +102,42 @@ export async function handOff(db: NodePgDatabase, input: HandOffInput): Promise<
   const when = await describeWhenHumanReplies(db, { tenantId, now });
 
   const handoffId = await db.transaction(async (tx) => {
-    const paused = await tx
+    // Se bloquea la conversación: dos derivaciones a la vez (o cancelar fuera de plazo y después
+    // derivar, en la misma vuelta) se ordenan y la segunda ve la pausa de la primera.
+    const [conversation] = await tx
+      .select({ assistantStatus: conversations.assistantStatus, pausedUntil: conversations.pausedUntil })
+      .from(conversations)
+      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)))
+      .for('update');
+    if (!conversation) throw new Error('No se encontró la conversación a derivar');
+
+    // Ya está derivada y la pausa sigue vigente: la derivación abierta es la de esta pausa.
+    const pauseIsActive =
+      conversation.assistantStatus === 'paused' &&
+      (conversation.pausedUntil === null || conversation.pausedUntil.getTime() > now.getTime());
+    if (pauseIsActive) {
+      const [open] = await tx
+        .select({ id: handoffs.id })
+        .from(handoffs)
+        .where(
+          and(
+            eq(handoffs.tenantId, tenantId),
+            eq(handoffs.conversationId, conversationId),
+            eq(handoffs.status, 'open'),
+          ),
+        )
+        .orderBy(desc(handoffs.createdAt))
+        .limit(1);
+      if (open) return open.id;
+    }
+
+    await tx
       .update(conversations)
       .set({
         assistantStatus: 'paused',
         pausedUntil: new Date(now.getTime() + HANDOFF_PAUSE_MS),
       })
-      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)))
-      .returning({ id: conversations.id });
-    if (paused.length === 0) throw new Error('No se encontró la conversación a derivar');
+      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
 
     const [handoff] = await tx
       .insert(handoffs)

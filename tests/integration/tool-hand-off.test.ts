@@ -114,6 +114,16 @@ describe('derivar_a_persona', () => {
     expect(conversation).toMatchObject({ assistantStatus: 'active', pausedUntil: null });
   });
 
+  it('si el modelo deriva dos veces en la misma vuelta, queda una sola derivación y la misma respuesta', async () => {
+    const f = await setup();
+
+    const first = await derive(f, { motivo: 'excepcion', resumen: 'Pide cancelar fuera de plazo' });
+    const second = await derive(f, { motivo: 'pedido_de_la_clienta', resumen: 'Quiere hablar con alguien' });
+
+    expect(second.content).toEqual(first.content);
+    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: 'policy_exception' })]);
+  });
+
   it('usa la conversación del servidor: el modelo no puede elegir otra', async () => {
     const f = await setup();
     const other = await setup();

@@ -168,6 +168,72 @@ describe('handOff: derivar a una persona (4.8)', () => {
     });
   });
 
+  describe('sin derivaciones repetidas', () => {
+    const derive = (f: { tenantId: string; conversationId: string }, now: Date, reason: 'policy_exception' | 'complaint' = 'policy_exception') =>
+      handOff(db, { tenantId: f.tenantId, conversationId: f.conversationId, reason, summary: 'Pide cancelar fuera de plazo', now });
+
+    it('si la conversación ya está pausada, devuelve la derivación abierta en vez de crear otra', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const first = await derive(f, mendoza('2026-10-09', '10:00'));
+
+      // Más tarde, en la misma pausa: por ejemplo, cancelar fuera de plazo y después derivar.
+      const second = await derive(f, mendoza('2026-10-09', '10:05'), 'complaint');
+
+      expect(second).toEqual(first);
+      expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(1);
+    });
+
+    it('no corre la pausa: sigue venciendo 12 horas después de la primera derivación', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const firstAt = mendoza('2026-10-09', '10:00');
+      await derive(f, firstAt);
+
+      await derive(f, mendoza('2026-10-09', '11:00'));
+
+      expect((await conversationOf(f.tenantId, f.conversationId)).pausedUntil).toEqual(
+        new Date(firstAt.getTime() + HANDOFF_PAUSE_MS),
+      );
+    });
+
+    it('dos derivaciones a la vez dejan una sola fila (se bloquea la conversación)', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const now = mendoza('2026-10-09', '10:00');
+
+      const [a, b] = await Promise.all([derive(f, now), derive(f, now)]);
+
+      expect(a.handoffId).toBe(b.handoffId);
+      expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(1);
+    });
+
+    it('con la pausa vencida, una derivación nueva sí se registra y vuelve a pausar', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const firstAt = mendoza('2026-10-09', '10:00');
+      const first = await derive(f, firstAt);
+
+      const later = new Date(firstAt.getTime() + HANDOFF_PAUSE_MS + 60_000);
+      const second = await derive(f, later);
+
+      expect(second.handoffId).not.toBe(first.handoffId);
+      expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(2);
+      expect((await conversationOf(f.tenantId, f.conversationId)).pausedUntil).toEqual(
+        new Date(later.getTime() + HANDOFF_PAUSE_MS),
+      );
+    });
+
+    it('una pausa sin derivación abierta (por ejemplo, la dueña escribió) no impide registrar una', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const now = mendoza('2026-10-09', '10:00');
+      await db
+        .update(conversations)
+        .set({ assistantStatus: 'paused', pausedUntil: new Date(now.getTime() + HANDOFF_PAUSE_MS) })
+        .where(eq(conversations.id, f.conversationId));
+
+      await derive(f, now);
+
+      expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(1);
+    });
+  });
+
   describe('aislamiento entre negocios (regla 1)', () => {
     it('con la conversación de otro negocio, falla sin registrar nada ni pausar esa conversación', async () => {
       const mine = await tenantWithHours(WEEKDAYS);
