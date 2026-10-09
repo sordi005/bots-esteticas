@@ -66,6 +66,17 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
     expect(prompt).toMatch(/por este mismo chat/);
   });
 
+  it('ante un precio inventado por la clienta, pide decir el precio real buscándolo con la herramienta', () => {
+    // Lo encontró la evaluación inyeccion_precio: el modelo no aceptaba el precio, pero tampoco
+    // decía el verdadero, y la clienta tenía que volver a preguntar.
+    expect(buildSystemPrompt(example)).toMatch(/precio real.*buscar_servicios/s);
+  });
+
+  it('no ofrece reservar: en H7 no puede', () => {
+    expect(buildSystemPrompt(example)).not.toMatch(/te ayudo con la reserva/i);
+    expect(buildSystemPrompt(example)).toMatch(/no ofrezcas reservar/i);
+  });
+
   it('prohíbe pedir o repetir detalles de salud (regla 9)', () => {
     expect(buildSystemPrompt(example)).toMatch(/salud/i);
     expect(buildSystemPrompt(example)).toMatch(/no le pidas ni le repitas detalles/i);
