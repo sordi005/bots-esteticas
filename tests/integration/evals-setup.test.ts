@@ -62,6 +62,12 @@ const dialogue = (request: LlmRequest) =>
 const firstAppointmentId = (request: LlmRequest) =>
   (lastToolOutputs(request)[0] as { turnos: { turnoId: string }[] }).turnos[0]?.turnoId ?? '';
 
+/** La clienta tocó el horario del viernes 9/10 a las 15:00 con Mica: crear_reserva solo actúa sobre una elección suya. */
+const FRIDAY_CHOICE = {
+  eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00' },
+  titulo: 'vie 9/10 15:00',
+} as const;
+
 const withAppointment = (overrides: Partial<NonNullable<NonNullable<EvalCase['preparar']>['turnos']>[number]> = {}) => ({
   clave: 'martes',
   servicio: SEMI,
@@ -168,7 +174,11 @@ describe('preparar: los turnos', () => {
 
   it('sin la reprogramación usada, la misma herramienta sí mueve el turno', async () => {
     const turnos = [withAppointment({ senaAprobada: true })];
-    const { result } = run(caseWith({ mensajes: ['pasalo al miércoles'], preparar: { nombre: NAMED, turnos } }), [
+    const wednesday = {
+      eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 15:30' },
+      titulo: 'mié 14/10 15:30',
+    } as const;
+    const { result } = run(caseWith({ mensajes: ['pasalo al miércoles', wednesday], preparar: { nombre: NAMED, turnos } }), [
       callTools([{ name: 'listar_turnos_de_la_clienta' }]),
       (request) =>
         callTools([
@@ -393,7 +403,7 @@ describe('el estado que queda en la base', () => {
   it('un turno que crea el agente figura sin clave, con el nombre que guardó', async () => {
     const slotId =
       'horario:00000000-0000-4000-8000-000000000201:00000000-0000-4000-8000-000000000101:2026-10-09T18:00:00.000Z';
-    const { result } = run(caseWith({ mensajes: ['Caro Pérez'] }), [
+    const { result } = run(caseWith({ mensajes: [FRIDAY_CHOICE, 'Caro Pérez'] }), [
       callTools([{ name: 'crear_reserva', input: { horario_id: slotId, nombre: 'Caro Pérez' } }]),
       finalAnswer('Listo'),
     ]);
@@ -453,10 +463,10 @@ describe('la limpieza', () => {
       finalAnswer('Listo'),
     ];
 
-    await run(caseWith({}), script()).result;
+    await run(caseWith({ mensajes: [FRIDAY_CHOICE] }), script()).result;
     expect(await countAppointments()).toBe(before);
     // El mismo horario se puede volver a reservar en el caso siguiente.
-    const second = await run(caseWith({}), script()).result;
+    const second = await run(caseWith({ mensajes: [FRIDAY_CHOICE] }), script()).result;
     expect(second.estado.turnos).toHaveLength(1);
   });
 });

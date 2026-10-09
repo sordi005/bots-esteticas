@@ -14,7 +14,7 @@ import {
   pickSpreadSlots,
 } from '../../scheduling/slot-selection.js';
 import { addDaysToLocalDate, instantToLocal, localDateTimeToInstant } from '../../../shared/time-zone.js';
-import { formatLocalDate, formatLocalSlot, formatShortSlot, truncateText } from '../format.js';
+import { formatLocalDate } from '../format.js';
 import {
   availabilityInput,
   periodOfDay,
@@ -22,13 +22,8 @@ import {
   type DayPeriod,
 } from './availability-input.js';
 import { choiceIds } from './choice-ids.js';
-import {
-  MAX_LIST_ROWS,
-  MAX_OPTION_DESCRIPTION_LENGTH,
-  type AgentTool,
-  type OfferableOption,
-  type ToolResult,
-} from './tool.js';
+import { slotOffer } from './slot-offer.js';
+import { MAX_LIST_ROWS, type AgentTool, type OfferableOption, type ToolResult } from './tool.js';
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -188,24 +183,17 @@ export const checkAvailabilityTool: AgentTool<AvailabilityInput> = {
       minGapMinutes: MIN_GAP_BETWEEN_OFFERED_SLOTS_MINUTES,
     });
 
-    const entryOf = (slot: Slot) => {
-      const id = choiceIds.slot(service.id, slot.professionalId, slot.start);
-      return {
-        content: {
-          opcionId: id,
-          texto: formatLocalSlot(slot.start, timeZone),
-          profesional: nameOf(slot.professionalId),
-          profesionalId: slot.professionalId,
-          inicio: slot.start.toISOString(),
-          duracionMinutos: (slot.end.getTime() - slot.start.getTime()) / MINUTE_MS,
+    const entryOf = (slot: Slot) =>
+      slotOffer(
+        {
+          serviceId: service.id,
+          professionalId: slot.professionalId,
+          professionalName: nameOf(slot.professionalId),
+          start: slot.start,
+          durationMinutes: (slot.end.getTime() - slot.start.getTime()) / MINUTE_MS,
         },
-        option: {
-          id,
-          title: formatShortSlot(slot.start, timeZone),
-          description: truncateText(`con ${nameOf(slot.professionalId)}`, MAX_OPTION_DESCRIPTION_LENGTH),
-        } satisfies OfferableOption,
-      };
-    };
+        timeZone,
+      );
 
     const entries = chosen.map(entryOf);
 

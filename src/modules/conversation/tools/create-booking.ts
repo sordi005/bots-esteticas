@@ -13,6 +13,7 @@ import {
   type AppointmentSettings,
 } from './appointment-summary.js';
 import { parseChoiceId } from './choice-ids.js';
+import { NEEDS_CHOICE_MESSAGE, offerForConfirmation, wasChosenByCustomer } from './slot-offer.js';
 import type { AgentTool, ToolContext, ToolResult } from './tool.js';
 
 /** Largo del nombre para el turno [S]. */
@@ -109,10 +110,38 @@ function reservedResult(
 }
 
 /**
+ * El modelo pidió reservar un horario que la clienta no eligió con un botón: no se reserva nada y se
+ * le devuelve ese horario como opción, para que ella lo confirme tocándola (6.4).
+ */
+async function askToConfirm(
+  ctx: ToolContext,
+  slot: { serviceId: string; professionalId: string; start: Date },
+): Promise<ToolResult> {
+  const found = await offerForConfirmation(ctx, slot);
+  // El servicio o la profesional no son de este negocio: no hay nada para ofrecer.
+  if (!found) return describeRefusal('not_found');
+  // Un horario que ya no está libre no se ofrece como botón: se vuelve a consultar la disponibilidad.
+  if (!found.free) {
+    return refusal(
+      'horario_no_disponible',
+      'Ese horario ya no está libre o no se puede reservar por este medio. No reservaste nada: volvé a consultar ' +
+        'la disponibilidad con consultar_disponibilidad y ofrecele otros horarios.',
+      false,
+    );
+  }
+  return {
+    content: { reservado: false, motivo: 'falta_que_elija', mensaje: NEEDS_CHOICE_MESSAGE, horario: found.offer.content },
+    options: [found.offer.option],
+  };
+}
+
+/**
  * `crear_reserva(horario_id, nombre?)` (6.4, 6.6): reserva el horario que eligió la clienta.
  * El horario es el id que devolvió `consultar_disponibilidad`: ya trae el servicio, la profesional
  * y el inicio, y `bookAppointment` lo vuelve a validar todo contra la base (la seña la calcula ahí).
- * Es idempotente: si la clienta ya tiene ese mismo turno, lo devuelve como reservado.
+ * Solo reserva un horario que la clienta eligió con un botón o una lista (en esta vuelta o en las
+ * últimas 24 horas): si no, lo ofrece para que lo confirme. Es idempotente: si la clienta ya tiene
+ * ese mismo turno, lo devuelve como reservado, sin pedir la elección otra vez.
  */
 export const createBookingTool: AgentTool<Input> = {
   name: 'crear_reserva',
@@ -121,7 +150,9 @@ export const createBookingTool: AgentTool<Input> = {
     'indica el contexto cuando ella eligió un horario con un botón) y, si el contexto dice que no hay un nombre ' +
     'cargado, el nombre. Devuelve el estado del turno (confirmado o pendiente de seña) y, si lleva seña, el monto, ' +
     'hasta cuándo pagarla y el medio, ya escritos: decilos tal cual. Solo decí que quedó reservado si devuelve ' +
-    'reservado=true. Si el horario se ocupó, volvé a consultar la disponibilidad y ofrecé otros. Pedirlo dos veces ' +
+    'reservado=true. Solo reserva un horario que la clienta eligió con un botón o una lista: si todavía no lo ' +
+    'eligió, no reserva nada y devuelve motivo=falta_que_elija con ese horario para que se lo ofrezcas como ' +
+    'opción. Si el horario se ocupó, volvé a consultar la disponibilidad y ofrecé otros. Pedirlo dos veces ' +
     'no duplica la reserva.',
   input,
   async run({ horario_id, nombre }, ctx) {
@@ -156,6 +187,9 @@ export const createBookingTool: AgentTool<Input> = {
       await saveName();
       return reservedResult(existing, ctx, settings, true);
     }
+
+    // Elegir es la confirmación (principio 5). Va antes del nombre: primero se confirma el horario.
+    if (!wasChosenByCustomer(ctx, horario_id)) return askToConfirm(ctx, { serviceId, professionalId, start });
 
     const [customer] = await db
       .select({ name: customers.name })

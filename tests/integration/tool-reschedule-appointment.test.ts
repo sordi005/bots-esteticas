@@ -12,6 +12,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -75,8 +76,22 @@ async function payDeposit(f: Fixture, appointmentId: string, status: 'approved' 
 const slotId = (f: Fixture, start: Date, professionalId = f.mica, serviceId = f.semi) =>
   choiceIds.slot(serviceId, professionalId, start);
 
-const reschedule = (f: Fixture, input: unknown, now = at('2026-10-04', '09:30')) =>
-  runTool(rescheduleAppointmentTool, input, toolContext(db, f, { conversationId: f.conversationId, now }));
+/**
+ * Por defecto la clienta eligió el horario que se pide (el caso normal: tocó el botón). `chosen`
+ * cambia lo que eligió: nada, o un horario distinto del que pide el modelo.
+ */
+const reschedule = (f: Fixture, input: unknown, now = at('2026-10-04', '09:30'), chosen?: string[]) => {
+  const requested = (input as { horario_id?: unknown }).horario_id;
+  return runTool(
+    rescheduleAppointmentTool,
+    input,
+    toolContext(db, f, {
+      conversationId: f.conversationId,
+      now,
+      chosenOptionIds: new Set(chosen ?? (typeof requested === 'string' ? [requested] : [])),
+    }),
+  );
+};
 
 const rowOf = async (appointmentId: string) =>
   single(await db.select().from(appointments).where(eq(appointments.id, appointmentId)));
@@ -146,6 +161,99 @@ describe('reprogramar_turno: el camino feliz', () => {
     expect(second.content).toMatchObject({ reprogramado: true });
     expect(await reschedulesOf(id)).toHaveLength(2);
     expect(await handoffsOf(f)).toEqual([]);
+  });
+});
+
+describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', () => {
+  it('si la clienta no eligió ese horario no mueve el turno: lo devuelve como opción para que lo confirme', async () => {
+    const f = await setup();
+    const id = await book(f);
+    const now = at('2026-10-04', '09:30');
+
+    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, now, []);
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toMatchObject({
+      reprogramado: false,
+      motivo: 'falta_que_elija',
+      horario: { opcionId: slotId(f, WEDNESDAY_10), texto: 'miércoles 7/10 10:00', profesional: 'Mica', inicio: WEDNESDAY_10.toISOString() },
+    });
+    expect(JSON.stringify(result.content)).toMatch(/todavía no eligió este horario.*ofrecéselo como opción/);
+    expect(result.options).toEqual([{ id: slotId(f, WEDNESDAY_10), title: 'mié 7/10 10:00', description: 'con Mica' }]);
+    expectOptionsShownToModel(result);
+    expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
+    expect(await reschedulesOf(id)).toEqual([]);
+    expect(await handoffsOf(f)).toEqual([]);
+  });
+
+  it('el horario que eligió es otro: el que pide el modelo no cuenta', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(
+      f,
+      { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) },
+      at('2026-10-04', '09:30'),
+      [slotId(f, THURSDAY_10)],
+    );
+
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'falta_que_elija', horario: { texto: 'miércoles 7/10 10:00' } });
+    expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
+  });
+
+  it('con la elección de la clienta, entre otras, mueve el turno a ese horario', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(
+      f,
+      { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) },
+      at('2026-10-04', '09:30'),
+      [slotId(f, THURSDAY_10), slotId(f, WEDNESDAY_10)],
+    );
+
+    expect(result.content).toMatchObject({ reprogramado: true });
+    expect((await rowOf(id)).timeRange.start).toEqual(WEDNESDAY_10);
+  });
+
+  it('un reintento sin la elección sigue siendo idempotente: si el turno ya está en ese horario, lo dice', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+
+    const again = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-04', '09:35'), []);
+
+    expect(again.content).toMatchObject({ reprogramado: true, yaEstaba: true });
+  });
+
+  it('lo que no depende de la elección se valida antes: otra profesional no se ofrece como botón', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10, f.sofi) }, at('2026-10-04', '09:30'), []);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatchObject({ motivo: 'otro_servicio_o_profesional' });
+    expect(result.options).toEqual([]);
+  });
+
+  it('la política también va antes: fuera de plazo deriva sin pedirle que elija un horario', async () => {
+    const f = await setup({ settings: { depositRequirement: 'never' } });
+    const id = await book(f);
+
+    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '11:00'), []);
+
+    expect(result.content).toMatchObject({ reprogramado: false, derivada: true });
+    expect(await handoffsOf(f)).toHaveLength(1);
+  });
+
+  it('un horario que pisa al propio turno también se ofrece como botón (no cuenta como ocupado)', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, at('2026-10-06', '10:15')) }, at('2026-10-04', '09:30'), []);
+
+    expect(result.content).toMatchObject({ motivo: 'falta_que_elija', horario: { texto: 'martes 6/10 10:15' } });
   });
 });
 

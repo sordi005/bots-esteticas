@@ -11,6 +11,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -23,8 +24,19 @@ const MONDAY_9 = at('2026-10-05', '09:00');
 const slot = (f: CatalogFixture, start = MONDAY_9, serviceId = f.semi, professionalId = f.mica) =>
   choiceIds.slot(serviceId, professionalId, start);
 
-const book = (f: CatalogFixture, input: unknown, now?: Date) =>
-  runTool(createBookingTool, input, toolContext(db, f, now ? { now } : {}));
+/**
+ * Por defecto la clienta eligió el horario que se pide (el caso normal: tocó el botón). `chosen`
+ * cambia lo que eligió: nada, o un horario distinto del que pide el modelo.
+ */
+const book = (f: CatalogFixture, input: unknown, options: { now?: Date; chosen?: string[] } = {}) => {
+  const requested = (input as { horario_id?: unknown }).horario_id;
+  const chosen = options.chosen ?? (typeof requested === 'string' ? [requested] : []);
+  return runTool(
+    createBookingTool,
+    input,
+    toolContext(db, f, { ...(options.now ? { now: options.now } : {}), chosenOptionIds: new Set(chosen) }),
+  );
+};
 
 const setName = (f: CatalogFixture, name: string | null) =>
   db.update(customers).set({ name }).where(eq(customers.id, f.customerId));
@@ -106,6 +118,116 @@ describe('crear_reserva: el camino feliz', () => {
   });
 });
 
+describe('crear_reserva: solo sobre un horario que eligió la clienta (6.4)', () => {
+  it('si la clienta no eligió ese horario no reserva: lo devuelve como opción para que lo confirme', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toMatchObject({
+      reservado: false,
+      motivo: 'falta_que_elija',
+      horario: { opcionId: slot(f), texto: 'lunes 5/10 9:00', profesional: 'Mica', inicio: '2026-10-05T12:00:00.000Z' },
+    });
+    expect(JSON.stringify(result.content)).toMatch(/todavía no eligió este horario.*ofrecéselo como opción/);
+    expect(result.options).toEqual([{ id: slot(f), title: 'lun 5/10 9:00', description: 'con Mica' }]);
+    expectOptionsShownToModel(result);
+    expect(await appointmentsOf(f)).toEqual([]);
+  });
+
+  it('tampoco guarda el nombre: no se hizo nada', async () => {
+    const f = await createCatalogFixture(db);
+
+    await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(await nameOf(f)).toBeNull();
+  });
+
+  it('el horario que eligió es otro: el que pide el modelo no cuenta', async () => {
+    const f = await createCatalogFixture(db);
+    const tuesday = slot(f, at('2026-10-06', '09:00'));
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [tuesday] });
+
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'falta_que_elija', horario: { opcionId: slot(f), texto: 'lunes 5/10 9:00' } });
+    expect(await appointmentsOf(f)).toEqual([]);
+  });
+
+  it('con la elección de la clienta (esta vuelta o el historial) reserva ese mismo horario', async () => {
+    const f = await createCatalogFixture(db);
+    const other = slot(f, at('2026-10-06', '09:00'));
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [other, slot(f)] });
+
+    expect(result.content).toMatchObject({ reservado: true });
+    expect(await appointmentsOf(f)).toHaveLength(1);
+  });
+
+  it('la elección va antes que el nombre: sin ninguno de los dos, primero se confirma el horario', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: slot(f) }, { chosen: [] });
+
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'falta_que_elija' });
+  });
+
+  it('un reintento sigue siendo idempotente aunque ya no figure la elección: devuelve el turno que ya existe', async () => {
+    const f = await createCatalogFixture(db);
+    const first = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    const retry = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [], now: at('2026-10-04', '09:05') });
+
+    expect(retry.content).toMatchObject({
+      reservado: true,
+      yaEstabaReservado: true,
+      turnoId: (first.content as { turnoId: string }).turnoId,
+    });
+  });
+
+  it('un horario que otra clienta ya ocupó se rechaza sin ofrecerlo como botón', async () => {
+    const f = await createCatalogFixture(db);
+    const [other] = await db
+      .insert(customers)
+      .values({ tenantId: f.tenantId, phone: '+5492614555555', name: 'Otra' })
+      .returning({ id: customers.id });
+    await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: other?.id ?? '',
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: MONDAY_9,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'horario_no_disponible' });
+    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad/);
+    expect(result.options).toEqual([]);
+  });
+
+  it('un servicio de otro negocio es un error aunque no haya elección: no se ofrece nada', async () => {
+    const f = await createCatalogFixture(db);
+    const other = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: slot(other), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'no_encontrado' });
+    expect(result.options).toEqual([]);
+  });
+
+  it('un id que no es de un horario se rechaza como inválido, haya elegido o no', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: 'el de las 15', nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(result.content).toMatchObject({ motivo: 'id_de_horario_invalido' });
+  });
+});
+
 describe('crear_reserva: el nombre para el turno (4.9)', () => {
   it('sin nombre en la ficha y sin nombre en la llamada, no reserva y le dice al modelo que lo pida', async () => {
     const f = await createCatalogFixture(db);
@@ -175,7 +297,7 @@ describe('crear_reserva: es idempotente', () => {
     const f = await createCatalogFixture(db);
     const first = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
 
-    const second = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, at('2026-10-04', '09:05'));
+    const second = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { now: at('2026-10-04', '09:05') });
 
     expect(second.isError).toBeFalsy();
     expect(second.content).toMatchObject({
@@ -204,7 +326,7 @@ describe('crear_reserva: es idempotente', () => {
     await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
     await setName(f, null);
 
-    await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, at('2026-10-04', '09:05'));
+    await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { now: at('2026-10-04', '09:05') });
 
     expect(await nameOf(f)).toBe('Caro Pérez');
   });
@@ -243,7 +365,7 @@ describe('crear_reserva: es idempotente', () => {
       now: at('2026-10-04', '09:02'),
     });
 
-    const again = await book(f, { horario_id: slot(f) }, at('2026-10-04', '09:05'));
+    const again = await book(f, { horario_id: slot(f) }, { now: at('2026-10-04', '09:05') });
 
     expect(again.content).toMatchObject({ reservado: true });
     expect(again.content).not.toHaveProperty('yaEstabaReservado');

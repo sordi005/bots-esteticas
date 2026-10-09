@@ -10,6 +10,7 @@ import {
 } from './appointment-summary.js';
 import { parseAppointmentRef, parseChoiceId } from './choice-ids.js';
 import { deriveForPolicy } from './policy-handoff.js';
+import { NEEDS_CHOICE_MESSAGE, offerForConfirmation, wasChosenByCustomer } from './slot-offer.js';
 import type { AgentTool, ToolContext, ToolResult } from './tool.js';
 
 /** El motivo que queda en el evento de auditoría del turno. */
@@ -89,8 +90,10 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
   description:
     'Reprograma un turno de la clienta a otro horario del MISMO servicio con la MISMA profesional. Pasale el ' +
     'turno_id del turno y el horario_id que devolvió consultar_disponibilidad (consultala con el servicio y la ' +
-    'profesional del turno) o que eligió la clienta. Cuando ella elige el horario nuevo ya está confirmado: no ' +
-    'hace falta pedirle otra confirmación. Si no corresponde (faltan menos horas que el plazo, el turno ya empezó ' +
+    'profesional del turno) o que eligió la clienta. Solo mueve el turno a un horario que la clienta eligió con ' +
+    'un botón o una lista: si todavía no lo eligió, no cambia nada y devuelve motivo=falta_que_elija con ese ' +
+    'horario para que se lo ofrezcas como opción. Cuando ella lo elige ya está confirmado: no hace falta ' +
+    'pedirle otra confirmación. Si no corresponde (faltan menos horas que el plazo, el turno ya empezó ' +
     'o ya usó las reprogramaciones que conservan la seña), la herramienta no cambia nada, deriva sola a una ' +
     'persona y devuelve la política y cuándo le responde una persona: explicalo con amabilidad, sin discutir ni ' +
     'prometer excepciones. Cambiar de servicio o de profesional no se hace acá. Solo reprograma turnos de la ' +
@@ -159,6 +162,18 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
     });
     if (!decision.allowed) {
       return deriveForPolicy(ctx, { action: 'reschedule', refusal: decision.reason, appointment, settings });
+    }
+
+    // Elegir el horario nuevo es la confirmación (principio 5): si ella no lo eligió, se lo ofrecemos.
+    // Se ofrece aunque `free` sea falso: un horario que pisa al propio turno (correrlo 15 minutos) figura
+    // como ocupado por el turno mismo; si está tomado de verdad, lo dice `rescheduleAppointment` al elegirlo.
+    if (!wasChosenByCustomer(ctx, horario_id)) {
+      const found = await offerForConfirmation(ctx, slot);
+      if (!found) return failure('no_encontrado', 'No encontré ese servicio, esa profesional o ese horario. Consultá la disponibilidad con consultar_disponibilidad.');
+      return {
+        content: { reprogramado: false, motivo: 'falta_que_elija', mensaje: NEEDS_CHOICE_MESSAGE, horario: found.offer.content },
+        options: [found.offer.option],
+      };
     }
 
     const moved = await rescheduleAppointment(db, {
