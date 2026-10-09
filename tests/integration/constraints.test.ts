@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { workingHours } from '../../src/modules/catalog/schema.js';
-import { handoffs, messages } from '../../src/modules/conversation/schema.js';
+import { conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
@@ -112,6 +112,52 @@ describe('reglas que protege la base', () => {
       }),
       CHECK_VIOLATION,
       'handoffs_resolved_at_matches_status',
+    );
+  });
+
+  describe('respuesta guardada sin enviar (6.7)', () => {
+    const reply = { type: 'text', body: 'Hola, soy Luna.' } as const;
+
+    it('la respuesta y su fecha van juntas: una sin la otra no se guarda', async () => {
+      const tenant = await createTenantFixture(db);
+
+      await expectConstraintViolation(
+        db.update(conversations).set({ pendingReply: reply }).where(eq(conversations.id, tenant.conversationId)),
+        CHECK_VIOLATION,
+        'conversations_pending_reply_pair',
+      );
+      await expectConstraintViolation(
+        db
+          .update(conversations)
+          .set({ pendingReplyAt: new Date('2026-10-09T13:00:00Z') })
+          .where(eq(conversations.id, tenant.conversationId)),
+        CHECK_VIOLATION,
+        'conversations_pending_reply_pair',
+      );
+    });
+
+    it('con las dos, o sin ninguna, se guarda', async () => {
+      const tenant = await createTenantFixture(db);
+      const where = eq(conversations.id, tenant.conversationId);
+
+      await db.update(conversations).set({ pendingReply: reply, pendingReplyAt: new Date('2026-10-09T13:00:00Z') }).where(where);
+      await db.update(conversations).set({ pendingReply: null, pendingReplyAt: null }).where(where);
+
+      const [row] = await db.select().from(conversations).where(where);
+      expect(row).toMatchObject({ pendingReply: null, pendingReplyAt: null });
+    });
+  });
+
+  it('un asistente activo no tiene fecha de fin de pausa', async () => {
+    const tenant = await createTenantFixture(db);
+
+    await expectConstraintViolation(
+      db
+        .update(conversations)
+        .set({ assistantStatus: 'active', pausedUntil: new Date('2026-10-09T13:00:00Z') })
+        .where(eq(conversations.id, tenant.conversationId)),
+      CHECK_VIOLATION,
+      'conversations_active_not_paused',
     );
   });
 

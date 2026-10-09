@@ -15,6 +15,8 @@ export const agentOutcomes = [
   'fallback_invalid_output',
   /** La clienta pasó el límite de mensajes por hora: no se llamó al modelo ni se contestó (9.1). */
   'rate_limited',
+  /** El modelo falló dos veces seguidas: el código derivó a una persona y se envió la frase fija (4.8, 8.5). */
+  'handoff_not_understood',
 ] as const;
 
 export type AgentOutcome = (typeof agentOutcomes)[number];

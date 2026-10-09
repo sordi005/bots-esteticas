@@ -15,6 +15,7 @@ import {
 import { createdAt, instant, updatedAt } from '../../shared/db-columns.js';
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
+import type { OutgoingMessage } from '../whatsapp/outgoing.js';
 import { agentOutcomes } from './agent/outcome.js';
 
 export const assistantStatus = pgEnum('assistant_status', ['active', 'paused']);
@@ -54,6 +55,14 @@ export const conversations = pgTable(
     /** Hasta cuándo sigue pausado. Null en pausa = hasta que se reanude a mano. */
     pausedUntil: instant('paused_until'),
     lastMessageAt: instant('last_message_at'),
+    /**
+     * La respuesta ya armada que todavía no se envió (6.7). Se guarda junto con la marca de los
+     * mensajes procesados y se borra al enviarla: si el envío falla, el reintento solo la
+     * reenvía, sin volver a llamar al modelo ni repetir lo que hicieron las herramientas.
+     */
+    pendingReply: jsonb('pending_reply').$type<OutgoingMessage>(),
+    /** Cuándo se guardó `pendingReply`: pasados 5 minutos se descarta. */
+    pendingReplyAt: instant('pending_reply_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -68,6 +77,10 @@ export const conversations = pgTable(
     check(
       'conversations_active_not_paused',
       sql`${t.assistantStatus} = 'paused' or ${t.pausedUntil} is null`,
+    ),
+    check(
+      'conversations_pending_reply_pair',
+      sql`(${t.pendingReply} is null) = (${t.pendingReplyAt} is null)`,
     ),
   ],
 );
