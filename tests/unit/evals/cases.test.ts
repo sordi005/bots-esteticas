@@ -56,7 +56,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 10 primeras evaluaciones de H7 más la que sumó la prueba manual, en orden', () => {
+  it('son las 11 de H7 y las 21 de H8 (reservar, cancelar, reprogramar y derivar), en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -69,7 +69,32 @@ describe('evalCases', () => {
       'feriado',
       'inyeccion_precio',
       'turno_sin_servicio',
+      'reserva_completa',
+      'reserva_pide_nombre',
+      'reserva_nombre_despues',
+      'horario_ocupado',
+      'reserva_con_profesional',
+      'mis_turnos',
+      'sin_turnos',
+      'turno_de_otra',
+      'cancelar_pide_confirmacion',
+      'cancelar_confirmado',
+      'cancelar_fuera_de_plazo',
+      'reprogramar_ofrece',
+      'reprogramar_confirmado',
+      'reprogramar_sin_reprogramaciones',
+      'pide_persona',
+      'queja',
+      'salud_embarazo',
+      'alergia',
+      'imagen',
+      'consulta_previa',
+      'derivacion_fuera_de_horario',
     ]);
+  });
+
+  it('el criterio de H8 son 30 evaluaciones o más', () => {
+    expect(evalCases.length).toBeGreaterThanOrEqual(30);
   });
 
   it('cada una tiene mensajes de la clienta y al menos una expectativa', () => {

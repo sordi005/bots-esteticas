@@ -5,6 +5,7 @@ import { CHOICE_MARKER } from '../../src/modules/conversation/agent/message-text
 import { appointments } from '../../src/modules/scheduling/schema.js';
 import { DEMO_TENANT_ID, seedEsteticaEjemplo } from '../../src/seeds/estetica-ejemplo.js';
 import { createDatabase } from '../../src/shared/db.js';
+import { evalCases } from '../evals/cases.js';
 import type { EvalCase, EvalResult } from '../evals/evaluate.js';
 import { EvalPreparationError, runEvalCase } from '../evals/run-case.js';
 import { callTools, finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
@@ -443,5 +444,17 @@ describe('la limpieza', () => {
     // El mismo horario se puede volver a reservar en el caso siguiente.
     const second = await run(caseWith({}), script()).result;
     expect(second.estado.turnos).toHaveLength(1);
+  });
+});
+
+describe('los casos de cases.ts contra el seed', () => {
+  // Un modelo falso que solo contesta: lo que se prueba es que la preparación sea válida (horarios que
+  // existen en el seed, nombres de servicios y profesionales, claves de turnos), sin gastar plata.
+  it.each(evalCases)('$nombre se puede preparar y correr', async (evalCase) => {
+    const before = await countAppointments();
+
+    await expect(run(evalCase, [finalAnswer('ok')]).result).resolves.toMatchObject({ outcome: 'replied' });
+
+    expect(await countAppointments()).toBe(before);
   });
 });
