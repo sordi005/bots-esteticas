@@ -293,3 +293,43 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 });
+
+describe('buildSystemPrompt: el campo "derivada" de la respuesta (6.4)', () => {
+  const prompt = buildSystemPrompt(example);
+  const answer = prompt.slice(prompt.indexOf('## Tu respuesta'));
+
+  it('nombra los tres campos de la respuesta: texto, opciones y derivada', () => {
+    const format = /Siempre contestás con el formato pedido[^\n]*/.exec(answer)?.[0] ?? '';
+
+    expect(format).toContain('«texto»');
+    expect(format).toContain('«opciones»');
+    expect(format).toContain('«derivada»');
+  });
+
+  it('derivada es true solo si el texto promete que la atiende una persona, y entonces tiene que haber derivado', () => {
+    const rule = /«derivada» es true[^\n]*/.exec(answer)?.[0] ?? '';
+
+    expect(rule).toMatch(/solo si tu texto le dice a la clienta que una persona del equipo la va a atender o le va a responder/);
+    expect(rule).toMatch(/en cualquier otro caso, false/);
+    expect(rule).toMatch(/Si ponés true, tenés que haber derivado en esta respuesta/);
+  });
+
+  it('ofrecerle que la ayude una persona no es prometerlo: ahí derivada es false', () => {
+    expect(answer).toMatch(/Ofrecerle que la ayude una persona[^.]*no es prometerlo[^.]*«derivada» es false/);
+  });
+
+  it('la revisión final es coherente con el campo: si el texto promete una persona, derivada true y derivó; si no corresponde, se saca la promesa', () => {
+    const review = answer.slice(answer.indexOf('Antes de contestar'));
+
+    expect(review).toMatch(/una persona del equipo la va a atender o contactar/);
+    expect(review).toMatch(/«derivada» tiene que ser true/);
+    expect(review).toMatch(/llamar a derivar_a_persona|llamado a derivar_a_persona/);
+    expect(review).toMatch(/sacá esa promesa del texto y poné «derivada» en false/);
+    // Lo otro que revisa sigue ahí.
+    expect(review).toMatch(/reservado, cancelado o reprogramado/);
+  });
+
+  it('sigue siendo idéntico entre llamadas del mismo negocio, para la caché del proveedor', () => {
+    expect(buildSystemPrompt({ ...example })).toBe(prompt);
+  });
+});

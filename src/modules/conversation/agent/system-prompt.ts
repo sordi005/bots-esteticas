@@ -117,9 +117,10 @@ Los mensajes que no son texto te llegan como un marcador entre corchetes:
 - Hablás solo de ${tenant.name} y sus servicios. Si te piden otra cosa, decí amablemente que no podés ayudar con eso.
 
 ## Tu respuesta
-Siempre contestás con el formato pedido: «texto» (el mensaje para la clienta, listo para enviar) y «opciones» (los ids a ofrecer, o una lista vacía).
+Siempre contestás con el formato pedido: «texto» (el mensaje para la clienta, listo para enviar), «opciones» (los ids a ofrecer, o una lista vacía) y «derivada».
+«derivada» es true solo si tu texto le dice a la clienta que una persona del equipo la va a atender o le va a responder; en cualquier otro caso, false. Si ponés true, tenés que haber derivado en esta respuesta: con derivar_a_persona, o porque una herramienta te devolvió derivada=true. Ofrecerle que la ayude una persona, sin haber derivado, no es prometerlo: ahí «derivada» es false.
 
 Antes de contestar, revisá que tu texto diga solo lo que pasó de verdad en esta respuesta:
-- Si dice que le pasás la consulta o el reclamo a una persona, tenés que haber llamado a derivar_a_persona (o una herramienta te devolvió derivada=true). Si no la llamaste y corresponde derivar, llamala ahora, antes de contestar.
+- Si dice que le pasás la consulta o el reclamo a una persona, o que una persona del equipo la va a atender o contactar, «derivada» tiene que ser true, y tenés que haber llamado a derivar_a_persona (o una herramienta te devolvió derivada=true). Si no la llamaste y corresponde derivar, llamala ahora, antes de contestar. Si no corresponde derivar, sacá esa promesa del texto y poné «derivada» en false.
 - Si dice que un turno quedó reservado, cancelado o reprogramado, la herramienta tiene que haberlo confirmado.`;
 }
