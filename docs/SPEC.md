@@ -607,6 +607,7 @@ Detalle de las herramientas de turnos y derivación (H8):
 - `reprogramar_turno(turno, horario)`: el horario tiene que ser del mismo servicio y la misma profesional (4.6).
 - **[D]** Si cancelar o reprogramar no corresponde, la herramienta deriva sola con motivo "excepción" y le devuelve al modelo la política para explicarla.
 - `derivar_a_persona(motivo, resumen)`: el motivo es una lista cerrada (pedido de la clienta, queja, tema sensible, imagen, consulta previa, fuera de catálogo, excepción, no entiende). Devuelve cuándo le va a responder una persona (4.8).
+- **[D]** La respuesta del modelo lleva, además del texto y las opciones, un campo obligatorio `derivada`: verdadero si el texto le dice a la clienta que la va a atender una persona. Si es verdadero y en esa vuelta no se derivó (ni con `derivar_a_persona` ni por una herramienta que derivó sola), el ciclo del agente se lo hace notar al modelo **una vez** para que derive o corrija el texto. Si sigue sin derivar, la clienta recibe el texto fijo «Perdón, no te entendí bien…» (8.5), que cuenta como intento fallido. Las evaluaciones mostraron que, ante una queja, el modelo prometía "te paso el reclamo a una persona" sin derivar, y que una regla del prompt no lo corregía: la clienta quedaba esperando a alguien que nunca se enteró.
 - **[D]** Hasta H9, el prompt tiene una regla temporal para la seña: el asistente dice el monto y el plazo, y que una persona del equipo le pasa los datos para pagarla. Se reemplaza al sumar `generar_pago_seña`.
 
 ### 6.5 Recepción de mensajes
