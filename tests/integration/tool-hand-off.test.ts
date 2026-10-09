@@ -54,7 +54,7 @@ describe('derivar_a_persona', () => {
   ] as const)('el motivo "%s" se guarda como %s', async (motivo, stored) => {
     const f = await setup();
 
-    const result = await derive(f, { motivo, resumen: 'Resumen' });
+    const result = await derive(f, { motivo, resumen: 'Resumen de la consulta' });
 
     expect(result.isError).toBeFalsy();
     expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: stored, status: 'open' })]);
@@ -112,6 +112,32 @@ describe('derivar_a_persona', () => {
     expect(await handoffsOf(f)).toEqual([]);
     const [conversation] = await db.select().from(conversations).where(eq(conversations.id, f.conversationId));
     expect(conversation).toMatchObject({ assistantStatus: 'active', pausedUntil: null });
+  });
+
+  it.each([
+    ['una palabra suelta', 'Ignorar'],
+    ['un par de letras', 'ok'],
+    ['relleno con espacios que no cuentan', '   prueba   '],
+  ])('un resumen de menos de 8 caracteres (%s) es un error para el modelo y no deriva nada', async (_case, resumen) => {
+    const f = await setup();
+
+    const result = await derive(f, { motivo: 'queja', resumen });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatchObject({ error: 'Entrada inválida' });
+    expect(JSON.stringify(result.content)).toMatch(/resumen.*qué necesita la clienta/);
+    expect(await handoffsOf(f)).toEqual([]);
+    const [conversation] = await db.select().from(conversations).where(eq(conversations.id, f.conversationId));
+    expect(conversation).toMatchObject({ assistantStatus: 'active', pausedUntil: null });
+  });
+
+  it('un resumen de 8 caracteres (sin contar los espacios de los costados) alcanza', async () => {
+    const f = await setup();
+
+    const result = await derive(f, { motivo: 'queja', resumen: '  Reclamo.  ' });
+
+    expect(result.isError).toBeFalsy();
+    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ summary: 'Reclamo.' })]);
   });
 
   it('si el modelo deriva dos veces en la misma vuelta, queda una sola derivación y la misma respuesta', async () => {

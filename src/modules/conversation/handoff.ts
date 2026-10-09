@@ -26,6 +26,11 @@ export const HANDOFF_PAUSE_MS = 12 * 60 * 60 * 1_000;
 
 /** [S] El resumen es de una línea, hasta 200 caracteres (4.8). */
 export const HANDOFF_SUMMARY_MAX_LENGTH = 200;
+/**
+ * [S] Y de por lo menos 8 caracteres, sin contar los espacios de los costados: corta los resúmenes de
+ * relleno que escribió el modelo al derivar «para probar» («Ignorar»). Una derivación pausa al asistente.
+ */
+export const HANDOFF_SUMMARY_MIN_LENGTH = 8;
 
 /** Lo único que se guarda de una derivación por un tema de salud (4.8, regla 9). */
 export const SENSITIVE_TOPIC_SUMMARY = 'Tema sensible: ver la conversación';

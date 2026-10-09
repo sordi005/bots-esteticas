@@ -117,6 +117,17 @@ describe('agentTools: las herramientas que usa el agente', () => {
     ]);
   });
 
+  it('derivar_a_persona avisa que pausa al asistente y que no se llama para probar, por las dudas ni con relleno', () => {
+    const tool = agentTools.find((candidate) => candidate.name === 'derivar_a_persona');
+    if (!tool) throw new Error('No está derivar_a_persona');
+
+    expect(tool.description).toMatch(/solo cuando una de las reglas de derivación lo pide/i);
+    expect(tool.description).toMatch(/resumen real/i);
+    expect(tool.description).toMatch(/nunca la llames para probar, por las dudas ni con un resumen de relleno/i);
+    expect(tool.description).toMatch(/deja al asistente callado en este chat/i);
+    expect(agentSchemaOf('derivar_a_persona').properties.resumen?.description).toMatch(/8 a 200 caracteres/);
+  });
+
   it('ninguna pide el negocio, la clienta ni la conversación como parámetro (regla 2)', () => {
     for (const tool of agentTools) {
       const schema = z.toJSONSchema(tool.input, { io: 'input' }) as unknown as ObjectSchema;

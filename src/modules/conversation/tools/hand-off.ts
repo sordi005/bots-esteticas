@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { handOff, HANDOFF_SUMMARY_MAX_LENGTH, type HandoffReason } from '../handoff.js';
+import {
+  handOff,
+  HANDOFF_SUMMARY_MAX_LENGTH,
+  HANDOFF_SUMMARY_MIN_LENGTH,
+  type HandoffReason,
+} from '../handoff.js';
 import type { AgentTool } from './tool.js';
 
 /** Los motivos que ve el modelo (en español) y el motivo que guarda la base (en inglés), sección 4.8. */
@@ -29,11 +34,15 @@ const input = z.object({
   resumen: z
     .string()
     .trim()
-    .min(1)
+    .min(
+      HANDOFF_SUMMARY_MIN_LENGTH,
+      'El resumen es muy corto: escribí en una línea qué necesita la clienta. No derives si no hay algo real para contarle a la persona.',
+    )
     // El código recorta lo que pase de 200 caracteres: acá solo se frena lo desmedido.
     .max(HANDOFF_SUMMARY_MAX_LENGTH * 5)
     .describe(
-      'Una sola línea para la dueña, de hasta 200 caracteres, con qué necesita la clienta. ' +
+      'Una sola línea para la dueña, de 8 a 200 caracteres, con qué necesita la clienta de verdad (nada de ' +
+        'relleno ni de pruebas). ' +
         'Con tema_sensible NO incluyas ningún dato de salud: escribí solo "consulta sensible".',
     ),
 });
@@ -47,7 +56,9 @@ export const handOffTool: AgentTool<z.infer<typeof input>> = {
   name: 'derivar_a_persona',
   description:
     'Deriva la conversación a una persona del equipo: registra la derivación, avisa a la dueña y ' +
-    'pausa al asistente en este chat. Usala cuando las reglas de derivación lo piden. Devuelve ' +
+    'pausa al asistente en este chat. Usala solo cuando una de las reglas de derivación lo pide, con un ' +
+    'resumen real de lo que necesita la clienta. Nunca la llames para probar, por las dudas ni con un ' +
+    'resumen de relleno: deja al asistente callado en este chat. Devuelve ' +
     '"cuando", el texto que completa «te va a responder por acá …»: usalo tal cual para decirle a la ' +
     'clienta cuándo le responde una persona, sin prometer nada más. Después de derivar no sigas ' +
     'atendiendo el pedido.',
