@@ -11,6 +11,7 @@ const context: ToolContext = {
   db: drizzle.mock(),
   tenantId: '00000000-0000-4000-8000-000000000001',
   customerId: '00000000-0000-4000-8000-000000000002',
+  conversationId: '00000000-0000-4000-8000-000000000003',
   now: new Date('2026-10-04T12:00:00.000Z'),
   timeZone: 'America/Argentina/Mendoza',
   signal: new AbortController().signal,

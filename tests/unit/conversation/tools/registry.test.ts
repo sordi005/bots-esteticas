@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { consultationTools } from '../../../../src/modules/conversation/tools/index.js';
+import { agentTools, consultationTools } from '../../../../src/modules/conversation/tools/index.js';
 
 interface ObjectSchema {
   type: string;
@@ -47,6 +47,45 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
 
     for (const [name, property] of Object.entries(properties)) {
       expect(property.description, name).toBeTruthy();
+    }
+  });
+});
+
+describe('agentTools: las herramientas que usa el agente', () => {
+  it('son las de consulta más derivar_a_persona', () => {
+    expect(agentTools.map((tool) => tool.name)).toEqual([
+      ...consultationTools.map((tool) => tool.name),
+      'derivar_a_persona',
+    ]);
+  });
+
+  it('derivar_a_persona pide un motivo de una lista cerrada y un resumen, y nada más', () => {
+    const tool = agentTools.find((candidate) => candidate.name === 'derivar_a_persona');
+    if (!tool) throw new Error('No está derivar_a_persona');
+    const schema = z.toJSONSchema(tool.input, { io: 'input' }) as unknown as ObjectSchema & {
+      properties: Record<string, { enum?: string[] }>;
+    };
+
+    expect(Object.keys(schema.properties)).toEqual(['motivo', 'resumen']);
+    expect(schema.required).toEqual(['motivo', 'resumen']);
+    expect(schema.properties.motivo?.enum).toEqual([
+      'pedido_de_la_clienta',
+      'queja',
+      'tema_sensible',
+      'imagen',
+      'consulta_previa',
+      'fuera_de_catalogo',
+      'excepcion',
+      'no_entiende',
+    ]);
+  });
+
+  it('ninguna pide el negocio, la clienta ni la conversación como parámetro (regla 2)', () => {
+    for (const tool of agentTools) {
+      const schema = z.toJSONSchema(tool.input, { io: 'input' }) as unknown as ObjectSchema;
+      expect(Object.keys(schema.properties).join(' '), tool.name).not.toMatch(
+        /tenant|negocio|customer|clienta|cliente|conversa/i,
+      );
     }
   });
 });

@@ -260,6 +260,7 @@ describe('los datos del seed respaldan lo que esperan las evaluaciones', () => {
     db,
     tenantId: DEMO_TENANT_ID,
     customerId: '00000000-0000-4000-8000-000000000000',
+    conversationId: '00000000-0000-4000-8000-000000000001',
     now: EVAL_NOW,
     timeZone: EVAL_TIME_ZONE,
     signal: new AbortController().signal,

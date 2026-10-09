@@ -317,6 +317,7 @@ describe('createAgentResponder: conversación nueva y contexto de la vuelta (5.1
     expect(seen[0]).toMatchObject({
       tenantId: f.tenantId,
       customerId: f.customerId,
+      conversationId: f.conversationId,
       now: NOW,
       timeZone: 'America/Argentina/Mendoza',
       signal,

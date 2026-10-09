@@ -13,6 +13,8 @@ export interface ToolContext {
   db: NodePgDatabase;
   tenantId: string;
   customerId: string;
+  /** La conversación de esta vuelta: también del servidor (la usa `derivar_a_persona`). */
+  conversationId: string;
   /** La hora actual, inyectada (regla 5). */
   now: Date;
   /** Zona horaria del negocio: se usa solo para escribir fechas y horas. */

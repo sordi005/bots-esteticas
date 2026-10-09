@@ -150,6 +150,8 @@ export function toolContext(
     db,
     tenantId: fixture.tenantId,
     customerId: fixture.customerId,
+    // Las herramientas de consulta no la usan: las que necesitan una conversación real la pasan en `overrides`.
+    conversationId: randomUUID(),
     now: at('2026-10-04', '09:00'),
     timeZone: MENDOZA,
     signal: new AbortController().signal,

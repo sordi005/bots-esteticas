@@ -5,7 +5,7 @@ import {
   createAnthropicLlmClient,
   toStrictSchema,
 } from '../../../../src/modules/conversation/agent/anthropic-client.js';
-import { consultationTools } from '../../../../src/modules/conversation/tools/index.js';
+import { agentTools } from '../../../../src/modules/conversation/tools/index.js';
 import type { LlmRequest } from '../../../../src/modules/conversation/agent/llm-client.js';
 
 const TEST_API_KEY = 'sk-ant-clave-de-prueba';
@@ -479,9 +479,9 @@ describe('toStrictSchema: los esquemas de Zod pasan a lo que aceptan las herrami
     expect(result).toMatchObject({ properties: { tema: { enum: ['direccion', 'horarios'] } } });
   });
 
-  it('los esquemas de las herramientas de H7 quedan aceptables para strict: sin restricciones ni regex complejos y dentro de los límites', () => {
+  it('los esquemas de las herramientas quedan aceptables para strict: sin restricciones ni regex complejos y dentro de los límites', () => {
     let optional = 0;
-    for (const tool of consultationTools) {
+    for (const tool of agentTools) {
       const schema = toStrictSchema(z.toJSONSchema(tool.input, { io: 'input' }));
       const text = JSON.stringify(schema);
 
@@ -493,6 +493,6 @@ describe('toStrictSchema: los esquemas de Zod pasan a lo que aceptan las herrami
 
     // La API admite hasta 24 parámetros opcionales entre todas las herramientas estrictas.
     expect(optional).toBeLessThanOrEqual(24);
-    expect(consultationTools.length).toBeLessThanOrEqual(20);
+    expect(agentTools.length).toBeLessThanOrEqual(20);
   });
 });

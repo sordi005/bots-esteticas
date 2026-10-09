@@ -8,7 +8,7 @@ import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, messages } from '../schema.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
-import { consultationTools } from '../tools/index.js';
+import { agentTools } from '../tools/index.js';
 import type { AgentTool } from '../tools/tool.js';
 import { runAgent, type AgentRun } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
@@ -39,14 +39,14 @@ export interface AgentResponderDependencies {
   logger: Logger;
   /** La hora actual, inyectada (regla 5). */
   now: () => Date;
-  /** Por defecto, las herramientas de consulta de H7. */
+  /** Por defecto, todas las herramientas del agente. */
   tools?: AgentTool<unknown>[];
   /** Reloj monotónico para medir la latencia (se inyecta en los tests). */
   monotonicNow?: () => number;
 }
 
 export function createAgentResponder(deps: AgentResponderDependencies): Responder {
-  const { db, llm, now, tools = consultationTools } = deps;
+  const { db, llm, now, tools = agentTools } = deps;
 
   return async (turn: ConversationTurn, { signal }): Promise<OutgoingMessage | null> => {
     const { tenantId, conversationId, customerId } = turn;
@@ -141,7 +141,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           choices,
         }),
         history: [...history, ...pendingMessages],
-        toolContext: { db, tenantId, customerId, now: at, timeZone: tenant.timeZone, signal },
+        toolContext: { db, tenantId, customerId, conversationId, now: at, timeZone: tenant.timeZone, signal },
       },
     );
 
