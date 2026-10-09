@@ -11,6 +11,7 @@ const base = {
   timeZone: MENDOZA,
   isNewConversation: false,
   customerName: null,
+  bookingName: null,
   preferredProfessionalName: null,
   choices: [] as ResolvedChoice[],
 };
@@ -50,6 +51,20 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(context).not.toMatch(/Profesional preferida/);
   });
 
+  it('si no tiene nombre para el turno cargado, le dice al modelo que lo pida antes de reservar', () => {
+    // El nombre de perfil de WhatsApp solo sirve de saludo: crear_reserva exige el nombre para el turno.
+    const context = buildTurnContext({ ...base, customerName: 'Caro (perfil)', bookingName: null });
+
+    expect(context).toMatch(/Nombre para el turno: no está cargado.*pedíselo antes de reservar/);
+  });
+
+  it('con el nombre para el turno cargado, lo dice y no hace falta pedirlo', () => {
+    const context = buildTurnContext({ ...base, customerName: 'Caro Pérez', bookingName: 'Caro Pérez' });
+
+    expect(context).toMatch(/Nombre para el turno: Caro Pérez \(ya está cargado: no lo pidas\)/);
+    expect(context).not.toMatch(/pedíselo/);
+  });
+
   it('empieza marcando que no lo escribió la clienta', () => {
     expect(buildTurnContext(base)).toMatch(/^Contexto del sistema \(no lo escribió la clienta\)/);
   });
@@ -69,6 +84,19 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(buildTurnContext(base)).not.toMatch(/Elecciones/);
   });
 });
+
+const APPOINTMENT = '00000000-0000-4000-8000-000000000301';
+
+const appointment = (tipo: 'turno' | 'cancelar') =>
+  ({
+    tipo,
+    turnoId: APPOINTMENT,
+    servicioNombre: 'Esmaltado semipermanente',
+    profesionalNombre: 'Mica',
+    texto: 'martes 13/10 17:00',
+    estado: 'confirmado',
+    ocupaHorario: true,
+  }) as const satisfies ResolvedChoice;
 
 describe('describeChoice: la elección resuelta como texto, nunca el título del botón (5.3)', () => {
   const slot = {
@@ -119,11 +147,12 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     expect(text).toMatch(/requiere consulta previa/i);
   });
 
-  it('un horario que sigue libre', () => {
+  it('un horario que sigue libre, con su id para reservarlo o reprogramar', () => {
     const text = describeChoice(slot, MENDOZA);
 
     expect(text).toBe(
-      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min); sigue libre.',
+      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min), ' +
+        'horario_id=horario:srv-1:pro-1:2026-10-05T12:00:00.000Z; sigue libre.',
     );
   });
 
@@ -131,7 +160,8 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     const text = describeChoice({ ...slot, sigueLibre: false }, MENDOZA);
 
     expect(text).toBe(
-      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min); ya no está libre.',
+      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min), ' +
+        'horario_id=horario:srv-1:pro-1:2026-10-05T12:00:00.000Z; ya no está libre.',
     );
   });
 
@@ -155,6 +185,38 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     );
 
     expect(text).not.toContain('profesional_id');
+  });
+
+  it('un turno elegido: sus datos y su id para cancelarlo o reprogramarlo', () => {
+    const text = describeChoice(appointment('turno'), MENDOZA);
+
+    expect(text).toBe(
+      'Eligió su turno del martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), ' +
+        `turno_id=turno:${APPOINTMENT}: seguí con lo que venía pidiendo (cancelar o reprogramar ese turno).`,
+    );
+  });
+
+  it('"Sí, cancelar": confirmó cancelar ese turno, así que se cancela con confirmada=true', () => {
+    const text = describeChoice(appointment('cancelar'), MENDOZA);
+
+    expect(text).toBe(
+      'Confirmó que quiere cancelar el turno del martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), ' +
+        `turno_id=turno:${APPOINTMENT}: llamá a cancelar_turno con confirmada=true.`,
+    );
+  });
+
+  it('"Sí, cancelar" sobre un turno que ya no ocupa horario lo avisa y deja que la herramienta responda', () => {
+    const text = describeChoice({ ...appointment('cancelar'), estado: 'cancelado', ocupaHorario: false }, MENDOZA);
+
+    expect(text).toContain('ese turno ya no está activo (cancelado)');
+    expect(text).toContain(`turno_id=turno:${APPOINTMENT}`);
+    expect(text).toContain('cancelar_turno');
+  });
+
+  it('un turno elegido que ya no ocupa horario lo avisa', () => {
+    const text = describeChoice({ ...appointment('turno'), estado: 'vencido por falta de seña', ocupaHorario: false }, MENDOZA);
+
+    expect(text).toContain('ese turno ya no está activo (vencido por falta de seña)');
   });
 
   it('una opción que ya no es válida', () => {

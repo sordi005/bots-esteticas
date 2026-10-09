@@ -3,10 +3,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { professionals, services } from '../../src/modules/catalog/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { resolveChoice } from '../../src/modules/conversation/tools/choices.js';
-import { bookAppointment } from '../../src/modules/scheduling/booking.js';
+import { customers } from '../../src/modules/customers/schema.js';
+import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
+import { single } from './support/fixtures.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -218,6 +220,102 @@ describe('resolveChoice: "ver otros horarios"', () => {
 
     expect(await resolve(mine, choiceIds.more(other.semi, null, after))).toEqual({ tipo: 'desconocido' });
     expect(await resolve(mine, choiceIds.more(mine.semi, other.mica, after))).toEqual({ tipo: 'desconocido' });
+  });
+});
+
+describe('resolveChoice: un turno elegido o la confirmación de cancelarlo (4.6)', () => {
+  async function bookFor(fixture: CatalogFixture, customerId = fixture.customerId, start = MONDAY_9) {
+    const booked = await bookAppointment(db, {
+      tenantId: fixture.tenantId,
+      customerId,
+      serviceId: fixture.semi,
+      professionalId: fixture.mica,
+      start,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    return booked.appointmentId;
+  }
+
+  const otherCustomer = async (fixture: CatalogFixture) =>
+    single(
+      await db
+        .insert(customers)
+        .values({ tenantId: fixture.tenantId, phone: '+5492614888888', name: 'Otra' })
+        .returning({ id: customers.id }),
+    ).id;
+
+  it('un turno de la clienta se resuelve con su servicio, profesional, fecha y estado escritos', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+
+    const choice = await resolve(fixture, choiceIds.appointment(appointmentId));
+
+    expect(choice).toEqual({
+      tipo: 'turno',
+      turnoId: appointmentId,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      texto: 'lunes 5/10 9:00',
+      estado: 'pendiente de seña',
+      ocupaHorario: true,
+    });
+  });
+
+  it('el botón "Sí, cancelar" se resuelve con el mismo turno', async () => {
+    const fixture = await createCatalogFixture(db, { settings: { depositRequirement: 'never' } });
+    const appointmentId = await bookFor(fixture);
+
+    const choice = await resolve(fixture, choiceIds.cancel(appointmentId));
+
+    expect(choice).toEqual({
+      tipo: 'cancelar',
+      turnoId: appointmentId,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      texto: 'lunes 5/10 9:00',
+      estado: 'confirmado',
+      ocupaHorario: true,
+    });
+  });
+
+  it('un turno que ya no ocupa horario se resuelve igual, y lo dice', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+    await changeAppointmentStatus(db, {
+      tenantId: fixture.tenantId,
+      appointmentId,
+      to: 'CANCELLED_BY_CUSTOMER',
+      actor: 'assistant',
+      now: at('2026-10-04', '09:05'),
+    });
+
+    expect(await resolve(fixture, choiceIds.cancel(appointmentId))).toMatchObject({
+      tipo: 'cancelar',
+      estado: 'cancelado',
+      ocupaHorario: false,
+    });
+  });
+
+  it('el turno de otra clienta del mismo negocio es desconocido, con los dos tipos de id', async () => {
+    const fixture = await createCatalogFixture(db);
+    const theirs = await bookFor(fixture, await otherCustomer(fixture));
+
+    expect(await resolve(fixture, choiceIds.appointment(theirs))).toEqual({ tipo: 'desconocido' });
+    expect(await resolve(fixture, choiceIds.cancel(theirs))).toEqual({ tipo: 'desconocido' });
+  });
+
+  it('el turno de otro negocio o que no existe es desconocido', async () => {
+    const mine = await createCatalogFixture(db);
+    const other = await createCatalogFixture(db);
+    const theirs = await bookFor(other, other.customerId);
+
+    expect(await resolve(mine, choiceIds.appointment(theirs))).toEqual({ tipo: 'desconocido' });
+    expect(await resolve(mine, choiceIds.cancel(theirs))).toEqual({ tipo: 'desconocido' });
+    expect(await resolve(mine, choiceIds.cancel('00000000-0000-4000-8000-0000000000ff'))).toEqual({
+      tipo: 'desconocido',
+    });
   });
 });
 

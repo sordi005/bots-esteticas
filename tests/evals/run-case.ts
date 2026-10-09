@@ -118,7 +118,7 @@ export async function runEvalCase(deps: RunCaseDependencies, evalCase: EvalCase)
   for (const option of message ? optionsOf(message) : []) {
     options.push({
       ...option,
-      resuelta: await resolveChoice(db, { tenantId, now, timeZone: EVAL_TIME_ZONE }, option.id),
+      resuelta: await resolveChoice(db, { tenantId, customerId, now, timeZone: EVAL_TIME_ZONE }, option.id),
     });
   }
 

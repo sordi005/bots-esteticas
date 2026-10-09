@@ -344,7 +344,7 @@ describe('createAgentResponder: las elecciones con botones se resuelven antes de
 
     expect(conversationOf(requests[0]?.messages ?? [])).toEqual([`user: ${CHOICE_MARKER}`]);
     expect(requests[0]?.turnContext).toContain(
-      'Eligió el horario martes 6/10 9:00 con Mica para Esmaltado semipermanente (60 min); sigue libre.',
+      `Eligió el horario martes 6/10 9:00 con Mica para Esmaltado semipermanente (60 min), horario_id=${choiceIds.slot(f.semi, f.mica, tuesday)}; sigue libre.`,
     );
     expect(JSON.stringify(requests[0]?.messages)).not.toContain('mar 6/10 9:00');
   });
@@ -419,7 +419,27 @@ describe('createAgentResponder: las elecciones con botones se resuelven antes de
     expect(requests[0]?.turnContext).toContain(`despues_de=${after.toISOString()}`);
   });
 
-  it('en el historial, una elección vieja se ve con el título que tocó', async () => {
+  it('en el historial, una elección vieja se ve con el título que tocó y el id de la opción elegida', async () => {
+    // Así, si después de elegir el horario hay que pedir el nombre, el modelo todavía tiene el id para reservar.
+    const f = await setup();
+    const slotId = choiceIds.slot(f.semi, f.mica, at('2026-10-06', '15:30'));
+    await addInbound(f, {
+      type: 'interactive',
+      content: interactiveReply(slotId, 'mar 6/10 15:30'),
+      at: hoursAgo(1),
+    });
+    const pending = await pendingTexts(f, 'Caro Pérez');
+
+    const { result, requests } = reply(f, pending, [finalAnswer('Dale')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      `user: ${CHOICE_MARKER} «mar 6/10 15:30» (opción elegida: ${slotId})`,
+      'user: Caro Pérez',
+    ]);
+  });
+
+  it('en el historial, un id que no se reconoce no se le muestra al modelo: solo el título', async () => {
     const f = await setup();
     await addInbound(f, {
       type: 'interactive',
@@ -432,6 +452,19 @@ describe('createAgentResponder: las elecciones con botones se resuelven antes de
     await result;
 
     expect(conversationOf(requests[0]?.messages ?? [])).toEqual([`user: ${CHOICE_MARKER} «Semi manos»`, 'user: Ahora']);
+  });
+
+  it('el contexto de la vuelta dice si la clienta tiene nombre para el turno', async () => {
+    const named = await setup('Caro Pérez');
+    const anonymous = await setup(null);
+
+    const withName = reply(named, await pendingTexts(named, 'Hola'), [finalAnswer('Dale')]);
+    await withName.result;
+    const withoutName = reply(anonymous, await pendingTexts(anonymous, 'Hola'), [finalAnswer('Dale')]);
+    await withoutName.result;
+
+    expect(withName.requests[0]?.turnContext).toMatch(/Nombre para el turno: Caro Pérez \(ya está cargado/);
+    expect(withoutName.requests[0]?.turnContext).toMatch(/Nombre para el turno: no está cargado/);
   });
 });
 

@@ -8,12 +8,13 @@ import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
 import { handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, messages } from '../schema.js';
+import { parseChoiceId } from '../tools/choice-ids.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
 import { agentTools } from '../tools/index.js';
 import type { AgentTool } from '../tools/tool.js';
 import { isFallbackOutcome, notUnderstoodHandoffText, runAgent, type AgentRun } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
-import { describeInbound, outgoingToText } from './message-text.js';
+import { describeInbound, outgoingToText, type InboundDescription } from './message-text.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTurnContext } from './turn-context.js';
 
@@ -128,7 +129,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       const described = describeInbound(message.type, message.content);
       pendingMessages.push({ role: 'user', text: described.text });
       if (described.replyId) {
-        choices.push(await resolveChoice(db, { tenantId, now: at, timeZone: tenant.timeZone }, described.replyId));
+        choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
       }
     }
 
@@ -141,6 +142,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           timeZone: tenant.timeZone,
           isNewConversation,
           customerName: customer.name ?? customer.profileName,
+          bookingName: customer.name,
           preferredProfessionalName,
           choices,
         }),
@@ -214,9 +216,7 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
   for (const row of rows.reverse()) {
     if (row.direction === 'inbound') {
       const described = describeInbound(row.type, row.content);
-      // Una elección vieja se muestra con el título que tocó: ya se atendió en su momento.
-      const text = described.replyId ? `${described.text} «${described.replyTitle ?? ''}»` : described.text;
-      history.push({ role: 'user', text });
+      history.push({ role: 'user', text: historyText(described) });
     } else {
       const text = outgoingToText(row.content);
       if (text) history.push({ role: 'assistant', text });
@@ -225,6 +225,17 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
   // La API exige que la conversación empiece con la clienta.
   while (history[0]?.role === 'assistant') history.shift();
   return history;
+}
+
+/**
+ * Una elección vieja se muestra con el título que tocó y el id de la opción elegida (6.4): así, si
+ * después de elegir un horario hay que pedir el nombre, el modelo todavía tiene el id para reservar.
+ * Un id que el código no reconoce no se muestra: no le sirve al modelo para nada.
+ */
+function historyText(described: InboundDescription): string {
+  if (!described.replyId) return described.text;
+  const title = `${described.text} «${described.replyTitle ?? ''}»`;
+  return parseChoiceId(described.replyId) ? `${title} (opción elegida: ${described.replyId})` : title;
 }
 
 /**

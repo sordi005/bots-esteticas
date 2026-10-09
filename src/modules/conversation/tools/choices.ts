@@ -2,9 +2,12 @@ import { and, eq } from 'drizzle-orm';
 import { listVisibleServices } from '../../catalog/queries.js';
 import { professionals } from '../../catalog/schema.js';
 import { loadAvailabilityContext } from '../../scheduling/availability-context.js';
+import { occupiesSchedule } from '../../scheduling/appointment-state-machine.js';
 import { checkSlot } from '../../scheduling/booking.js';
+import { findCustomerAppointment } from '../../scheduling/customer-appointments.js';
 import type { Queryable } from '../../../shared/db.js';
 import { formatLocalSlot } from '../format.js';
+import { describeAppointmentStatus } from './appointment-content.js';
 import { parseChoiceId } from './choice-ids.js';
 import { describeDuration, describePrice } from './service-content.js';
 import type { ToolContext } from './tool.js';
@@ -19,7 +22,20 @@ import type { ToolContext } from './tool.js';
 
 const MINUTE_MS = 60_000;
 
-export type ChoiceContext = Pick<ToolContext, 'tenantId' | 'now' | 'timeZone'>;
+export type ChoiceContext = Pick<ToolContext, 'tenantId' | 'customerId' | 'now' | 'timeZone'>;
+
+/** Un turno de la clienta, ya resuelto: lo comparten el turno elegido y el botón "Sí, cancelar". */
+interface ResolvedAppointment {
+  /** El uuid del turno; el id para las herramientas es `turno:<uuid>`. */
+  turnoId: string;
+  servicioNombre: string;
+  profesionalNombre: string;
+  texto: string;
+  /** El estado en español ("confirmado", "pendiente de seña"…). */
+  estado: string;
+  /** Si todavía ocupa el horario: uno cancelado o vencido ya no se puede cancelar ni reprogramar. */
+  ocupaHorario: boolean;
+}
 
 export type ResolvedChoice =
   | {
@@ -51,6 +67,10 @@ export type ResolvedChoice =
       /** Inicio (UTC, ISO 8601) del último horario que ya se ofreció. */
       despuesDe: string;
     }
+  /** La clienta eligió uno de sus turnos (para cancelarlo o reprogramarlo). */
+  | ({ tipo: 'turno' } & ResolvedAppointment)
+  /** La clienta tocó "Sí, cancelar": confirmó cancelar este turno. */
+  | ({ tipo: 'cancelar' } & ResolvedAppointment)
   | { tipo: 'desconocido' };
 
 const UNKNOWN: ResolvedChoice = { tipo: 'desconocido' };
@@ -70,7 +90,7 @@ export async function resolveChoice(
 ): Promise<ResolvedChoice> {
   const choice = parseChoiceId(replyId);
   if (!choice) return UNKNOWN;
-  const { tenantId, now, timeZone } = ctx;
+  const { tenantId, customerId, now, timeZone } = ctx;
 
   switch (choice.kind) {
     case 'service': {
@@ -125,6 +145,27 @@ export async function resolveChoice(
         servicioId: service.id,
         profesionalId: professionalId,
         despuesDe: after.toISOString(),
+      };
+    }
+
+    case 'appointment':
+    case 'cancel': {
+      // El turno tiene que ser de ESTA clienta, no solo del negocio: un id de otra persona
+      // (o de una conversación vieja) no resuelve nada (regla 2).
+      const appointment = await findCustomerAppointment(db, {
+        tenantId,
+        customerId,
+        appointmentId: choice.appointmentId,
+      });
+      if (!appointment) return UNKNOWN;
+      return {
+        tipo: choice.kind === 'appointment' ? 'turno' : 'cancelar',
+        turnoId: appointment.id,
+        servicioNombre: appointment.serviceName,
+        profesionalNombre: appointment.professionalName,
+        texto: formatLocalSlot(appointment.start, timeZone),
+        estado: describeAppointmentStatus(appointment.status),
+        ocupaHorario: occupiesSchedule(appointment.status),
       };
     }
   }
