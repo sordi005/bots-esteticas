@@ -96,6 +96,10 @@ export interface HandOffResult {
 export async function handOff(db: NodePgDatabase, input: HandOffInput): Promise<HandOffResult> {
   const { tenantId, conversationId, reason, now } = input;
 
+  // Antes de la transacción: si no se puede calcular, no queda una derivación hecha de la que el
+  // modelo no se entera (reintentaría y quedaría repetida).
+  const when = await describeWhenHumanReplies(db, { tenantId, now });
+
   const handoffId = await db.transaction(async (tx) => {
     const paused = await tx
       .update(conversations)
@@ -121,5 +125,5 @@ export async function handOff(db: NodePgDatabase, input: HandOffInput): Promise<
     return handoff.id;
   });
 
-  return { handoffId, when: await describeWhenHumanReplies(db, { tenantId, now }) };
+  return { handoffId, when };
 }
