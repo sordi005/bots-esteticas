@@ -38,6 +38,13 @@ export function notUnderstoodHandoffText(when: string): string {
   return NOT_UNDERSTOOD_HANDOFF_TEXT.replace('{cuándo}', when);
 }
 
+/**
+ * Lo que se le dice al modelo cuando su respuesta promete una persona (`derivada=true`) y en la vuelta
+ * no se derivó nada (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export const UNFULFILLED_HANDOFF_NOTICE =
+  'En tu respuesta pusiste derivada=true pero no llamaste a derivar_a_persona y no se derivó la conversación. Si corresponde derivar, llamala ahora con el motivo y un resumen; si no, corregí el texto para no prometer que la atiende una persona.';
+
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -53,7 +60,10 @@ const LIST_BUTTON_LABEL = 'Ver opciones';
 const finalAnswerSchema = z.object({
   texto: z.string().trim().min(1),
   opciones: z.array(z.string()),
+  derivada: z.boolean(),
 });
+
+type FinalAnswer = z.infer<typeof finalAnswerSchema>;
 
 export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -68,8 +78,13 @@ export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         'Ids de las opciones que la clienta puede elegir con un botón o una fila de lista. Solo ids que devolvieron las herramientas en esta respuesta. Lista vacía si no hay nada para elegir.',
     },
+    derivada: {
+      type: 'boolean',
+      description:
+        'true si en el texto le decís a la clienta que la va a atender o le va a responder una persona del equipo; false si no.',
+    },
   },
-  required: ['texto', 'opciones'],
+  required: ['texto', 'opciones', 'derivada'],
   additionalProperties: false,
 };
 
@@ -125,24 +140,36 @@ function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   };
 }
 
+/** Lo que devuelve una herramienta ejecutada: el resultado para el modelo y si derivó la conversación. */
+interface ToolExecution {
+  result: LlmToolResult;
+  handedOff: boolean;
+}
+
 /** Ejecuta una herramienta pedida por el modelo y arma el resultado que se le devuelve. */
 async function executeToolCall(
   call: LlmToolCall,
   tools: Map<string, AgentTool<unknown>>,
   ctx: ToolContext,
   offered: Map<string, OfferableOption>,
-): Promise<LlmToolResult> {
+): Promise<ToolExecution> {
   const tool = tools.get(call.name);
   if (!tool) {
     return {
-      toolCallId: call.id,
-      content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
-      isError: true,
+      result: {
+        toolCallId: call.id,
+        content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
+        isError: true,
+      },
+      handedOff: false,
     };
   }
   const result = await runTool(tool, call.input, ctx);
   for (const option of result.options) offered.set(option.id, option);
-  return { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false };
+  return {
+    result: { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false },
+    handedOff: result.handedOff ?? false,
+  };
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
@@ -178,7 +205,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
 }
 
 /** Interpreta la salida final del modelo: null si no tiene la forma pedida. */
-function parseFinalAnswer(text: string): z.infer<typeof finalAnswerSchema> | null {
+function parseFinalAnswer(text: string): FinalAnswer | null {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -209,6 +236,11 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let llmCalls = 0;
   let hitToolLimit = false;
+  // ¿Alguna herramienta derivó la conversación en esta vuelta? Lo dice el código, no el modelo (6.4).
+  let handedOff = false;
+  // Solo se le hace notar UNA vez que prometió una persona sin derivar.
+  let corrected = false;
+  let answer: FinalAnswer | null;
   let response: LlmResponse;
 
   for (;;) {
@@ -228,21 +260,40 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     hitToolLimit ||= !allowTools;
 
     // Una respuesta cortada o rechazada puede traer herramientas a medias: no se ejecutan.
-    if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) break;
+    if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
+      answer =
+        response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
+      // Promete una persona y nadie fue avisado (6.4): una vez se lo hace notar para que derive o corrija el texto.
+      // Un turno que quedó con herramientas pedidas no admite un mensaje de texto a continuación: la API exige sus resultados.
+      if (answer?.derivada && !handedOff && !corrected && response.toolCalls.length === 0) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: UNFULFILLED_HANDOFF_NOTICE },
+        );
+        continue;
+      }
+      break;
+    }
 
     const room = MAX_TOOL_CALLS_PER_REPLY - executedTools.length;
-    const results = await Promise.all(
-      response.toolCalls.map((call, index): Promise<LlmToolResult> => {
+    const executions = await Promise.all(
+      response.toolCalls.map((call, index): Promise<ToolExecution> => {
         if (index >= room) {
           return Promise.resolve({
-            toolCallId: call.id,
-            content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
-            isError: true,
+            result: {
+              toolCallId: call.id,
+              content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
+              isError: true,
+            },
+            handedOff: false,
           });
         }
         return executeToolCall(call, toolsByName, toolContext, offered);
       }),
     );
+    const results = executions.map((execution) => execution.result);
+    handedOff ||= executions.some((execution) => execution.handedOff);
     executedTools.push(...response.toolCalls.slice(0, room).map((call) => call.name));
 
     messages.push({ role: 'assistant_turn', turn: response.assistantTurn }, { role: 'tool_results', results });
@@ -264,8 +315,11 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   if (response.stopReason === 'refusal') return fallback('fallback_refusal');
   if (response.stopReason === 'max_tokens') return fallback('fallback_max_tokens');
 
-  const answer = parseFinalAnswer(response.text);
   if (!answer) return fallback('fallback_invalid_output');
+  // Sigue prometiendo una persona que nadie sabe que tiene que atenderla, ni después del aviso.
+  if (answer.derivada && !handedOff) return fallback('fallback_unfulfilled_handoff');
+  // El caso inverso no deja a nadie esperando en falso: no se corrige.
+  if (!answer.derivada && handedOff) logger.debug('La respuesta no dice que derivó, pero la conversación se derivó');
 
   const requested = new Set(answer.opciones);
   const chosen: OfferableOption[] = [];

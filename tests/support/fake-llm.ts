@@ -29,9 +29,14 @@ function base(overrides: Partial<LlmResponse>): LlmResponse {
   };
 }
 
-/** La respuesta final del modelo, con la forma de `{ texto, opciones }`. */
+/** La respuesta final del modelo, con la forma de `{ texto, opciones, derivada }`: no promete una persona. */
 export function finalAnswer(texto: string, opciones: string[] = [], overrides: Partial<LlmResponse> = {}): LlmResponse {
-  return base({ text: JSON.stringify({ texto, opciones }), ...overrides });
+  return base({ text: JSON.stringify({ texto, opciones, derivada: false }), ...overrides });
+}
+
+/** La respuesta final de un modelo que le dice a la clienta que la va a atender una persona (`derivada: true`). */
+export function promisedHandoffAnswer(texto: string, overrides: Partial<LlmResponse> = {}): LlmResponse {
+  return base({ text: JSON.stringify({ texto, opciones: [], derivada: true }), ...overrides });
 }
 
 /** El modelo pide herramientas. */

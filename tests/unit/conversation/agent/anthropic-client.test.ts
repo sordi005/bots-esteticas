@@ -280,6 +280,49 @@ describe('createAnthropicLlmClient: el ciclo de herramientas', () => {
   });
 });
 
+describe('createAnthropicLlmClient: un aviso del sistema dentro de la vuelta (system_note)', () => {
+  it('va como mensaje de la clienta con el rótulo del sistema, para que los roles sigan alternando después del turno del asistente', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: '¿Cuánto sale el semi?' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Corregí el texto.' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string; content: unknown }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'system', 'assistant', 'user']);
+    expect(messages.at(-1)?.content).toBe('Contexto del sistema (no lo escribió la clienta): Corregí el texto.');
+  });
+
+  it('no cuenta como mensaje de la clienta: el contexto de la vuelta sigue yendo después de su último mensaje', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: 'Hola' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Aviso.' },
+          { role: 'assistant', text: 'Respuesta vieja' },
+          { role: 'user', text: 'Chau' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'system']);
+  });
+});
+
 describe('createAnthropicLlmClient: la respuesta final y sus motivos de fin', () => {
   it('une los bloques de texto de la respuesta final', async () => {
     const { fetch } = fakeFetch([
