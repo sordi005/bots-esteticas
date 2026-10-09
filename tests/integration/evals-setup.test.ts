@@ -24,6 +24,8 @@ const { db } = database;
 const SEMI = 'Esmaltado semipermanente';
 // El martes 13/10 a las 17:00 con Mica es válido en el seed (martes, bloque de 15 a 20).
 const TUESDAY = '2026-10-13 17:00';
+/** Una clienta con turnos tiene nombre: reservar lo guarda siempre. */
+const NAMED = 'Caro Pérez';
 
 beforeAll(() => seedEsteticaEjemplo(db));
 afterAll(() => database.close());
@@ -95,7 +97,7 @@ describe('preparar: el nombre', () => {
 
 describe('preparar: los turnos', () => {
   it('un turno de la clienta se crea con booking.ts: queda pendiente de seña y es lo que lista la herramienta', async () => {
-    const { result, requests } = run(caseWith({ mensajes: ['qué turnos tengo?'], preparar: { turnos: [withAppointment()] } }), [
+    const { result, requests } = run(caseWith({ mensajes: ['qué turnos tengo?'], preparar: { nombre: NAMED, turnos: [withAppointment()] } }), [
       callTools([{ name: 'listar_turnos_de_la_clienta' }]),
       finalAnswer('Tenés un turno'),
     ]);
@@ -113,7 +115,7 @@ describe('preparar: los turnos', () => {
 
   it('un turno de otra clienta aparece en el estado como de otra y no en los turnos de la clienta', async () => {
     const turnos = [withAppointment({ clave: 'maria', otraClienta: 'María González', inicio: '2026-10-14 11:00' })];
-    const { result, requests } = run(caseWith({ preparar: { turnos } }), [
+    const { result, requests } = run(caseWith({ preparar: { nombre: NAMED, turnos } }), [
       callTools([{ name: 'listar_turnos_de_la_clienta' }]),
       finalAnswer('No tenés turnos'),
     ]);
@@ -127,7 +129,7 @@ describe('preparar: los turnos', () => {
 
   it('con la seña aprobada el turno queda confirmado y la seña paga', async () => {
     const { result, requests } = run(
-      caseWith({ mensajes: ['mis turnos'], preparar: { turnos: [withAppointment({ senaAprobada: true })] } }),
+      caseWith({ mensajes: ['mis turnos'], preparar: { nombre: NAMED, turnos: [withAppointment({ senaAprobada: true })] } }),
       [callTools([{ name: 'listar_turnos_de_la_clienta' }]), finalAnswer('ok')],
     );
     const evaluated = await result;
@@ -139,7 +141,7 @@ describe('preparar: los turnos', () => {
 
   it('un turno reprogramado queda en su último inicio y ya usó la reprogramación que conserva la seña', async () => {
     const turnos = [withAppointment({ senaAprobada: true, reprogramadoDesde: ['2026-10-13 15:00'] })];
-    const evalCase = caseWith({ mensajes: ['pasalo al miércoles'], preparar: { turnos } });
+    const evalCase = caseWith({ mensajes: ['pasalo al miércoles'], preparar: { nombre: NAMED, turnos } });
     const { result, requests } = run(evalCase, [
       callTools([{ name: 'listar_turnos_de_la_clienta' }]),
       (request) =>
@@ -166,7 +168,7 @@ describe('preparar: los turnos', () => {
 
   it('sin la reprogramación usada, la misma herramienta sí mueve el turno', async () => {
     const turnos = [withAppointment({ senaAprobada: true })];
-    const { result } = run(caseWith({ mensajes: ['pasalo al miércoles'], preparar: { turnos } }), [
+    const { result } = run(caseWith({ mensajes: ['pasalo al miércoles'], preparar: { nombre: NAMED, turnos } }), [
       callTools([{ name: 'listar_turnos_de_la_clienta' }]),
       (request) =>
         callTools([
@@ -188,7 +190,7 @@ describe('preparar: los turnos', () => {
   });
 
   it('con la hora movida los turnos también se crean unos minutos antes: la seña todavía no venció', async () => {
-    const { result } = run(caseWith({ preparar: { turnos: [withAppointment()] }, ahora: '2026-10-08 20:30' }));
+    const { result } = run(caseWith({ preparar: { nombre: NAMED, turnos: [withAppointment()] }, ahora: '2026-10-08 20:30' }));
     const evaluated = await result;
 
     expect(evaluated.estado.turnos[0]?.estado).toBe('PENDING_DEPOSIT');
@@ -200,28 +202,28 @@ describe('preparar: errores del caso', () => {
     const before = await countAppointments();
     const turnos = [withAppointment({ clave: 'uno' }), withAppointment({ clave: 'dos', inicio: '2026-10-13 17:15' })];
 
-    await expect(run(caseWith({ preparar: { turnos } })).result).rejects.toThrow(EvalPreparationError);
-    await expect(run(caseWith({ preparar: { turnos } })).result).rejects.toThrow(/no se pudo reservar.*slot_taken/);
+    await expect(run(caseWith({ preparar: { nombre: NAMED, turnos } })).result).rejects.toThrow(EvalPreparationError);
+    await expect(run(caseWith({ preparar: { nombre: NAMED, turnos } })).result).rejects.toThrow(/no se pudo reservar.*slot_taken/);
 
     expect(await countAppointments()).toBe(before);
   });
 
   it('un turno en un horario que no existe en el seed (un domingo) falla con un error de preparación', async () => {
-    const evalCase = caseWith({ nombre: 'domingo', preparar: { turnos: [withAppointment({ inicio: '2026-10-11 10:00' })] } });
+    const evalCase = caseWith({ nombre: 'domingo', preparar: { nombre: NAMED, turnos: [withAppointment({ inicio: '2026-10-11 10:00' })] } });
 
     await expect(run(evalCase).result).rejects.toThrow(/«domingo».*2026-10-11 10:00.*slot_unavailable/);
   });
 
   it('un servicio o una profesional que no están en el seed', async () => {
-    const service = caseWith({ preparar: { turnos: [withAppointment({ servicio: 'Masaje' })] } });
-    const professional = caseWith({ preparar: { turnos: [withAppointment({ profesional: 'Lu' })] } });
+    const service = caseWith({ preparar: { nombre: NAMED, turnos: [withAppointment({ servicio: 'Masaje' })] } });
+    const professional = caseWith({ preparar: { nombre: NAMED, turnos: [withAppointment({ profesional: 'Lu' })] } });
 
     await expect(run(service).result).rejects.toThrow(/No existe el servicio «Masaje»/);
     await expect(run(professional).result).rejects.toThrow(/No existe la profesional «Lu»/);
   });
 
   it('una fecha mal escrita', async () => {
-    const evalCase = caseWith({ preparar: { turnos: [withAppointment({ inicio: '13/10 17:00' })] } });
+    const evalCase = caseWith({ preparar: { nombre: NAMED, turnos: [withAppointment({ inicio: '13/10 17:00' })] } });
 
     await expect(run(evalCase).result).rejects.toThrow(/AAAA-MM-DD HH:MM/);
   });
@@ -240,6 +242,18 @@ describe('preparar: errores del caso', () => {
     await expect(run(evalCase).result).rejects.toThrow(/no está libre según el seed/);
   });
 
+  it('una clienta con turnos propios y sin nombre es un caso inconsistente: reservar siempre guarda el nombre', async () => {
+    const evalCase = caseWith({ nombre: 'sin_nombre', preparar: { turnos: [withAppointment()] } });
+
+    await expect(run(evalCase).result).rejects.toThrow(/«sin_nombre».*tiene turnos pero no tiene nombre/);
+  });
+
+  it('los turnos de otra clienta no piden nombre para la clienta del caso', async () => {
+    const turnos = [withAppointment({ clave: 'maria', otraClienta: 'María González' })];
+
+    await expect(run(caseWith({ preparar: { nombre: NAMED, turnos } })).result).resolves.toBeDefined();
+  });
+
   it('una elección que nombra un turno que el caso no preparó', async () => {
     const evalCase = caseWith({ mensajes: [{ eleccion: { tipo: 'cancelar', turno: 'fantasma' }, titulo: 'Sí, cancelar' }] });
 
@@ -249,7 +263,7 @@ describe('preparar: errores del caso', () => {
   it('una elección que toca el turno de otra clienta no es válida (los botones son de la clienta del caso)', async () => {
     const evalCase = caseWith({
       mensajes: [{ eleccion: { tipo: 'cancelar', turno: 'maria' }, titulo: 'Sí, cancelar' }],
-      preparar: { turnos: [withAppointment({ clave: 'maria', otraClienta: 'María González' })] },
+      preparar: { nombre: NAMED, turnos: [withAppointment({ clave: 'maria', otraClienta: 'María González' })] },
     });
 
     await expect(run(evalCase).result).rejects.toThrow(/«maria».*es de otra clienta/);
@@ -311,7 +325,7 @@ describe('mensajes que no son texto', () => {
   it('«Sí, cancelar» llega como la elección resuelta de su turno', async () => {
     const evalCase = caseWith({
       mensajes: [{ eleccion: { tipo: 'cancelar', turno: 'martes' }, titulo: 'Sí, cancelar' }],
-      preparar: { turnos: [withAppointment()] },
+      preparar: { nombre: NAMED, turnos: [withAppointment()] },
     });
     const { result, requests } = run(evalCase);
     await result;
@@ -336,7 +350,7 @@ describe('mensajes que no son texto', () => {
   it('un turno tocado llega como su turno_id', async () => {
     const evalCase = caseWith({
       mensajes: [{ eleccion: { tipo: 'turno', turno: 'martes' }, titulo: 'mar 13/10 17:00' }],
-      preparar: { turnos: [withAppointment()] },
+      preparar: { nombre: NAMED, turnos: [withAppointment()] },
     });
     const { result, requests } = run(evalCase);
     await result;
@@ -419,7 +433,7 @@ describe('la limpieza', () => {
   it('después de cada caso, los turnos que creó quedan borrados y el horario vuelve a estar libre', async () => {
     const before = await countAppointments();
     const evalCase = caseWith({
-      preparar: { turnos: [withAppointment(), withAppointment({ clave: 'otra', otraClienta: 'María González', inicio: '2026-10-14 11:00' })] },
+      preparar: { nombre: NAMED, turnos: [withAppointment(), withAppointment({ clave: 'otra', otraClienta: 'María González', inicio: '2026-10-14 11:00' })] },
     });
 
     await run(evalCase).result;

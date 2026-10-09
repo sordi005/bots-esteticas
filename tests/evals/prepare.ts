@@ -65,6 +65,12 @@ export async function prepareCase(deps: PrepareDependencies, evalCase: EvalCase,
   const fail = (message: string) =>
     new EvalPreparationError(`No se pudo preparar el caso «${evalCase.nombre}»: ${message}`);
 
+  // Reservar un turno siempre guarda el nombre (crear_reserva lo exige): una clienta con turnos sin
+  // nombre es un caso imposible, y le haría creer al agente que está en medio de una reserva nueva.
+  if (setup.nombre === undefined && (setup.turnos ?? []).some((turno) => turno.otraClienta === undefined)) {
+    throw fail('la clienta tiene turnos pero no tiene nombre: reservar siempre guarda el nombre (preparar.nombre)');
+  }
+
   const [customer] = await db
     .insert(customers)
     .values({ tenantId, phone: randomPhone(), name: setup.nombre ?? null })

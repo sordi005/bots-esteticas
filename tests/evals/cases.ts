@@ -37,6 +37,12 @@ export type { EvalCase } from './evaluate.js';
 
 const SEMI = 'Esmaltado semipermanente';
 
+/**
+ * El nombre de la clienta de los casos que ya la conocen. Una clienta con turnos tiene nombre:
+ * reservar lo guarda siempre (el corredor lo exige).
+ */
+const CLIENT_NAME = 'Caro Pérez';
+
 /** El viernes 9/10 a las 15:00 con Mica: libre en el seed, y el horario que tocan varios casos. */
 const FRIDAY_15_WITH_MICA: EvalChoice = {
   tipo: 'horario',
@@ -152,7 +158,7 @@ export const evalCases: EvalCase[] = [
     // hasta H9 el asistente no inventa alias ni link para pagarla.
     nombre: 'reserva_completa',
     mensajes: [{ eleccion: FRIDAY_15_WITH_MICA, titulo: 'vie 9/10 15:00' }],
-    preparar: { nombre: 'Caro Pérez' },
+    preparar: { nombre: CLIENT_NAME },
     espera: {
       herramientas: ['crear_reserva'],
       menciona: ['5.400'],
@@ -200,7 +206,7 @@ export const evalCases: EvalCase[] = [
     nombre: 'horario_ocupado',
     mensajes: [{ eleccion: FRIDAY_15_WITH_MICA, titulo: 'vie 9/10 15:00' }],
     preparar: {
-      nombre: 'Caro Pérez',
+      nombre: CLIENT_NAME,
       turnos: [
         {
           clave: 'maria',
@@ -240,7 +246,7 @@ export const evalCases: EvalCase[] = [
   {
     nombre: 'mis_turnos',
     mensajes: ['qué turnos tengo?'],
-    preparar: { turnos: [TUESDAY_APPOINTMENT] },
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
     espera: {
       herramientas: ['listar_turnos_de_la_clienta'],
       menciona: ['13/10'],
@@ -285,7 +291,7 @@ export const evalCases: EvalCase[] = [
     // 4.6: antes de cancelar le pide que lo confirme, con el botón «Sí, cancelar».
     nombre: 'cancelar_pide_confirmacion',
     mensajes: ['quiero cancelar mi turno del martes'],
-    preparar: { turnos: [TUESDAY_APPOINTMENT] },
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
     espera: {
       herramientas: ['listar_turnos_de_la_clienta', 'cancelar_turno'],
       verifica: (resultado) =>
@@ -299,6 +305,7 @@ export const evalCases: EvalCase[] = [
     nombre: 'cancelar_confirmado',
     mensajes: [{ eleccion: { tipo: 'cancelar', turno: 'martes' }, titulo: 'Sí, cancelar' }],
     preparar: {
+      nombre: CLIENT_NAME,
       turnos: [TUESDAY_APPOINTMENT],
       historial: [
         { clienta: 'quiero cancelar mi turno del martes' },
@@ -320,6 +327,7 @@ export const evalCases: EvalCase[] = [
     nombre: 'cancelar_fuera_de_plazo',
     mensajes: ['quiero cancelar mi turno de mañana'],
     preparar: {
+      nombre: CLIENT_NAME,
       turnos: [{ clave: 'viernes', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 09:00' }],
     },
     espera: {
@@ -339,7 +347,7 @@ export const evalCases: EvalCase[] = [
     // 5.4: ofrece horarios del miércoles con la misma profesional del turno. Todavía no mueve nada.
     nombre: 'reprogramar_ofrece',
     mensajes: ['puedo pasar mi turno del martes al miércoles?'],
-    preparar: { turnos: [TUESDAY_APPOINTMENT] },
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
     espera: {
       herramientas: ['listar_turnos_de_la_clienta', 'consultar_disponibilidad'],
       verifica: (resultado) =>
@@ -354,7 +362,7 @@ export const evalCases: EvalCase[] = [
     // 4.6: elegir el horario nuevo ya es la confirmación.
     nombre: 'reprogramar_confirmado',
     mensajes: [{ eleccion: WEDNESDAY_1530_WITH_MICA, titulo: 'mié 14/10 15:30' }],
-    preparar: { turnos: [TUESDAY_APPOINTMENT], historial: RESCHEDULE_HISTORY },
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT], historial: RESCHEDULE_HISTORY },
     espera: {
       herramientas: ['reprogramar_turno'],
       verifica: (resultado) =>
@@ -370,6 +378,7 @@ export const evalCases: EvalCase[] = [
     nombre: 'reprogramar_sin_reprogramaciones',
     mensajes: [{ eleccion: WEDNESDAY_1530_WITH_MICA, titulo: 'mié 14/10 15:30' }],
     preparar: {
+      nombre: CLIENT_NAME,
       turnos: [{ ...TUESDAY_APPOINTMENT, senaAprobada: true, reprogramadoDesde: ['2026-10-13 15:00'] }],
       historial: RESCHEDULE_HISTORY,
     },
