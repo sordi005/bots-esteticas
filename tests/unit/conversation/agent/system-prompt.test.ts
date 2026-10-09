@@ -144,6 +144,33 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(image).toMatch(/derivá con el motivo imagen/);
   });
 
+  it('nunca dice que derivó, pasó la consulta o que alguien la va a contactar sin haber llamado a derivar_a_persona', () => {
+    // Lo encontró una evaluación: ante una queja contestó «Ya le paso tu reclamo a una persona» sin derivar.
+    const rule = /Nunca digas que le pasaste la consulta[^\n]*/.exec(prompt)?.[0] ?? '';
+
+    expect(rule).toMatch(/que la derivaste o que alguien del equipo la va a contactar/);
+    expect(rule).toMatch(/si no llamaste a derivar_a_persona en esta misma respuesta/);
+    expect(rule).toMatch(/derivada=true/);
+    expect(rule).toMatch(/Si corresponde derivar, llamala\./);
+  });
+
+  it('llama a derivar_a_persona solo si una regla lo pide y con un resumen real; nunca para probar, por las dudas ni con relleno', () => {
+    // Lo encontró una evaluación: derivaciones con resumen «placeholder» e «Ignorar» que pausaban el chat.
+    const rule = /Llamá a derivar_a_persona solo cuando[^\n]*/.exec(prompt)?.[0] ?? '';
+
+    expect(rule).toMatch(/solo cuando una de estas reglas lo pide/);
+    expect(rule).toMatch(/con un resumen real de lo que necesita la clienta/);
+    expect(rule).toMatch(/Nunca la llames para probar, por las dudas, ni con un resumen de relleno/);
+    expect(rule).toMatch(/deja al asistente callado en este chat/);
+  });
+
+  it('las dos reglas están en la parte de cómo derivar, después de la lista de cuándo', () => {
+    const how = prompt.slice(prompt.indexOf('Cómo derivar:'), prompt.indexOf('## Reservar, cancelar y reprogramar turnos'));
+
+    expect(how).toContain('Nunca digas que le pasaste la consulta');
+    expect(how).toContain('Llamá a derivar_a_persona solo cuando');
+  });
+
   it('sigue siendo idéntico entre llamadas del mismo negocio, para la caché del proveedor', () => {
     expect(buildSystemPrompt({ ...example })).toBe(prompt);
   });
@@ -203,6 +230,41 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(booking).toMatch(/servicio y la profesional de ese turno/);
     expect(booking).toMatch(/reprogramar_turno/);
     expect(booking).toMatch(/elegir el horario ya es la confirmación/i);
+  });
+
+  it('reservar: si crear_reserva dice que falta que la clienta elija el horario, se lo ofrece como opción sin darlo por hecho', () => {
+    const reserve = section('Reservar:', 'Cancelar:');
+
+    expect(reserve).toMatch(/crear_reserva responde que falta que la clienta elija el horario/);
+    expect(reserve).toMatch(/ofrecéselo como opción[^.]*frase corta[^.]*¿Te lo reservo\?/s);
+    expect(reserve).toMatch(/sin darlo por hecho/);
+  });
+
+  it('reprogramar: si reprogramar_turno dice que falta que elija el horario, se lo ofrece como opción sin darlo por hecho', () => {
+    const reschedule = section('Reprogramar:', 'Cuando no corresponde:');
+
+    expect(reschedule).toMatch(/reprogramar_turno responde que falta que la clienta elija el horario/);
+    expect(reschedule).toMatch(/ofrecéselo como opción[^.]*frase corta[^.]*¿Lo paso a ese horario\?/s);
+    expect(reschedule).toMatch(/sin darlo por hecho/);
+  });
+
+  it('cancelar: el botón que se ofrece es el opcionId que devuelve cancelar_turno, no el id del turno', () => {
+    const cancel = section('Cancelar:', 'Reprogramar:');
+
+    expect(cancel).toMatch(/botón[^.]*es el opcionId que devuelve cancelar_turno, no el id del turno/);
+  });
+
+  it('cancelar: para elegir entre varios turnos, las opciones son el opcionId de cada turno de la lista', () => {
+    const cancel = section('Cancelar:', 'Reprogramar:');
+
+    expect(cancel).toMatch(/opcionId de cada turno/);
+  });
+
+  it('en las elecciones, el id de cada opción es el campo opcionId de la herramienta y no el id del servicio o del turno', () => {
+    const choices = section('## Elecciones con botones o lista', '## Derivar a una persona');
+
+    expect(choices).toMatch(/campo «opcionId»/);
+    expect(choices).toMatch(/no el id del servicio, que es para las herramientas/);
   });
 
   it('si cancelar o reprogramar derivaron: explica la política con amabilidad, dice cuándo responde una persona y no discute ni promete excepciones', () => {

@@ -32,17 +32,19 @@ const BOOKING_RULES = `Reservar:
 - Para reservar necesitás el id de un horario que devolvió consultar_disponibilidad o que la clienta eligió con un botón (en ese caso el contexto de la vuelta te lo da como horario_id). Pasalo tal cual a crear_reserva: nunca inventes ni armes un id.
 - Si el contexto dice que la clienta no tiene un nombre cargado, pedile el nombre antes de reservar y pasalo en «nombre». Si ya está cargado, no se lo pidas de nuevo.
 - Solo decí «reservado», «anotado», «agendado» o «te guardo» cuando crear_reserva respondió reservado=true. Si no, no lo des por reservado.
+- Solo se reserva un horario que la clienta eligió con un botón o una lista. Si crear_reserva responde que falta que la clienta elija el horario (motivo falta_que_elija), no reservó nada: ofrecéselo como opción (poné en «opciones» el opcionId de «horario») con una frase corta, como «¿Te lo reservo?», sin darlo por hecho.
 - Si el horario se ocupó, avisale, volvé a consultar la disponibilidad y ofrecele otros. Un servicio con consulta previa no se reserva: derivá con consulta_previa.
 - Decí el servicio, la profesional, el día, la hora y el estado tal cual los devuelve la herramienta.
 - ${DEPOSIT_RULES}
 
 Cancelar:
-- Identificá el turno con listar_turnos_de_la_clienta. Si tiene varios y no queda claro cuál, ofrecelos para que elija (poné en «opciones» los ids de esa lista).
-- Llamá a cancelar_turno con confirmada=false: no cancela nada, te devuelve el resumen del turno y el botón «Sí, cancelar» para que se lo ofrezcas. Llamá con confirmada=true solo cuando la clienta confirmó: tocó el botón (el contexto te lo dice) o dijo que sí con claridad.
+- Identificá el turno con listar_turnos_de_la_clienta. Si tiene varios y no queda claro cuál, ofrecelos para que elija (poné en «opciones» el opcionId de cada turno de esa lista).
+- Llamá a cancelar_turno con confirmada=false: no cancela nada, te devuelve el resumen del turno y el botón «Sí, cancelar» para que se lo ofrezcas. El id del botón que ofrecés en «opciones» es el opcionId que devuelve cancelar_turno, no el id del turno. Llamá con confirmada=true solo cuando la clienta confirmó: tocó el botón (el contexto te lo dice) o dijo que sí con claridad.
 - Solo decí que quedó cancelado cuando cancelar_turno respondió cancelado=true.
 
 Reprogramar:
 - Identificá el turno (listar_turnos_de_la_clienta, o el que eligió con un botón), consultá la disponibilidad con el servicio y la profesional de ese turno y ofrecele los horarios. Cuando elija uno, llamá a reprogramar_turno con el turno_id y el horario_id. Elegir el horario ya es la confirmación: no le pidas otra.
+- Solo se mueve el turno a un horario que la clienta eligió con un botón o una lista. Si reprogramar_turno responde que falta que la clienta elija el horario (motivo falta_que_elija), no cambió nada: ofrecéselo como opción (poné en «opciones» el opcionId de «horario») con una frase corta, como «¿Lo paso a ese horario?», sin darlo por hecho.
 - Solo decí que quedó reprogramado cuando reprogramar_turno respondió reprogramado=true. Cambiar de profesional o de servicio no se hace por acá: ofrecele que lo vea una persona del equipo y derivá (excepcion) si acepta.
 
 Cuando no corresponde:
@@ -63,6 +65,8 @@ const HANDOFF_RULES = `Con derivar_a_persona le pasás la conversación a una pe
 - Un servicio que no está en el catálogo, o un dato que no tenés cargado, no se derivan de entrada: decile que no lo tenés y ofrecele que la ayude una persona del equipo. Derivá (fuera_de_catalogo) solo si acepta o insiste.
 
 Cómo derivar:
+- Nunca digas que le pasaste la consulta a una persona, que la derivaste o que alguien del equipo la va a contactar si no llamaste a derivar_a_persona en esta misma respuesta (o si una herramienta no te devolvió derivada=true). Si corresponde derivar, llamala.
+- Llamá a derivar_a_persona solo cuando una de estas reglas lo pide, con un resumen real de lo que necesita la clienta. Nunca la llames para probar, por las dudas, ni con un resumen de relleno: deja al asistente callado en este chat.
 - Si la clienta cuenta algo de su salud, no le pidas ni le repitas detalles: no preguntes por síntomas, diagnósticos ni condiciones. Derivá con tema_sensible y en el resumen escribí solo «consulta sensible», sin ningún dato de salud.
 - Después de derivar, decile que una persona del equipo le responde por este mismo chat, y completá la frase con el texto «cuando» que devuelve la herramienta (por ejemplo «te va a responder por acá » y ese texto, tal cual). No le prometas nada más: ni que ya está resuelto, ni una hora distinta. «opciones» va vacía.`;
 
@@ -89,7 +93,7 @@ export function buildSystemPrompt(tenant: PromptTenant): string {
 - Nunca nombres servicios de memoria, ni siquiera como ejemplo: los únicos que existen son los que devuelve buscar_servicios. Si la clienta no dijo qué servicio quiere, buscá el catálogo sin texto y ofrecéselo.
 
 ## Elecciones con botones o lista
-- Cuando la clienta tenga que elegir un servicio o un horario, poné en «opciones» los ids que te devolvieron las herramientas en esta respuesta, y en «texto» una frase corta que la invite a elegir. No repitas las opciones en el texto: ya las ve como botones o lista.
+- Cuando la clienta tenga que elegir un servicio o un horario, poné en «opciones» los ids que te devolvieron las herramientas en esta respuesta, y en «texto» una frase corta que la invite a elegir. Cada herramienta trae lo que se puede elegir en un campo «opcionId»: ese es el id que va en «opciones» (no el id del servicio, que es para las herramientas). No repitas las opciones en el texto: ya las ve como botones o lista.
 - Ofrecé pocas opciones (lo ideal son 3; nunca más de 10). Solo ids que salieron de una herramienta en esta respuesta: cualquier otro se descarta. Si no hay nada para elegir, «opciones» va vacía.
 - Si la clienta eligió con un botón o una lista, el contexto de la vuelta te dice qué eligió, ya verificado por el sistema. Tomalo tal cual: no interpretes el texto del botón. Si te dice que el horario ya no está libre, o que pidió ver más horarios, volvé a consultar la disponibilidad.
 - Cuando elige uno de sus turnos o toca «Sí, cancelar», el contexto te da el turno_id para las herramientas de turnos.
