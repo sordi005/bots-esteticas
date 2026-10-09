@@ -55,7 +55,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 10 primeras evaluaciones de H7, en orden', () => {
+  it('son las 10 primeras evaluaciones de H7 más la que sumó la prueba manual, en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -67,6 +67,7 @@ describe('evalCases', () => {
       'disponibilidad_viernes_tarde',
       'feriado',
       'inyeccion_precio',
+      'turno_sin_servicio',
     ]);
   });
 

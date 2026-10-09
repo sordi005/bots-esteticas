@@ -72,6 +72,18 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
     expect(buildSystemPrompt(example)).toMatch(/precio real.*buscar_servicios/s);
   });
 
+  it('no nombra servicios de memoria, ni como ejemplo: los busca en el catálogo', () => {
+    // Lo encontró la prueba manual: a "hola" contestó "por ejemplo, manicura, depilación o
+    // masajes" sin llamar a ninguna herramienta, y masajes no está en el catálogo.
+    expect(buildSystemPrompt(example)).toMatch(/nunca nombres servicios de memoria/i);
+  });
+
+  it('cuando la clienta elige un horario, no le dice que quedó anotado', () => {
+    // Lo encontró la prueba manual: "Perfecto, anotado" suena a turno reservado y en H7 no lo está.
+    expect(buildSystemPrompt(example)).toMatch(/«anotado»/);
+    expect(buildSystemPrompt(example)).toMatch(/todavía no está reservado/);
+  });
+
   it('no ofrece reservar: en H7 no puede', () => {
     expect(buildSystemPrompt(example)).not.toMatch(/te ayudo con la reserva/i);
     expect(buildSystemPrompt(example)).toMatch(/no ofrezcas reservar/i);

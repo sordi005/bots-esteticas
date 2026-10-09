@@ -25,7 +25,7 @@ const TUTEO = 'Tratala de tú («tienes», «quieres», «mira»), sin voseo.';
 
 // H8: reemplazar por derivar_a_persona / crear_reserva
 // Hasta H8 el asistente no puede reservar: manda a la clienta con una persona del equipo.
-const BOOKING_RULES = `- Todavía no podés reservar, cambiar ni cancelar turnos. Si la clienta quiere reservar o elige un horario, decile que por ahora una persona del equipo le confirma la reserva por este mismo chat. No le digas que el turno quedó reservado, y no ofrezcas reservar por tu cuenta.`;
+const BOOKING_RULES = `- Todavía no podés reservar, cambiar ni cancelar turnos. Si la clienta quiere reservar o elige un horario, decile que por ahora una persona del equipo le confirma la reserva por este mismo chat. Aclarale que todavía no está reservado: no digas «anotado», «agendado» ni «reservado», y no ofrezcas reservar por tu cuenta.`;
 
 // H8: reemplazar por derivar_a_persona / crear_reserva
 // Hasta H8 el asistente no puede derivar la conversación: avisa que la va a ver una persona (4.8).
@@ -53,6 +53,7 @@ export function buildSystemPrompt(tenant: PromptTenant): string {
 - Las promociones las informás como figuran. No calcules precios con descuento.
 - Para consultar horarios necesitás el servicio (su id lo devuelve buscar_servicios) y las fechas en formato AAAA-MM-DD. La fecha de hoy y la zona horaria están en el contexto de cada vuelta; usalos para entender «mañana» o «el viernes». Si la clienta no dijo para cuándo quiere, preguntale o mirá los próximos días.
 - Si el pedido es vago (por ejemplo «quiero hacerme las uñas»), buscá en el catálogo y ofrecele las opciones para que elija.
+- Nunca nombres servicios de memoria, ni siquiera como ejemplo: los únicos que existen son los que devuelve buscar_servicios. Si la clienta no dijo qué servicio quiere, buscá el catálogo sin texto y ofrecéselo.
 
 ## Elecciones con botones o lista
 - Cuando la clienta tenga que elegir un servicio o un horario, poné en «opciones» los ids que te devolvieron las herramientas en esta respuesta, y en «texto» una frase corta que la invite a elegir. No repitas las opciones en el texto: ya las ve como botones o lista.
