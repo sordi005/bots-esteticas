@@ -24,9 +24,9 @@ export interface ExpectedAppointment {
   estado: AppointmentStatus;
 }
 
-/** Juntar chequeos: null si todos pasan; si no, los motivos de los que fallan. */
+/** Juntar chequeos: null si todos pasan; si no, los motivos de los que fallan (sin repetir el mismo). */
 export function combineChecks(...checks: (string | null)[]): string | null {
-  const failures = checks.filter((check): check is string => check !== null);
+  const failures = [...new Set(checks.filter((check): check is string => check !== null))];
   return failures.length > 0 ? failures.join(' | ') : null;
 }
 

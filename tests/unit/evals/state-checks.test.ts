@@ -211,4 +211,9 @@ describe('combineChecks', () => {
   it('junta los motivos de los que fallan, en orden', () => {
     expect(combineChecks('primero', null, 'segundo')).toBe('primero | segundo');
   });
+
+  it('no repite un motivo que dos chequeos dan igual', () => {
+    expect(combineChecks('No ofreció ningún horario', 'No ofreció ningún horario')).toBe('No ofreció ningún horario');
+    expect(combineChecks('a', 'b', 'a')).toBe('a | b');
+  });
 });
