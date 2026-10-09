@@ -5,12 +5,13 @@ import { professionals } from '../../catalog/schema.js';
 import { customers } from '../../customers/schema.js';
 import { tenants } from '../../tenants/schema.js';
 import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
+import { handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, messages } from '../schema.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
 import { agentTools } from '../tools/index.js';
 import type { AgentTool } from '../tools/tool.js';
-import { runAgent, type AgentRun } from './agent.js';
+import { isFallbackOutcome, notUnderstoodHandoffText, runAgent, type AgentRun } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
 import { describeInbound, outgoingToText } from './message-text.js';
 import { buildSystemPrompt } from './system-prompt.js';
@@ -32,6 +33,9 @@ export const HISTORY_MAX_MESSAGES = 20;
 export const HISTORY_WINDOW_MS = DAY_MS;
 /** [S] Una conversación es nueva si el asistente no le escribió a la clienta en las últimas 24 horas (5.1). */
 export const NEW_CONVERSATION_AFTER_MS = DAY_MS;
+
+/** Lo que ve la dueña cuando el código deriva porque el modelo falló dos veces seguidas (4.8). */
+export const NOT_UNDERSTOOD_SUMMARY = 'El asistente no entendió dos veces seguidas';
 
 export interface AgentResponderDependencies {
   db: NodePgDatabase;
@@ -145,11 +149,27 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       },
     );
 
-    await saveRun(db, { tenantId, conversationId, run, createdAt: at });
+    // Segundo intento fallido (4.8, 8.5): lo decide el código, no el modelo. La vuelta anterior se
+    // mira antes de registrar esta.
+    let reply = message;
+    let finalRun = run;
+    if (isFallbackOutcome(run.outcome) && (await previousRunFailed(db, turn, at))) {
+      const { when } = await handOff(db, {
+        tenantId,
+        conversationId,
+        reason: 'not_understood',
+        summary: NOT_UNDERSTOOD_SUMMARY,
+        now: at,
+      });
+      reply = { type: 'text', body: notUnderstoodHandoffText(when) };
+      finalRun = { ...run, outcome: 'handoff_not_understood' };
+    }
+
+    await saveRun(db, { tenantId, conversationId, run: finalRun, createdAt: at });
     // Solo métricas: ni el contenido de los mensajes ni el de las herramientas (10.1).
     logger.info(
       {
-        outcome: run.outcome,
+        outcome: finalRun.outcome,
         model: run.model,
         llmCalls: run.llmCalls,
         toolCalls: run.toolCalls,
@@ -159,7 +179,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       },
       'Respuesta del agente',
     );
-    return message;
+    return reply;
   };
 }
 
@@ -205,6 +225,28 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
   // La API exige que la conversación empiece con la clienta.
   while (history[0]?.role === 'assistant') history.shift();
   return history;
+}
+
+/**
+ * ¿La vuelta anterior de esta conversación también terminó con la frase fija? Cuenta la más
+ * reciente de las últimas 24 horas que llamó al modelo: las que no lo llamaron (límite por hora)
+ * no dicen nada sobre si el modelo entendió.
+ */
+async function previousRunFailed(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<boolean> {
+  const [previous] = await db
+    .select({ outcome: agentRuns.outcome })
+    .from(agentRuns)
+    .where(
+      and(
+        eq(agentRuns.tenantId, turn.tenantId),
+        eq(agentRuns.conversationId, turn.conversationId),
+        isNotNull(agentRuns.model),
+        gt(agentRuns.createdAt, new Date(at.getTime() - DAY_MS)),
+      ),
+    )
+    .orderBy(desc(agentRuns.createdAt))
+    .limit(1);
+  return previous !== undefined && isFallbackOutcome(previous.outcome);
 }
 
 /** ¿El asistente le escribió a la clienta en las últimas 24 horas? (5.1) */

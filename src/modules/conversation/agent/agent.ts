@@ -27,6 +27,17 @@ export const MAX_TOOL_CALLS_PER_REPLY = 8;
 /** Lo que se le envía a la clienta cuando el modelo no dio una respuesta que se pueda usar. */
 export const FALLBACK_REPLY_TEXT = 'Perdón, no te entendí bien. ¿Me lo escribís de otra forma?';
 
+/**
+ * Lo que se le envía a la clienta cuando el modelo falla dos veces seguidas y el código deriva a una
+ * persona (4.8, 8.5). `{cuándo}` se completa con el texto del horario de atención humana.
+ */
+export const NOT_UNDERSTOOD_HANDOFF_TEXT =
+  'Perdón, no te estoy entendiendo. Le paso tu consulta a una persona del equipo, que te va a responder por acá {cuándo}.';
+
+export function notUnderstoodHandoffText(when: string): string {
+  return NOT_UNDERSTOOD_HANDOFF_TEXT.replace('{cuándo}', when);
+}
+
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -98,7 +109,12 @@ export interface AgentResult {
   run: AgentRun;
 }
 
-type FallbackOutcome = Extract<AgentOutcome, `fallback_${string}`>;
+export type FallbackOutcome = Extract<AgentOutcome, `fallback_${string}`>;
+
+/** ¿La vuelta terminó con la frase fija porque el modelo no dio una respuesta usable? */
+export function isFallbackOutcome(outcome: AgentOutcome): outcome is FallbackOutcome {
+  return outcome.startsWith('fallback_');
+}
 
 function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   return {

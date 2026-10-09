@@ -6,11 +6,11 @@ import {
   createAgentResponder,
   MAX_INBOUND_MESSAGES_PER_HOUR,
 } from '../../src/modules/conversation/agent/agent-responder.js';
-import { FALLBACK_REPLY_TEXT } from '../../src/modules/conversation/agent/agent.js';
+import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
 import { CHOICE_MARKER } from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
-import { agentRuns, conversations, messages } from '../../src/modules/conversation/schema.js';
+import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
@@ -36,8 +36,11 @@ const signal = new AbortController().signal;
 
 type Fixture = CatalogFixture & { conversationId: string };
 
-async function setup(customerName: string | null = null): Promise<Fixture> {
-  const catalog = await createCatalogFixture(db);
+async function setup(
+  customerName: string | null = null,
+  settings: Parameters<typeof createCatalogFixture>[1] = {},
+): Promise<Fixture> {
+  const catalog = await createCatalogFixture(db, settings);
   if (customerName) {
     await db.update(customers).set({ name: customerName }).where(eq(customers.id, catalog.customerId));
   }
@@ -586,5 +589,127 @@ describe('createAgentResponder: límite de mensajes por hora (9.1)', () => {
     const { result } = reply(f, pending, [finalAnswer('Dale')]);
 
     expect(await result).toEqual({ type: 'text', body: 'Dale' });
+  });
+});
+
+describe('createAgentResponder: el segundo intento fallido deriva a una persona (4.8, 8.5)', () => {
+  const refusal = () => finalAnswer('No', [], { stopReason: 'refusal' });
+
+  /** Una vuelta anterior de esa conversación, ya registrada. */
+  async function addPreviousRun(
+    f: Fixture,
+    input: { outcome: (typeof agentRuns.$inferInsert)['outcome']; at: Date; called?: boolean },
+  ) {
+    const called = input.called ?? true;
+    await db.insert(agentRuns).values({
+      tenantId: f.tenantId,
+      conversationId: f.conversationId,
+      model: called ? 'modelo-de-prueba' : null,
+      llmCalls: called ? 1 : 0,
+      outcome: input.outcome,
+      createdAt: input.at,
+    });
+  }
+
+  const handoffsOf = (f: Fixture) => db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId));
+  const conversationOf = async (f: Fixture) =>
+    single(await db.select().from(conversations).where(eq(conversations.id, f.conversationId)));
+
+  it('el primer fallo responde la frase fija y no deriva', async () => {
+    const f = await setup();
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(await handoffsOf(f)).toEqual([]);
+    expect(await conversationOf(f)).toMatchObject({ assistantStatus: 'active' });
+  });
+
+  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output'] as const)(
+    'si la vuelta anterior terminó en %s y esta también falla, deriva con "no entiende" y la clienta recibe el texto fijo',
+    async (previous) => {
+      const f = await setup();
+      await addPreviousRun(f, { outcome: previous, at: minutesAgo(5) });
+      const pending = await pendingTexts(f, 'asdf');
+
+      const { result } = reply(f, pending, [refusal()]);
+
+      expect(await result).toEqual({ type: 'text', body: notUnderstoodHandoffText('lo antes posible') });
+      expect(await handoffsOf(f)).toEqual([
+        expect.objectContaining({
+          reason: 'not_understood',
+          summary: 'El asistente no entendió dos veces seguidas',
+          status: 'open',
+        }),
+      ]);
+      expect(await conversationOf(f)).toMatchObject({
+        assistantStatus: 'paused',
+        pausedUntil: new Date(NOW.getTime() + 12 * 60 * 60 * 1_000),
+      });
+      expect((await runsOf(f)).map((run) => run.outcome)).toEqual([previous, 'handoff_not_understood']);
+    },
+  );
+
+  it('el texto fijo dice cuándo responde una persona, según el horario del negocio', async () => {
+    const f = await setup(null, {
+      settings: { humanAttentionHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' })) },
+    });
+    await addPreviousRun(f, { outcome: 'fallback_refusal', at: minutesAgo(5) });
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({
+      type: 'text',
+      body: 'Perdón, no te estoy entendiendo. Le paso tu consulta a una persona del equipo, que te va a responder por acá en este horario.',
+    });
+  });
+
+  it('si la vuelta anterior contestó bien, el fallo es el primero de la racha y no deriva', async () => {
+    const f = await setup();
+    await addPreviousRun(f, { outcome: 'fallback_refusal', at: minutesAgo(30) });
+    await addPreviousRun(f, { outcome: 'replied', at: minutesAgo(10) });
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(await handoffsOf(f)).toEqual([]);
+  });
+
+  it('una vuelta anterior de hace más de 24 horas no cuenta', async () => {
+    const f = await setup();
+    await addPreviousRun(f, { outcome: 'fallback_refusal', at: hoursAgo(25) });
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(await handoffsOf(f)).toEqual([]);
+  });
+
+  it('una vuelta que no llamó al modelo (límite por hora) no corta la racha', async () => {
+    const f = await setup();
+    await addPreviousRun(f, { outcome: 'fallback_refusal', at: minutesAgo(20) });
+    await addPreviousRun(f, { outcome: 'rate_limited', at: minutesAgo(10), called: false });
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({ type: 'text', body: notUnderstoodHandoffText('lo antes posible') });
+    expect(await handoffsOf(f)).toHaveLength(1);
+  });
+
+  it('las vueltas de otra conversación no cuentan', async () => {
+    const f = await setup();
+    const other = await setup();
+    await addPreviousRun(other, { outcome: 'fallback_refusal', at: minutesAgo(5) });
+    const pending = await pendingTexts(f, 'asdf');
+
+    const { result } = reply(f, pending, [refusal()]);
+
+    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(await handoffsOf(f)).toEqual([]);
   });
 });
