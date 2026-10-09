@@ -8,6 +8,12 @@ interface ObjectSchema {
   required?: string[];
 }
 
+const agentSchemaOf = (name: string) => {
+  const tool = agentTools.find((candidate) => candidate.name === name);
+  if (!tool) throw new Error(`No hay una herramienta ${name}`);
+  return z.toJSONSchema(tool.input, { io: 'input' }) as unknown as ObjectSchema;
+};
+
 const schemaOf = (name: string) => {
   const tool = consultationTools.find((candidate) => candidate.name === name);
   if (!tool) throw new Error(`No hay una herramienta ${name}`);
@@ -52,11 +58,42 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
 });
 
 describe('agentTools: las herramientas que usa el agente', () => {
-  it('son las de consulta más derivar_a_persona', () => {
+  it('son las de consulta, las de turnos (H8) y derivar_a_persona, con los nombres de la especificación (6.4)', () => {
     expect(agentTools.map((tool) => tool.name)).toEqual([
       ...consultationTools.map((tool) => tool.name),
+      'crear_reserva',
+      'listar_turnos_de_la_clienta',
+      'reprogramar_turno',
+      'cancelar_turno',
       'derivar_a_persona',
     ]);
+  });
+
+  it('todas tienen una descripción para el modelo y cada parámetro le explica qué es', () => {
+    for (const tool of agentTools) {
+      expect(tool.description.length, tool.name).toBeGreaterThan(40);
+      for (const [name, property] of Object.entries(agentSchemaOf(tool.name).properties)) {
+        expect(property.description, `${tool.name}.${name}`).toBeTruthy();
+      }
+    }
+  });
+
+  it('crear_reserva pide el id del horario y, opcional, el nombre', () => {
+    const schema = agentSchemaOf('crear_reserva');
+
+    expect(Object.keys(schema.properties)).toEqual(['horario_id', 'nombre']);
+    expect(schema.required).toEqual(['horario_id']);
+  });
+
+  it('listar_turnos_de_la_clienta no recibe nada: la clienta sale del contexto', () => {
+    expect(Object.keys(agentSchemaOf('listar_turnos_de_la_clienta').properties)).toEqual([]);
+  });
+
+  it('cancelar_turno pide el turno y si la clienta confirmó; reprogramar_turno, el turno y el horario nuevo', () => {
+    expect(Object.keys(agentSchemaOf('cancelar_turno').properties)).toEqual(['turno_id', 'confirmada']);
+    expect(agentSchemaOf('cancelar_turno').required).toEqual(['turno_id', 'confirmada']);
+    expect(Object.keys(agentSchemaOf('reprogramar_turno').properties)).toEqual(['turno_id', 'horario_id']);
+    expect(agentSchemaOf('reprogramar_turno').required).toEqual(['turno_id', 'horario_id']);
   });
 
   it('derivar_a_persona pide un motivo de una lista cerrada y un resumen, y nada más', () => {

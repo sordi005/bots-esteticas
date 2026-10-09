@@ -52,20 +52,17 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
 
   it('nombra las herramientas que existen, y solo esas', () => {
     const prompt = buildSystemPrompt(example);
-    const mentioned = [...prompt.matchAll(/\b([a-z]+_[a-z_]+)\b/g)].map((match) => match[1]);
+    // Los nombres con forma de herramienta (verbo_cosa) que menciona el prompt.
+    const mentioned = new Set(
+      [...prompt.matchAll(/\b((?:buscar|consultar|crear|generar|listar|reprogramar|cancelar|derivar)_[a-zñ_]+)\b/g)].map(
+        (match) => match[1],
+      ),
+    );
 
     for (const tool of agentTools) expect(prompt).toContain(tool.name);
-    // Las herramientas de turnos llegan en la etapa B de H8: hasta entonces el prompt no puede prometerlas.
-    expect(mentioned).not.toContain('crear_reserva');
-    expect(mentioned).not.toContain('cancelar_turno');
-  });
-
-  it('todavía no puede reservar: manda a la clienta con una persona del equipo por el mismo chat', () => {
-    const prompt = buildSystemPrompt(example);
-
-    expect(prompt).toMatch(/una persona del equipo/);
-    expect(prompt).toMatch(/por este mismo chat/);
-    expect(prompt).toMatch(/Todavía no podés reservar/);
+    expect([...mentioned].sort()).toEqual(agentTools.map((tool) => tool.name).sort());
+    // generar_pago_seña llega en H9: hasta entonces el prompt no puede prometerla.
+    expect(prompt).not.toContain('generar_pago_seña');
   });
 
   it('ante un precio inventado por la clienta, pide decir el precio real buscándolo con la herramienta', () => {
@@ -80,17 +77,6 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
     expect(buildSystemPrompt(example)).toMatch(/nunca nombres servicios de memoria/i);
   });
 
-  it('cuando la clienta elige un horario, no le dice que quedó anotado', () => {
-    // Lo encontró la prueba manual: "Perfecto, anotado" suena a turno reservado y en H7 no lo está.
-    expect(buildSystemPrompt(example)).toMatch(/«anotado»/);
-    expect(buildSystemPrompt(example)).toMatch(/todavía no está reservado/);
-  });
-
-  it('no ofrece reservar: en H7 no puede', () => {
-    expect(buildSystemPrompt(example)).not.toMatch(/te ayudo con la reserva/i);
-    expect(buildSystemPrompt(example)).toMatch(/no ofrezcas reservar/i);
-  });
-
   it('prohíbe pedir o repetir detalles de salud (regla 9)', () => {
     expect(buildSystemPrompt(example)).toMatch(/salud/i);
     expect(buildSystemPrompt(example)).toMatch(/no le pidas ni le repitas detalles/i);
@@ -103,9 +89,6 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
   it('ya no dice que no puede derivar, y la derivación tiene su propia sección', () => {
     expect(prompt).not.toMatch(/todavía no podés derivar/i);
     expect(prompt).toMatch(/## Derivar a una persona/);
-    // La sección de «lo que todavía no podés hacer» queda solo para las reservas.
-    const notYet = prompt.slice(prompt.indexOf('## Lo que todavía no podés hacer'), prompt.indexOf('## Mensajes que no son texto'));
-    expect(notYet).not.toContain('derivar_a_persona');
   });
 
   it('nombra todos los motivos de la herramienta, con los mismos nombres que ve el modelo', () => {
@@ -126,6 +109,8 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(prompt).toMatch(/consulta previa/i);
     expect(prompt).toMatch(/devolución|excepción/i);
     expect(prompt).toMatch(/dos intentos/i);
+    // Cancelar o reprogramar fuera de plazo lo deriva la herramienta, no el modelo (4.6).
+    expect(prompt).toMatch(/cancelar_turno y reprogramar_turno lo derivan solos/);
   });
 
   it('con temas de salud: no pide ni repite detalles, deriva como tema sensible y el resumen no lleva datos de salud (regla 9)', () => {
@@ -161,5 +146,88 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
 
   it('sigue siendo idéntico entre llamadas del mismo negocio, para la caché del proveedor', () => {
     expect(buildSystemPrompt({ ...example })).toBe(prompt);
+  });
+});
+
+describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () => {
+  const prompt = buildSystemPrompt(example);
+  const section = (from: string, to: string) => prompt.slice(prompt.indexOf(from), prompt.indexOf(to));
+  const booking = section('## Reservar, cancelar y reprogramar turnos', '## Mensajes que no son texto');
+
+  it('ya no dice que no puede reservar, cambiar ni cancelar turnos', () => {
+    expect(prompt).not.toMatch(/Todavía no podés/);
+    expect(prompt).not.toMatch(/lo que todavía no podés hacer/i);
+    expect(prompt).not.toMatch(/no ofrezcas reservar/i);
+    expect(prompt).not.toMatch(/por ahora una persona del equipo le confirma la reserva/);
+  });
+
+  it('tiene su propia sección, que nombra las cuatro herramientas de turnos', () => {
+    expect(booking.length).toBeGreaterThan(500);
+    for (const name of ['crear_reserva', 'listar_turnos_de_la_clienta', 'cancelar_turno', 'reprogramar_turno']) {
+      expect(booking, name).toContain(name);
+    }
+  });
+
+  it('reservar: solo con el id de un horario que devolvió consultar_disponibilidad o eligió la clienta; nunca inventa ni arma uno', () => {
+    expect(booking).toMatch(/id de un horario que devolvió consultar_disponibilidad/);
+    expect(booking).toMatch(/la clienta eligió con un botón/);
+    expect(booking).toMatch(/nunca inventes ni armes un id/i);
+  });
+
+  it('reservar: si no hay nombre cargado, lo pide antes de reservar', () => {
+    expect(booking).toMatch(/no tiene un nombre cargado[^.]*pedile el nombre[^.]*antes de reservar/is);
+  });
+
+  it('reservar: solo dice reservado, anotado o te guardo cuando crear_reserva respondió que salió bien', () => {
+    expect(booking).toMatch(/«reservado», «anotado»[^.]*«te guardo»[^.]*crear_reserva respondió reservado=true/s);
+  });
+
+  it('reservar: si el horario se ocupó, vuelve a consultar y ofrece otros', () => {
+    expect(booking).toMatch(/se ocupó[^.]*volvé a consultar[^.]*ofrecele otros/is);
+  });
+
+  it('seña: el monto y el plazo tal cual los escribe la herramienta, y una persona le pasa los datos por el chat; no inventa datos de pago', () => {
+    expect(booking).toMatch(/pendiente de seña[^.]*monto[^.]*hasta cuándo/is);
+    expect(booking).toMatch(/una persona del equipo le pasa por este mismo chat los datos para pagarla/);
+    expect(booking).toMatch(/no inventes alias, cbu, links ni datos de pago/i);
+  });
+
+  it('cancelar: identifica el turno, pide confirmación con confirmada=false y cancela solo cuando la clienta confirmó', () => {
+    expect(booking).toMatch(/identificá el turno con listar_turnos_de_la_clienta/i);
+    expect(booking).toMatch(/cancelar_turno con confirmada=false/);
+    expect(booking).toMatch(/«Sí, cancelar»/);
+    expect(booking).toMatch(/confirmada=true[^.]*solo cuando la clienta confirmó/is);
+  });
+
+  it('reprogramar: consulta la disponibilidad con el servicio y la profesional del turno y llama a reprogramar_turno cuando elige', () => {
+    expect(booking).toMatch(/servicio y la profesional de ese turno/);
+    expect(booking).toMatch(/reprogramar_turno/);
+    expect(booking).toMatch(/elegir el horario ya es la confirmación/i);
+  });
+
+  it('si cancelar o reprogramar derivaron: explica la política con amabilidad, dice cuándo responde una persona y no discute ni promete excepciones', () => {
+    expect(booking).toMatch(/derivada=true/);
+    expect(booking).toMatch(/política con amabilidad/);
+    expect(booking).toMatch(/cuándo le responde una persona/);
+    expect(booking).toMatch(/no discutas ni prometas excepciones/i);
+    expect(booking).toMatch(/no llames a derivar_a_persona de nuevo/i);
+  });
+
+  it('solo ve y cambia los turnos de la clienta que escribe', () => {
+    expect(booking).toMatch(/solo podés ver y cambiar los turnos de la clienta que te escribe/i);
+    expect(booking).toMatch(/de otra persona[^.]*no podés/i);
+  });
+
+  it('"De dónde sale cada dato" incluye los turnos y el resultado de reservar, cancelar y reprogramar', () => {
+    const data = section('## De dónde sale cada dato', '## Elecciones con botones o lista');
+
+    expect(data).toContain('listar_turnos_de_la_clienta');
+    expect(data).toMatch(/crear_reserva/);
+  });
+
+  it('sigue siendo idéntico entre llamadas del mismo negocio, sin fechas ni datos de la clienta', () => {
+    expect(buildSystemPrompt({ ...example })).toBe(prompt);
+    expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 });

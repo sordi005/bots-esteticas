@@ -15,6 +15,7 @@ import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
+import { appointments } from '../../src/modules/scheduling/schema.js';
 import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
@@ -744,5 +745,108 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
 
     expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
     expect(await handoffsOf(f)).toEqual([]);
+  });
+});
+
+describe('createAgentResponder: turnos con las herramientas reales (H8)', () => {
+  const handoffsOf = (f: Fixture) => db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId));
+  const statusOf = async (appointmentId: string) =>
+    single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
+
+  it('reservar después de pedir el nombre: el id del horario sale del historial y la reserva queda hecha', async () => {
+    const f = await setup(null);
+    const slotId = choiceIds.slot(f.semi, f.mica, at('2026-10-06', '15:30'));
+    await addInbound(f, { type: 'interactive', content: interactiveReply(slotId, 'mar 6/10 15:30'), at: minutesAgo(3) });
+    await addOutbound(f, { type: 'text', body: '¡Genial! ¿A nombre de quién lo anoto?' }, minutesAgo(2));
+    const pending = await pendingTexts(f, 'Caro Pérez');
+
+    // El modelo copia del historial el id de la opción elegida y reserva con el nombre.
+    const bookFromHistory: ScriptStep = (request) => {
+      const text = request.messages.map(textOf).join('\n');
+      const horario_id = /opción elegida: (\S+)\)/.exec(text)?.[1];
+      return callTools([{ name: 'crear_reserva', input: { horario_id, nombre: 'Caro Pérez' } }]);
+    };
+    const { result } = reply(f, pending, [bookFromHistory, finalAnswer('Listo Caro, te guardo el martes 6/10 a las 15:30 con Mica.')]);
+    await result;
+
+    const [appointment] = await db.select().from(appointments).where(eq(appointments.customerId, f.customerId));
+    expect(appointment).toMatchObject({ status: 'PENDING_DEPOSIT', serviceId: f.semi, professionalId: f.mica });
+    expect(appointment?.timeRange.start).toEqual(at('2026-10-06', '15:30'));
+    const [customer] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, f.customerId));
+    expect(customer?.name).toBe('Caro Pérez');
+  });
+
+  it('cancelar: primero ofrece «Sí, cancelar» sin tocar el turno; al tocarlo, lo cancela', async () => {
+    const f = await setup('Caro Pérez');
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-07', '10:00'),
+      actor: 'assistant',
+      now: NOW,
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    const turnoId = choiceIds.appointment(booked.appointmentId);
+
+    // Vuelta 1: la clienta pide cancelar; el modelo lista, pide la confirmación y ofrece el botón.
+    const first = reply(f, await pendingTexts(f, 'tengo que cancelar mi turno'), [
+      callTools([{ name: 'listar_turnos_de_la_clienta' }]),
+      callTools([{ name: 'cancelar_turno', input: { turno_id: turnoId, confirmada: false } }]),
+      finalAnswer('Tenés el miércoles 7/10 a las 10:00. ¿Lo cancelo?', [choiceIds.cancel(booked.appointmentId)]),
+    ]);
+    const asked = await first.result;
+
+    expect(asked).toEqual({
+      type: 'buttons',
+      body: 'Tenés el miércoles 7/10 a las 10:00. ¿Lo cancelo?',
+      buttons: [{ id: choiceIds.cancel(booked.appointmentId), title: 'Sí, cancelar' }],
+    });
+    expect(await statusOf(booked.appointmentId)).toBe('PENDING_DEPOSIT');
+
+    // Vuelta 2: la clienta toca el botón; el contexto le dice al modelo que confirmó y cancela.
+    const tap = await addInbound(f, {
+      type: 'interactive',
+      content: interactiveReply(choiceIds.cancel(booked.appointmentId), 'Sí, cancelar'),
+      at: new Date(NOW.getTime() - 1_000),
+      processed: false,
+    });
+    const second = reply(f, [tap], [
+      callTools([{ name: 'cancelar_turno', input: { turno_id: turnoId, confirmada: true } }]),
+      finalAnswer('Listo, quedó cancelado.'),
+    ]);
+    await second.result;
+
+    expect(second.requests[0]?.turnContext).toContain(`Confirmó que quiere cancelar el turno del miércoles 7/10 10:00`);
+    expect(second.requests[0]?.turnContext).toContain(`turno_id=${turnoId}`);
+    expect(await statusOf(booked.appointmentId)).toBe('CANCELLED_BY_CUSTOMER');
+  });
+
+  it('cancelar fuera de plazo y derivar en la misma vuelta deja una sola derivación y el turno intacto', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-06', '09:00'),
+      actor: 'assistant',
+      now: NOW,
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+
+    // Lunes 5/10 a las 10:00 y el turno es el martes a las 9:00: faltan 23 horas.
+    const { result } = reply(f, await pendingTexts(f, 'cancelame el turno de mañana'), [
+      callTools([
+        { name: 'cancelar_turno', input: { turno_id: booked.appointmentId, confirmada: true } },
+        { name: 'derivar_a_persona', input: { motivo: 'excepcion', resumen: 'Quiere cancelar fuera de plazo' } },
+      ]),
+      finalAnswer('Como faltan menos de 24 horas, lo ve una persona del equipo.'),
+    ]);
+    await result;
+
+    expect(await statusOf(booked.appointmentId)).toBe('CONFIRMED');
+    expect(await handoffsOf(f)).toHaveLength(1);
   });
 });
