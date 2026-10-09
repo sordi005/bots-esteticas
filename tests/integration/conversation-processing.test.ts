@@ -1,9 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { createAgentResponder } from '../../src/modules/conversation/agent/agent-responder.js';
 import { recordWebhookEvents } from '../../src/modules/conversation/inbox.js';
 import type { ConversationTurn, Responder } from '../../src/modules/conversation/processing.js';
-import { messages } from '../../src/modules/conversation/schema.js';
+import { agentRuns, messages } from '../../src/modules/conversation/schema.js';
 import { scheduleJob } from '../../src/modules/jobs/queue.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { saveCredential } from '../../src/modules/tenants/credentials.js';
@@ -17,6 +18,7 @@ import { inboundContent, parseWebhook } from '../../src/modules/whatsapp/webhook
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { buildWorker } from '../../src/worker.js';
+import { finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, FIXTURE_CUSTOMER_PHONE, single } from './support/fixtures.js';
 import { gate } from './support/gate.js';
@@ -280,5 +282,109 @@ describe('aislamiento entre negocios', () => {
     expect(turns).toEqual([]);
     expect(delivered).toEqual([]);
     expect(await unprocessedOf(other.tenantId)).toHaveLength(1);
+  });
+});
+
+describe('el agente contesta en el worker (8.5), en lugar del eco', () => {
+  /** Lo que llega por el webhook, con la hora de WhatsApp igual a la de la prueba (el historial mira 24 horas). */
+  async function receiveAt(phoneNumberId: string, text: string, now: Date) {
+    const { events } = parseWebhook(
+      JSON.parse(
+        textMessageWebhook({
+          phoneNumberId,
+          from: FIXTURE_CUSTOMER_PHONE.slice(1),
+          messageId: `wamid.${randomUUID()}`,
+          text,
+          timestamp: Math.floor(now.getTime() / 1_000),
+        }),
+      ),
+    );
+    await recordWebhookEvents(db, events, { now });
+  }
+
+  function agentWorker(script: ScriptStep[], clock: () => Date) {
+    const { client, delivered } = fakeWhatsApp();
+    const { llm, requests } = scriptedLlm(script);
+    const respond = createAgentResponder({ db, llm, logger, now: clock });
+    return { run: worker({ client, respond, now: clock }), delivered, requests };
+  }
+
+  it('contesta lo que dice el modelo, registra la vuelta y en la siguiente ya ve lo que se dijo', async () => {
+    const tenant = await readyTenant();
+    let clock = at(6);
+    const { run, delivered, requests } = agentWorker(
+      [finalAnswer('Hola, soy Luna, asistente virtual de Negocio.'), finalAnswer('Cuesta $18.000.')],
+      () => clock,
+    );
+
+    await receiveAt(tenant.phoneNumberId, 'hola', at(0));
+    await run.runOnce();
+
+    expect(delivered.map(bodyOf)).toEqual(['Hola, soy Luna, asistente virtual de Negocio.']);
+    expect(requests[0]?.turnContext).toContain('Conversación nueva: sí');
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+    expect(
+      await db.select({ outcome: agentRuns.outcome }).from(agentRuns).where(eq(agentRuns.tenantId, tenant.tenantId)),
+    ).toEqual([{ outcome: 'replied' }]);
+
+    await receiveAt(tenant.phoneNumberId, '¿cuánto sale?', at(30));
+    clock = at(40);
+    await run.runOnce();
+
+    expect(delivered.map(bodyOf)).toEqual(['Hola, soy Luna, asistente virtual de Negocio.', 'Cuesta $18.000.']);
+    expect(requests[1]?.turnContext).toContain('Conversación nueva: no');
+    expect(requests[1]?.messages).toEqual([
+      { role: 'user', text: 'hola' },
+      { role: 'assistant', text: 'Hola, soy Luna, asistente virtual de Negocio.' },
+      { role: 'user', text: '¿cuánto sale?' },
+    ]);
+  });
+
+  it('tres mensajes seguidos llegan juntos al modelo y se contestan una sola vez', async () => {
+    const tenant = await readyTenant();
+    const { run, delivered, requests } = agentWorker([finalAnswer('Sí, tengo.')], () => at(8));
+
+    await receiveAt(tenant.phoneNumberId, 'hola', at(0));
+    await receiveAt(tenant.phoneNumberId, 'quería saber', at(1));
+    await receiveAt(tenant.phoneNumberId, 'si tenés turno mañana', at(2));
+    await run.runOnce();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.messages).toEqual([
+      { role: 'user', text: 'hola' },
+      { role: 'user', text: 'quería saber' },
+      { role: 'user', text: 'si tenés turno mañana' },
+    ]);
+    expect(delivered.map(bodyOf)).toEqual(['Sí, tengo.']);
+  });
+
+  it('si el proveedor de IA falla, no se contesta nada y la tarea se reintenta a los 30 segundos', async () => {
+    const tenant = await readyTenant();
+    let clock = at(6);
+    const { run, delivered } = agentWorker(
+      [
+        () => {
+          throw new Error('529 overloaded');
+        },
+        finalAnswer('Ahora sí.'),
+      ],
+      () => clock,
+    );
+
+    await receiveAt(tenant.phoneNumberId, 'hola', at(0));
+    await run.runOnce();
+
+    expect(delivered).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toHaveLength(1);
+    expect(await jobOf(tenant.tenantId)).toMatchObject({
+      status: 'pending',
+      lastError: expect.stringContaining('529 overloaded') as unknown,
+    });
+
+    clock = at(40);
+    await run.runOnce();
+
+    expect(delivered.map(bodyOf)).toEqual(['Ahora sí.']);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
   });
 });

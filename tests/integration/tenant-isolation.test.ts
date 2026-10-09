@@ -5,7 +5,7 @@ import {
   scheduleExceptions,
   workingHours,
 } from '../../src/modules/catalog/schema.js';
-import { conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
+import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
@@ -254,6 +254,20 @@ describe('aislamiento entre negocios: la base rechaza mezclar datos', () => {
       }),
       FOREIGN_KEY_VIOLATION,
       'handoffs_conversation_fk',
+    );
+  });
+
+  it('el registro de una respuesta del agente no apunta a una conversación de otro negocio', async () => {
+    await expectConstraintViolation(
+      db.insert(agentRuns).values({
+        tenantId: a.tenantId,
+        conversationId: b.conversationId,
+        model: 'claude-haiku-5-5',
+        llmCalls: 1,
+        outcome: 'replied',
+      }),
+      FOREIGN_KEY_VIOLATION,
+      'agent_runs_conversation_fk',
     );
   });
 });

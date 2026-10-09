@@ -47,11 +47,12 @@ pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté
 pnpm db:migrate           # aplica las migraciones pendientes
 pnpm db:seed              # carga o restaura "Estética Ejemplo"
 pnpm dev                  # servidor + worker con recarga en http://localhost:$PORT
-                          # en desarrollo, el worker contesta con un eco agrupado (hasta H7)
+                          # en desarrollo, el worker contesta con el agente si hay ANTHROPIC_API_KEY en .env
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
 pnpm test:contracts       # parsers contra ejemplos reales de Meta (sin red ni base)
+pnpm test:evals           # evaluaciones del agente contra la API real (cuesta plata; necesita ANTHROPIC_API_KEY y db:up)
 pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
 pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
@@ -61,6 +62,16 @@ pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee d
 ```
 
 Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1).
+
+Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una terminal aparte y con el `PORT` de tu `.env` (el dominio es fijo y ya está registrado en Meta):
+
+```bash
+ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
+```
+
+Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`?
+
+El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
 
 En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.
 

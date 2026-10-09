@@ -6,6 +6,9 @@ import tseslint from 'typescript-eslint';
 // Módulos de dominio: no conocen WhatsApp, Fastify ni la IA (CLAUDE.md, regla 3).
 const domainModules = ['scheduling', 'catalog', 'customers', 'payments'];
 
+// Único archivo que puede importar el SDK de Anthropic (sección 8.5).
+const ANTHROPIC_ADAPTER = 'src/modules/conversation/agent/anthropic-client.ts';
+
 export default defineConfig(
   { ignores: ['dist/', 'coverage/', 'migrations/'] },
   eslint.configs.recommended,
@@ -22,6 +25,25 @@ export default defineConfig(
   {
     files: ['**/*.js'],
     extends: [tseslint.configs.disableTypeChecked],
+  },
+  {
+    // El SDK del proveedor de IA lo importa un solo archivo (8.5): el adaptador de LlmClient.
+    // Los módulos de dominio lo tienen prohibido además por la regla 3 (más abajo).
+    files: ['src/**/*.ts'],
+    ignores: [ANTHROPIC_ADAPTER],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@anthropic-ai/**'],
+              message: `8.5: solo ${ANTHROPIC_ADAPTER} importa el SDK de Anthropic; el resto usa LlmClient.`,
+            },
+          ],
+        },
+      ],
+    },
   },
   {
     files: domainModules.map((name) => `src/modules/${name}/**/*.ts`),

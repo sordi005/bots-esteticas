@@ -33,6 +33,19 @@ export default defineConfig({
           fileParallelism: false,
         },
       },
+      {
+        test: {
+          // Evaluaciones del asistente (11.4): llaman a la API real y cuestan plata. Solo con
+          // `pnpm test:evals`; ni `pnpm test` ni CI las corren.
+          name: 'evals',
+          include: ['tests/evals/**/*.eval.ts'],
+          // Misma base de tests, vacía y migrada.
+          globalSetup: ['tests/integration/support/global-setup.ts'],
+          fileParallelism: false,
+          // Cada caso llama al modelo, a veces varias veces.
+          testTimeout: 60_000,
+        },
+      },
     ],
   },
 });

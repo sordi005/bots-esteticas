@@ -15,11 +15,12 @@
     "typecheck": "tsc",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run",
+    "test": "vitest run --project unit --project contracts --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:contracts": "vitest run --project contracts",
-    "test:watch": "vitest",
+    "test:evals": "vitest run --project evals --reporter=default",
+    "test:watch": "vitest --project unit --project contracts --project integration",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
@@ -30,6 +31,7 @@
     "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
     "drizzle-orm": "0.45.3",
     "fastify": "5.12.5",
     "pg": "8.23.0",

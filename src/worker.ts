@@ -14,7 +14,7 @@ export interface WorkerDependencies {
   db: NodePgDatabase;
   logger: Logger;
   now?: () => Date;
-  /** Sin esto el worker no procesa conversaciones: en producción, hasta que exista el agente (H7). */
+  /** Sin esto el worker no procesa conversaciones: en producción, hasta H8 (sin derivación a una persona no se cumple 4.8). */
   conversations?: { client: WhatsAppClient; credentialsKey: Buffer; respond: Responder };
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<

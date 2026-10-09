@@ -34,6 +34,8 @@ describe('loadConfig', () => {
       credentialsKey: null,
       whatsapp: null,
       whatsappTestRecipient: null,
+      anthropicApiKey: null,
+      anthropicModel: 'claude-haiku-5-5',
     });
   });
 
@@ -49,6 +51,8 @@ describe('loadConfig', () => {
       credentialsKey: Buffer.from(KEY, 'base64'),
       whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v26.0' },
       whatsappTestRecipient: null,
+      anthropicApiKey: null,
+      anthropicModel: 'claude-haiku-5-5',
     });
   });
 
@@ -151,5 +155,48 @@ describe('loadConfig', () => {
 
     expect(error.message).toContain('DATABASE_URL');
     expect(error.message).not.toContain('secreta');
+  });
+
+  describe('modelo de IA (8.5)', () => {
+    it('lee la clave y el modelo del entorno', () => {
+      const config = loadConfig({
+        DATABASE_URL: databaseUrl,
+        ANTHROPIC_API_KEY: 'sk-ant-clave-de-prueba',
+        ANTHROPIC_MODEL: 'claude-sonnet-5-5',
+      });
+
+      expect(config.anthropicApiKey).toBe('sk-ant-clave-de-prueba');
+      expect(config.anthropicModel).toBe('claude-sonnet-5-5');
+    });
+
+    it('sin ANTHROPIC_MODEL usa Claude Haiku 5.5, y sin clave el valor es null', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl });
+
+      expect(config.anthropicModel).toBe('claude-haiku-5-5');
+      expect(config.anthropicApiKey).toBeNull();
+    });
+
+    it('en .env, una clave o un modelo vacíos cuentan como no definidos', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl, ANTHROPIC_API_KEY: '', ANTHROPIC_MODEL: '' });
+
+      expect(config.anthropicApiKey).toBeNull();
+      expect(config.anthropicModel).toBe('claude-haiku-5-5');
+    });
+
+    it('no es obligatoria en producción: ahí no se procesan conversaciones hasta H8', () => {
+      const config = loadConfig(PRODUCTION);
+
+      expect(config.nodeEnv).toBe('production');
+      expect(config.anthropicApiKey).toBeNull();
+    });
+
+    it('un modelo en blanco se rechaza sin mostrar la clave en el mensaje', () => {
+      const error = captureError(() =>
+        loadConfig({ DATABASE_URL: databaseUrl, ANTHROPIC_API_KEY: 'sk-ant-secreta', ANTHROPIC_MODEL: '   ' }),
+      );
+
+      expect(error.message).toContain('ANTHROPIC_MODEL');
+      expect(error.message).not.toContain('sk-ant-secreta');
+    });
   });
 });

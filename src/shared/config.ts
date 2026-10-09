@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { parseEncryptionKey } from './encryption.js';
 
 /** En .env, una variable vacía es lo mismo que no definida. */
+/** Modelo de IA por defecto (sección 8.5): chico y barato. Las evaluaciones deciden si hace falta subir. */
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-5-5';
+
 /** Versión de la Graph API de Meta (sección 8.1). Revisar su registro de cambios antes de subirla. */
 export const DEFAULT_GRAPH_API_VERSION = 'v26.0';
 
@@ -56,6 +59,12 @@ const envSchema = z
         .regex(/^[1-9][0-9]{7,14}$/, 'Solo dígitos, como figura en la lista de prueba de Meta')
         .optional(),
     ),
+    /** Clave de la API de Claude (sección 8.5). Secreta: nunca en logs. */
+    ANTHROPIC_API_KEY: optionalSecret,
+    ANTHROPIC_MODEL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().trim().min(1).default(DEFAULT_ANTHROPIC_MODEL),
+    ),
   })
   .superRefine((env, context) => {
     if (Boolean(env.WHATSAPP_APP_SECRET) !== Boolean(env.WHATSAPP_VERIFY_TOKEN)) {
@@ -101,6 +110,9 @@ export interface Config {
   whatsapp: { appSecret: string; verifyToken: string; graphApiVersion: string } | null;
   /** Solo en desarrollo: todo envío de WhatsApp va a este número (sección 8.1). */
   whatsappTestRecipient: string | null;
+  /** Null: sin clave el worker no contesta conversaciones (sección 8.5). */
+  anthropicApiKey: string | null;
+  anthropicModel: string;
 }
 
 export class ConfigError extends Error {
@@ -137,5 +149,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
           }
         : null,
     whatsappTestRecipient: data.WHATSAPP_TEST_RECIPIENT ?? null,
+    anthropicApiKey: data.ANTHROPIC_API_KEY ?? null,
+    anthropicModel: data.ANTHROPIC_MODEL,
   };
 }

@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.9 · 06/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.10 · 08/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -205,9 +205,11 @@ Parámetros por negocio:
 | Anticipación mínima para reservar | 2 horas |
 | Anticipación máxima | 30 días |
 | Cantidad de opciones que ofrece el asistente | 3 horarios, más "ver otros" |
+| Separación mínima entre las opciones ofrecidas | 90 minutos |
 
 - **[D]** Un turno no puede empezar en un bloque y terminar en el siguiente (por ejemplo, empezar 12:30 si el bloque cierra 13:00 y el servicio dura una hora).
 - **[D]** Todas las fechas se guardan en UTC y se muestran en `America/Argentina/Mendoza`.
+- **[S]** Las opciones que ofrece el asistente las elige el código, no el modelo: la primera libre y cada una de las siguientes al menos 90 minutos después de la anterior (con granularidad de 15 minutos, las tres primeras libres serían 9:00, 9:15 y 9:30). Si la clienta no eligió profesional, cada horario va con la primera disponible (4.2).
 - **[S]** Los inicios de turno se alinean al reloj local: con granularidad de 15 minutos, 9:00, 9:15, 9:30… aunque el bloque empiece en un minuto raro.
 - **[D]** Solo la **duración** del servicio tiene que entrar en el bloque de trabajo. El margen posterior puede quedar después del cierre del bloque o de un cierre cargado como excepción: la profesional limpia después de cerrar. Pero ni la duración ni el margen pueden superponerse con otro turno ni con un evento ocupado de su calendario.
 - **[D]** Ocupan el horario los turnos confirmados, los que tienen la seña en verificación y los que tienen la seña pendiente mientras no venció. Una reserva provisoria vencida deja de ocupar el horario aunque la tarea de vencimiento todavía no la haya pasado a `EXPIRADO`: al reservar sobre ese horario, primero se la vence (H4).
@@ -397,7 +399,7 @@ Si no hay lugar, el asistente ofrece anotarla para un día y franja. Cuando se l
 
 ### 5.1 Principios
 
-1. **[D] Se presenta como asistente virtual** en el primer mensaje de cada conversación nueva. Nunca finge ser una persona.
+1. **[D] Se presenta como asistente virtual** en el primer mensaje de cada conversación nueva. Nunca finge ser una persona. **[S]** Una conversación es nueva si el asistente no le escribió a la clienta en las últimas 24 horas.
 2. **[D] Siempre se puede pedir una persona.** El asistente lo menciona cuando corresponde.
 3. **[D] Nunca inventa.** Si un dato no está cargado, dice que no lo tiene y deriva.
 4. **[D] Un mensaje por respuesta.** Cada mensaje enviado tiene costo, y cuatro mensajes cortos cuestan cuatro veces uno largo.
@@ -414,7 +416,7 @@ Las clientas suelen escribir en varios mensajes ("hola" / "quería saber" / "si 
 | Tipo | Comportamiento en el MVP |
 |---|---|
 | Texto | Se procesa normalmente |
-| Botón o lista | Se procesa como elección estructurada, sin pasar por el modelo de IA |
+| Botón o lista | Se procesa como elección estructurada: el código resuelve el id elegido y lo vuelve a validar contra la base (por ejemplo, que el horario siga libre). El modelo recibe la elección ya resuelta y nunca interpreta el texto del botón |
 | Imagen durante una seña pendiente | Se trata como comprobante (sección 4.5) |
 | Otra imagen | Se deriva |
 | Audio | [S] El asistente pide amablemente que lo escriba y ofrece una persona. **[?]** Si las dueñas confirman que los audios son muy frecuentes, se agrega transcripción automática en la fase 2. |
@@ -534,6 +536,15 @@ Herramientas del agente en el MVP:
 
 **[D]** Las herramientas reciben el negocio y la clienta desde el contexto del servidor, nunca como parámetro elegido por el modelo. El modelo no puede consultar datos de otra clienta ni de otro negocio.
 
+Detalle de las herramientas de consulta (H7):
+
+- **[D]** Los nombres de las herramientas van en español, como en la tabla: son lo que ve el modelo y lo que piden las evaluaciones. Las funciones del código van en inglés.
+- **[D]** Los precios y las fechas salen escritos por el código ("$18.000", "viernes 9/10 15:30", en la zona horaria del negocio). El modelo no hace cuentas ni convierte horarios.
+- `buscar_servicios(texto?)` busca en nombre y alias sin distinguir tildes ni mayúsculas. Sin texto, devuelve el catálogo visible completo. Cada servicio trae su id, precio, precio en efectivo, tipo de precio, duración, si requiere consulta previa y qué profesionales lo hacen.
+- `consultar_informacion(tema)` acepta los temas de `business_info` más `horarios`, que el código arma con el horario semanal de las profesionales activas. Un tema sin texto cargado se informa como "no cargado".
+- `consultar_disponibilidad(servicio, profesional?, desde, hasta, franja?, despues_de?)` recibe fechas locales y una franja opcional (mañana, tarde, noche). `despues_de` es el inicio del último horario ofrecido: con él, "Ver otros horarios" trae los siguientes en vez de repetir los mismos. **[S]** El rango es de hasta 7 días. Un servicio que no es visible o requiere consulta previa no devuelve horarios: devuelve el motivo. Si no hay lugar en el rango, ofrece el próximo horario libre.
+- **[D]** La respuesta del modelo es un texto más, opcionalmente, opciones para elegir. Las opciones solo pueden ser ids que devolvió una herramienta en esa misma vuelta: el código lo verifica y arma los botones o la lista (8.1). Un id que no salió de una herramienta se descarta.
+
 ### 6.5 Recepción de mensajes
 
 1. Llega el webhook. Se **valida la firma** de Meta (`X-Hub-Signature-256`). Si no es válida, se descarta.
@@ -606,7 +617,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[S]** Hasta 3 intentos (la alerta de 10.3 salta con el tercero). Los reintentos esperan 30 segundos y 2 minutos. Después del tercer fallo la tarea queda fallida con su último error, que nunca incluye tokens ni el contenido de los mensajes (10.1).
 - **[S]** Plazo de ejecución: 2 minutos. Cada tarea tiene 60 segundos para terminar; si no, cuenta como un fallo. Hasta 5 tareas a la vez.
 
-**[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la envía y los marca como procesados. Si el envío sale pero falla la marca, el reintento puede repetir la respuesta: es preferible contestar dos veces a no contestar. Hasta que exista el agente (H7), la respuesta es un eco de desarrollo; en producción no se procesan conversaciones.
+**[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la envía y los marca como procesados. Si el envío sale pero falla la marca, el reintento puede repetir la respuesta: es preferible contestar dos veces a no contestar. Desde H7 la respuesta la arma el agente (8.5). En producción no se procesan conversaciones hasta H8: sin derivación a una persona no se pueden cumplir las reglas de 4.8.
 
 **[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado).
 
@@ -622,7 +633,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | Acceso a datos | Drizzle ORM con migraciones SQL (drizzle-kit) y driver `pg` | SQL visible, permite restricciones avanzadas sin pelear con el ORM |
 | Lint | ESLint + typescript-eslint, con reglas que usan los tipos | Detecta errores reales (promesas sin `await`) y hace cumplir la arquitectura: el dominio no importa infraestructura ni lee la hora directo |
 | Validación | Zod | Valida webhooks, parámetros de herramientas y configuración |
-| IA | API de Claude, modelo chico, con uso de herramientas | Buen seguimiento de instrucciones y costo bajo. Detrás de una interfaz propia para poder cambiar de proveedor |
+| IA | API de Claude con Claude Haiku 5.5 (configurable), con uso de herramientas | Buen seguimiento de instrucciones y costo bajo. Detrás de una interfaz propia para poder cambiar de proveedor |
 | Tests | Vitest + Postgres real en Docker | Los tests de turnos necesitan la restricción real |
 | Logs | Pino (JSON) | Logs estructurados con `tenant_id` y `conversation_id` |
 | Errores | Sentry | Alertas de excepciones |
@@ -669,6 +680,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje |
 | `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp, fecha en que se procesó (solo entrantes, sección 6.7) |
 | `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
+| `agent_runs` | conversación, modelo, tokens de entrada, de salida y de caché, nombres de las herramientas llamadas (sin sus argumentos), latencia, motivo de fin, fecha. Una fila por respuesta del agente (8.5). Se crea en H7 |
 | `scheduled_jobs` | tipo, clave (única por negocio y tipo, sección 6.7), datos, ejecutar en, volver a ejecutar en (si se programó mientras corría), estado (pendiente, en ejecución, terminada, fallida), intentos, último error, bloqueada hasta y token de bloqueo. Se crea en H6 |
 | `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables. Las plantillas del número de avisos del servicio (sección 8.2) no son de ningún negocio: se modelan en H9 |
 | `audit_log` | quién cambió qué configuración, qué cambió y cuándo. Nunca guarda valores de credenciales |
@@ -733,10 +745,14 @@ La dueña responde a esos avisos con botones ("Recibida", "No llegó", "Ausente"
 
 ### 8.5 Modelo de IA
 
-- **[D]** Interfaz interna `LlmClient` con una sola implementación en el MVP. Nada del resto del código importa el SDK del proveedor.
-- **[D]** El prompt del sistema se arma por negocio a partir de la configuración (nombre, tono, reglas). No hay prompts escritos a mano por cliente.
-- **[D]** Se registra por conversación: tokens usados, herramientas llamadas y latencia.
-- Revisar precios y modelos vigentes al momento de implementar.
+- **[D]** Interfaz interna `LlmClient` con una sola implementación en el MVP. Nada del resto del código importa el SDK del proveedor: un solo archivo lo importa, y el lint lo hace cumplir.
+- **[D]** El ciclo del agente (llamar al modelo, ejecutar herramientas, volver a llamar) es código propio y no depende del proveedor: así se aplican los topes, la cancelación y el registro, y se prueba con un `LlmClient` falso.
+- **[D]** El prompt del sistema se arma por negocio a partir de la configuración (nombre, tono, reglas). No hay prompts escritos a mano por cliente. La fecha y hora actuales van fuera del prompt del sistema, para que el proveedor pueda reutilizar la caché.
+- **[D]** Se registra por respuesta, en `agent_runs`: modelo, tokens usados, herramientas llamadas y latencia.
+- **[S]** Modelo: `claude-haiku-5-5` (US$ 0,10 / 0,50 por millón de tokens al 06/10/2026), configurable con `ANTHROPIC_MODEL`. La clave va en `ANTHROPIC_API_KEY`. Comparado el 08/10/2026 con OpenAI, Google y DeepSeek: en la gama barata todos cuestan menos de US$ 1,50 cada 1.000 respuestas, así que el precio no decide; decide pasar las evaluaciones (11.4). DeepSeek se descarta porque procesa los datos en China (9.2).
+- **[S]** Esfuerzo de razonamiento bajo (`low`): es una charla y la latencia importa. El modelo ve hasta los últimos 20 mensajes de las últimas 24 horas. Cada llamada a la API tiene 20 segundos y un reintento, para entrar en los 60 segundos de la tarea (6.7), y hasta 4.096 tokens de respuesta.
+- **[S]** Si el modelo se niega a responder, se corta por largo o devuelve una respuesta que no cumple el formato, la clienta recibe un texto fijo: "Perdón, no te entendí bien. ¿Me lo escribís de otra forma?". Desde H8, el segundo intento fallido deriva a una persona (4.8).
+- Revisar precios y modelos vigentes antes de cambiar de modelo.
 
 ---
 
@@ -747,8 +763,8 @@ La dueña responde a esos avisos con botones ("Recibida", "No llegó", "Ausente"
 - Validación de firma en todos los webhooks (Meta y Mercado Pago).
 - Credenciales de terceros cifradas en la base (AES-256-GCM, clave en variable de entorno). Nunca en el código ni en logs. El cifrado lleva como dato asociado el negocio y el tipo de credencial: una credencial copiada a la fila de otro negocio no se puede descifrar. En producción, el servidor no arranca sin clave ni con la clave de ejemplo de `.env.example`.
 - Aislamiento entre negocios: `tenant_id` en toda consulta, y tests que verifican que un negocio no puede ver datos de otro.
-- Límite de mensajes por clienta (por ejemplo, 30 por hora) para frenar abusos y costos descontrolados.
-- Tope de llamadas a herramientas por turno de conversación (por ejemplo, 8) para cortar bucles del modelo.
+- **[S]** Límite de 30 mensajes por hora por clienta para frenar abusos y costos descontrolados. Si se pasa, el asistente no llama al modelo ni contesta; los mensajes quedan procesados y el aviso va al log.
+- **[S]** Tope de 8 llamadas a herramientas por respuesta para cortar bucles del modelo. Al llegar al tope, se le pide una última respuesta sin herramientas.
 - Panel admin con autenticación y acceso solo para Yordi.
 - Backups diarios de la base, con una prueba de restauración antes de salir a producción.
 
@@ -822,20 +838,22 @@ Ejemplos reales de webhooks de Meta y de Mercado Pago guardados como archivos JS
 
 ### 11.4 Evaluación del asistente [D]
 
-Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100) en formato:
+Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100) en `tests/evals/`, escritas en TypeScript para que el compilador las verifique y sin sumar una dependencia para leer YAML:
 
-```yaml
-- nombre: precio_semi_simple
-  mensajes: ["hola cuánto sale el semi?"]
-  espera:
-    herramientas: [buscar_servicios]
-    menciona: ["18.000"]
-    no_menciona: ["descuento"]
-- nombre: salud_deriva
-  mensajes: ["estoy embarazada, puedo hacerme lifting?"]
-  espera:
-    herramientas: [derivar_a_persona]
+```ts
+{
+  nombre: 'precio_semi_simple',
+  mensajes: ['hola cuánto sale el semi?'],
+  espera: { herramientas: ['buscar_servicios'], menciona: ['18.000'], noMenciona: ['descuento'] },
+},
+{
+  nombre: 'salud_deriva',
+  mensajes: ['estoy embarazada, puedo hacerme lifting?'],
+  espera: { herramientas: ['derivar_a_persona'] },
+},
 ```
+
+Corren con `pnpm test:evals` contra la API real y la base de tests, con los datos de "Estética Ejemplo" y la hora fija (jueves 8/10/2026 a las 10:00 de Mendoza), para que el resultado no dependa del día. No corren en CI ni en `pnpm check`.
 
 Se corren antes de cada despliegue que toque el agente o los prompts. Si baja la tasa de aciertos, no se despliega.
 
@@ -924,8 +942,8 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H4 | Reservas con restricción de exclusión y eventos de auditoría | Test de reservas simultáneas pasando |
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos. El eco se prueba con `pnpm whatsapp:echo`, una herramienta de desarrollo que reemplaza el worker en H6. Las respuestas al número de avisos (6.5, paso 2) entran en H9 | Tests de contrato pasando; eco de mensajes con el número de prueba |
 | H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker. El eco de H5 pasa a ser la respuesta del worker en desarrollo hasta H7, y `pnpm whatsapp:echo` se borra | Tests de integración |
-| H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad) | Primeras 10 evaluaciones pasando |
-| H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa | 30 evaluaciones pasando |
+| H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad), que reemplaza al eco en desarrollo. Registro de uso en `agent_runs` | Primeras 10 evaluaciones pasando |
+| H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa. Desde acá, producción procesa conversaciones | 30 evaluaciones pasando |
 | H9 | Seña por transferencia + número de avisos a la dueña con botones | Flujo completo en el número de prueba |
 | H10 | Recordatorios con plantillas y vencimiento de reservas | Tests de jobs + prueba manual |
 | **Demo** | Grabar el video de 60 segundos | — |
@@ -962,6 +980,9 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 17 | Solo feriados nacionales, no días no laborables | Cargar también los puentes turísticos | Para el sector privado los días no laborables son optativos; cargarlos cerraría la agenda de negocios que sí trabajan |
 | 18 | Una fila por tarea y clave, que se reprograma | Una fila nueva por cada ejecución | La base garantiza una sola ejecución por conversación, el agrupado es solo mover una fecha y la tabla no crece con cada mensaje |
 | 19 | Worker en el mismo proceso que el servidor, revisando cada 1 segundo | Un proceso aparte, o revisar cada 30 segundos | Monolito (6.2): un solo proceso que desplegar y monitorear. El agrupado de mensajes necesita contestar en segundos |
+| 20 | Ciclo del agente propio detrás de `LlmClient` | El ejecutor de herramientas del SDK del proveedor | Topes, cancelación y registro bajo nuestro control, tests sin red y proveedor intercambiable (8.5) |
+| 21 | Claude Haiku 5.5 como modelo inicial | Modelos más grandes u otros proveedores | Cumple "modelo chico, costo bajo"; las evaluaciones deciden si hace falta subir |
+| 22 | Evaluaciones en TypeScript | YAML | Las verifica el compilador y no suman una dependencia |
 
 ---
 
