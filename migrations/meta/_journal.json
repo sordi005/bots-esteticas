@@ -64,6 +64,20 @@
       "when": 1791582291535,
       "tag": "0008_respuesta_guardada_y_derivacion",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791583702250,
+      "tag": "0009_medio_de_sena_unico_datos",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791583711293,
+      "tag": "0010_medio_de_sena_unico",
+      "breakpoints": true
     }
   ]
 }
