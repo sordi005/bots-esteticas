@@ -5,7 +5,7 @@ import { professionals } from '../../catalog/schema.js';
 import { customers } from '../../customers/schema.js';
 import { tenants } from '../../tenants/schema.js';
 import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
-import { handOff } from '../handoff.js';
+import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, messages } from '../schema.js';
 import { parseChoiceId } from '../tools/choice-ids.js';
@@ -137,7 +137,10 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     // Y lo que eligió antes, en las últimas 24 horas: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, at)) chosenOptionIds.add(id);
 
-    const { message, run } = await runAgent(
+    // Se calcula acá y no en el modelo (4.8): si deriva, escribe este texto tal cual en su respuesta.
+    const humanReplyWhen = await describeWhenHumanReplies(db, { tenantId, now: at });
+
+    const { message, handoff, run } = await runAgent(
       { llm, tools, logger, ...(deps.monotonicNow ? { monotonicNow: deps.monotonicNow } : {}) },
       {
         system: buildSystemPrompt(tenant),
@@ -148,6 +151,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           customerName: customer.name ?? customer.profileName,
           bookingName: customer.name,
           preferredProfessionalName,
+          humanReplyWhen,
           choices,
         }),
         history: [...history, ...pendingMessages],
@@ -163,6 +167,19 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
         },
       },
     );
+
+    // La respuesta pidió derivar (decisión 27): se registra y se pausa el asistente antes de enviarla, las dos
+    // cosas juntas en una transacción. Si una herramienta ya derivó en esta vuelta, `handOff` devuelve esa
+    // derivación en vez de abrir otra.
+    if (handoff) {
+      await handOff(db, {
+        tenantId,
+        conversationId,
+        reason: handoff.reason,
+        summary: handoff.summary,
+        now: at,
+      });
+    }
 
     // Segundo intento fallido (4.8, 8.5): lo decide el código, no el modelo. La vuelta anterior se
     // mira antes de registrar esta.

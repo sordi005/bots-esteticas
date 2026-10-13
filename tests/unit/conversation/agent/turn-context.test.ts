@@ -13,6 +13,7 @@ const base = {
   customerName: null,
   bookingName: null,
   preferredProfessionalName: null,
+  humanReplyWhen: 'en este horario',
   choices: [] as ResolvedChoice[],
 };
 
@@ -64,6 +65,15 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(context).toMatch(/Nombre para el turno: Caro Pérez \(ya está cargado: no lo pidas\)/);
     expect(context).not.toMatch(/pedíselo/);
   });
+
+  it.each(['en este horario', 'el viernes 9/10 a las 9:00', 'lo antes posible'])(
+    'dice cuándo le responde una persona si deriva (%s), calculado por el código, para que el modelo lo escriba',
+    (when) => {
+      const context = buildTurnContext({ ...base, humanReplyWhen: when });
+
+      expect(context).toContain(`- Si derivás a una persona, le responde ${when}: escribilo tal cual en tu mensaje`);
+    },
+  );
 
   it('empieza marcando que no lo escribió la clienta', () => {
     expect(buildTurnContext(base)).toMatch(/^Contexto del sistema \(no lo escribió la clienta\)/);

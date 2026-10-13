@@ -16,10 +16,11 @@ import type { AgentTool, ToolContext } from '../../src/modules/conversation/tool
 import { customers } from '../../src/modules/customers/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { appointments } from '../../src/modules/scheduling/schema.js';
+import { tenantSettings } from '../../src/modules/tenants/schema.js';
 import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
-import { callTools, finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
+import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
 import { at, createCatalogFixture, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
@@ -940,5 +941,174 @@ describe('createAgentResponder: turnos con las herramientas reales (H8)', () => 
 
     expect(await statusOf(booked.appointmentId)).toBe('CONFIRMED');
     expect(await handoffsOf(f)).toHaveLength(1);
+  });
+});
+
+describe('createAgentResponder: la respuesta que deriva a una persona (4.8, decisión 27)', () => {
+  const handoffsOf = (f: Fixture) => db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId));
+  const conversationRow = async (f: Fixture) =>
+    single(await db.select().from(conversations).where(eq(conversations.id, f.conversationId)));
+  const WEEKDAYS_9_TO_18 = [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' }));
+
+  const complaint = { motivo: 'queja', resumen: 'Reclamo por la atención del turno de ayer' };
+
+  it('registra la derivación, pausa el asistente y devuelve el texto del modelo', async () => {
+    const f = await setup('Caro Pérez');
+    const pending = await pendingTexts(f, 'estoy muy enojada con el turno de ayer');
+
+    const { result, requests } = reply(f, pending, [
+      handoffAnswer('Lamento lo que pasó. Una persona del equipo te responde por acá lo antes posible.', complaint),
+    ]);
+
+    expect(await result).toEqual({
+      type: 'text',
+      body: 'Lamento lo que pasó. Una persona del equipo te responde por acá lo antes posible.',
+    });
+    expect(requests).toHaveLength(1);
+    expect(await handoffsOf(f)).toEqual([
+      expect.objectContaining({ reason: 'complaint', summary: complaint.resumen, status: 'open' }),
+    ]);
+    expect(await conversationRow(f)).toMatchObject({
+      assistantStatus: 'paused',
+      pausedUntil: new Date(NOW.getTime() + 12 * 60 * 60 * 1_000),
+    });
+    expect(await runsOf(f)).toEqual([expect.objectContaining({ outcome: 'replied', llmCalls: 1 })]);
+  });
+
+  it('cada motivo del modelo se guarda con el motivo de la base que le corresponde', async () => {
+    const reasons = [
+      ['pedido_de_la_clienta', 'customer_request'],
+      ['imagen', 'unsupported_media'],
+      ['consulta_previa', 'requires_consultation'],
+      ['fuera_de_catalogo', 'off_catalog'],
+      ['excepcion', 'policy_exception'],
+      ['no_entiende', 'not_understood'],
+    ] as const;
+    for (const [motivo, reason] of reasons) {
+      const f = await setup();
+      const pending = await pendingTexts(f, 'quiero hablar con alguien');
+
+      const { result } = reply(f, pending, [
+        handoffAnswer('Te paso con una persona del equipo.', { motivo, resumen: 'Necesita que la atienda una persona' }),
+      ]);
+      await result;
+
+      expect(await handoffsOf(f), motivo).toEqual([expect.objectContaining({ reason })]);
+    }
+  });
+
+  it('con un tema sensible guarda el resumen fijo y descarta el del modelo (regla 9)', async () => {
+    const f = await setup();
+    const pending = await pendingTexts(f, 'estoy embarazada, ¿puedo hacerme el lifting?');
+
+    const { result } = reply(f, pending, [
+      handoffAnswer('Eso lo ve una persona del equipo.', { motivo: 'tema_sensible', resumen: 'Embarazada de 8 semanas' }),
+    ]);
+    await result;
+
+    const [handoff] = await handoffsOf(f);
+    expect(handoff).toMatchObject({ reason: 'sensitive_topic', summary: 'Tema sensible: ver la conversación' });
+    expect(JSON.stringify(handoff)).not.toContain('Embarazada');
+  });
+
+  it('sin derivar no hay derivación ni pausa', async () => {
+    const f = await setup();
+    const pending = await pendingTexts(f, 'hola');
+
+    const { result } = reply(f, pending, [finalAnswer('¡Hola! ¿En qué te ayudo?')]);
+    await result;
+
+    expect(await handoffsOf(f)).toEqual([]);
+    expect(await conversationRow(f)).toMatchObject({ assistantStatus: 'active', pausedUntil: null });
+  });
+
+  it('un resumen de relleno no deriva: la clienta recibe la frase fija y el asistente sigue activo', async () => {
+    const f = await setup();
+    const pending = await pendingTexts(f, 'hola');
+
+    const { result } = reply(f, pending, [
+      handoffAnswer('Te paso con una persona.', { motivo: 'queja', resumen: 'placeholder' }),
+    ]);
+
+    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(await handoffsOf(f)).toEqual([]);
+    expect(await conversationRow(f)).toMatchObject({ assistantStatus: 'active' });
+    expect(await runsOf(f)).toEqual([expect.objectContaining({ outcome: 'fallback_invalid_output' })]);
+  });
+
+  it('si una herramienta ya derivó por la política y el modelo también pide derivar, queda una sola derivación', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-06', '09:00'),
+      actor: 'assistant',
+      now: NOW,
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+
+    // Lunes 5/10 a las 10:00 y el turno es el martes a las 9:00: faltan 23 horas.
+    const { result } = reply(f, await pendingTexts(f, 'cancelame el turno de mañana'), [
+      callTools([{ name: 'cancelar_turno', input: { turno_id: booked.appointmentId, confirmada: true } }]),
+      handoffAnswer('Como faltan menos de 24 horas, lo ve una persona del equipo.', {
+        motivo: 'excepcion',
+        resumen: 'Quiere cancelar fuera de plazo',
+      }),
+    ]);
+    await result;
+
+    const derived = await handoffsOf(f);
+    expect(derived).toHaveLength(1);
+    expect(derived[0]).toMatchObject({ reason: 'policy_exception', status: 'open' });
+  });
+
+  describe('cuándo responde una persona va en el contexto de la vuelta, no en el prompt', () => {
+    const whenLine = (context: string | undefined) =>
+      /- Si derivás a una persona, le responde (.*?): escribilo/.exec(context ?? '')?.[1];
+
+    it('sin horario de atención cargado: lo antes posible', async () => {
+      const f = await setup();
+      const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('Hola')]);
+      await result;
+
+      expect(whenLine(requests[0]?.turnContext)).toBe('lo antes posible');
+    });
+
+    it('ahora dentro del horario de atención: en este horario', async () => {
+      // Lunes 10:00.
+      const f = await setup(null, { settings: { humanAttentionHours: WEEKDAYS_9_TO_18 } });
+      const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('Hola')]);
+      await result;
+
+      expect(whenLine(requests[0]?.turnContext)).toBe('en este horario');
+    });
+
+    it('fuera del horario: el próximo inicio, escrito por el código', async () => {
+      // Hoy lunes no hay atención: abre el martes.
+      const f = await setup(null, { settings: { humanAttentionHours: [{ weekday: 2, start: '09:00', end: '18:00' }] } });
+      const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('Hola')]);
+      await result;
+
+      expect(whenLine(requests[0]?.turnContext)).toBe('el martes 6/10 a las 9:00');
+    });
+
+    it('el prompt del sistema es idéntico entre vueltas del mismo negocio aunque cambie cuándo responde una persona', async () => {
+      const f = await setup(null, { settings: { humanAttentionHours: WEEKDAYS_9_TO_18 } });
+      const first = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('Hola')]);
+      await first.result;
+      await db
+        .update(tenantSettings)
+        .set({ humanAttentionHours: [{ weekday: 2, start: '09:00', end: '18:00' }] })
+        .where(eq(tenantSettings.tenantId, f.tenantId));
+      const second = reply(f, await pendingTexts(f, 'chau'), [finalAnswer('Chau')]);
+      await second.result;
+
+      expect(whenLine(first.requests[0]?.turnContext)).toBe('en este horario');
+      expect(whenLine(second.requests[0]?.turnContext)).toBe('el martes 6/10 a las 9:00');
+      expect(second.requests[0]?.system).toBe(first.requests[0]?.system);
+      expect(first.requests[0]?.system).not.toContain('6/10');
+    });
   });
 });

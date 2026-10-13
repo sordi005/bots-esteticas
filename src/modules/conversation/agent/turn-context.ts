@@ -17,6 +17,12 @@ export interface TurnContextInput {
   /** El nombre para el turno (4.9). El de perfil de WhatsApp no cuenta: crear_reserva lo exige. */
   bookingName: string | null;
   preferredProfessionalName: string | null;
+  /**
+   * Cuándo le responde una persona si el modelo deriva ("en este horario", "el viernes 9/10 a las
+   * 9:00", "lo antes posible"), calculado por el código (4.8). Va acá y no en el prompt del sistema,
+   * que tiene que ser idéntico entre vueltas.
+   */
+  humanReplyWhen: string;
   /** Lo que la clienta tocó en botones o listas, ya resuelto y vuelto a validar (5.3). */
   choices: ResolvedChoice[];
 }
@@ -69,6 +75,9 @@ export function buildTurnContext(input: TurnContextInput): string {
   if (input.preferredProfessionalName) {
     lines.push(`- Profesional preferida: ${input.preferredProfessionalName}.`);
   }
+  lines.push(
+    `- Si derivás a una persona, le responde ${input.humanReplyWhen}: escribilo tal cual en tu mensaje («te va a responder por acá ${input.humanReplyWhen}»), sin prometer otra hora.`,
+  );
   if (input.choices.length > 0) {
     lines.push(
       '- Elecciones de la clienta en este mensaje:',
