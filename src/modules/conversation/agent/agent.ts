@@ -2,6 +2,13 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 import { outgoingMessageSchema, type OutgoingMessage } from '../../whatsapp/outgoing.js';
 import { truncateText } from '../format.js';
+import type { HandoffReason } from '../handoff.js';
+import {
+  isFillerSummary,
+  MODEL_HANDOFF_REASON_NAMES,
+  MODEL_HANDOFF_REASONS,
+  type ModelHandoffReason,
+} from '../handoff-reasons.js';
 import {
   MAX_LIST_ROWS,
   MAX_OPTION_DESCRIPTION_LENGTH,
@@ -38,13 +45,6 @@ export function notUnderstoodHandoffText(when: string): string {
   return NOT_UNDERSTOOD_HANDOFF_TEXT.replace('{cuándo}', when);
 }
 
-/**
- * Lo que se le dice al modelo cuando su respuesta promete una persona (`derivada=true`) y en la vuelta
- * no se derivó nada (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
- */
-export const UNFULFILLED_HANDOFF_NOTICE =
-  'En tu respuesta pusiste derivada=true pero no llamaste a derivar_a_persona y no se derivó la conversación. Si corresponde derivar, llamala ahora con el motivo y un resumen; si no, corregí el texto para no prometer que la atiende una persona.';
-
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -56,14 +56,31 @@ const LIST_BUTTON_LABEL = 'Ver opciones';
  * La respuesta final del modelo. Los nombres van en español porque los ve el modelo (6.4).
  * El esquema JSON es a mano: los proveedores no aceptan mínimos ni máximos, así que el largo
  * del texto se valida acá, del lado nuestro.
+ *
+ * `derivar` es obligatorio: `null`, o el motivo y el resumen (decisión 27). Derivar es parte de la
+ * respuesta y no una herramienta: la promesa («le paso tu consulta a una persona») y la acción salen
+ * juntas. Un resumen de relleno invalida la respuesta entera (4.8); con un tema sensible no se
+ * exige, porque el código guarda un resumen fijo y descarta el del modelo (regla 9).
  */
+const handoffRequestSchema = z
+  .object({
+    motivo: z.enum(MODEL_HANDOFF_REASON_NAMES),
+    resumen: z.string(),
+  })
+  .refine(({ motivo, resumen }) => motivo === 'tema_sensible' || !isFillerSummary(resumen));
+
 const finalAnswerSchema = z.object({
   texto: z.string().trim().min(1),
   opciones: z.array(z.string()),
-  derivada: z.boolean(),
+  derivar: handoffRequestSchema.nullable(),
 });
 
 type FinalAnswer = z.infer<typeof finalAnswerSchema>;
+
+/** Cada motivo con lo que significa, para la descripción que lee el modelo. */
+const REASON_DESCRIPTIONS = MODEL_HANDOFF_REASON_NAMES.map(
+  (name: ModelHandoffReason) => `${name} (${MODEL_HANDOFF_REASONS[name].description})`,
+).join(', ');
 
 export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -78,13 +95,32 @@ export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         'Ids de las opciones que la clienta puede elegir con un botón o una fila de lista. Solo ids que devolvieron las herramientas en esta respuesta. Lista vacía si no hay nada para elegir.',
     },
-    derivada: {
-      type: 'boolean',
+    derivar: {
+      anyOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          properties: {
+            motivo: {
+              type: 'string',
+              enum: [...MODEL_HANDOFF_REASON_NAMES],
+              description: `Por qué se deriva: ${REASON_DESCRIPTIONS}.`,
+            },
+            resumen: {
+              type: 'string',
+              description:
+                'Una sola línea para la dueña, de por lo menos 3 palabras y hasta 200 caracteres, con qué necesita la clienta de verdad (nada de relleno ni de pruebas). Con tema_sensible NO incluyas ningún dato de salud: escribí solo "consulta sensible".',
+            },
+          },
+          required: ['motivo', 'resumen'],
+          additionalProperties: false,
+        },
+      ],
       description:
-        'true si en el texto le decís a la clienta que una persona del equipo la va a atender, le va a responder o va a ver, revisar o recibir su consulta o su reclamo; false si no.',
+        'null si no derivás. Completalo (motivo y resumen) cuando tu texto le dice a la clienta que una persona del equipo la va a atender, le va a responder o va a ver, revisar o recibir su consulta o su reclamo: la derivación sale con esta respuesta y pausa al asistente en este chat.',
     },
   },
-  required: ['texto', 'opciones', 'derivada'],
+  required: ['texto', 'opciones', 'derivar'],
   additionalProperties: false,
 };
 
@@ -119,8 +155,17 @@ export interface AgentInput {
   toolContext: ToolContext;
 }
 
+/** La derivación que pidió la respuesta del modelo, con el motivo ya traducido al de la base (4.8). */
+export interface AgentHandoff {
+  reason: HandoffReason;
+  /** Lo que escribió el modelo: con un tema sensible, quien registra la derivación lo descarta (regla 9). */
+  summary: string;
+}
+
 export interface AgentResult {
   message: OutgoingMessage;
+  /** Si la respuesta pidió derivar. El ciclo no conoce la base: quien lo llama registra la derivación. */
+  handoff: AgentHandoff | null;
   run: AgentRun;
 }
 
@@ -140,36 +185,24 @@ function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   };
 }
 
-/** Lo que devuelve una herramienta ejecutada: el resultado para el modelo y si derivó la conversación. */
-interface ToolExecution {
-  result: LlmToolResult;
-  handedOff: boolean;
-}
-
 /** Ejecuta una herramienta pedida por el modelo y arma el resultado que se le devuelve. */
 async function executeToolCall(
   call: LlmToolCall,
   tools: Map<string, AgentTool<unknown>>,
   ctx: ToolContext,
   offered: Map<string, OfferableOption>,
-): Promise<ToolExecution> {
+): Promise<LlmToolResult> {
   const tool = tools.get(call.name);
   if (!tool) {
     return {
-      result: {
-        toolCallId: call.id,
-        content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
-        isError: true,
-      },
-      handedOff: false,
+      toolCallId: call.id,
+      content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
+      isError: true,
     };
   }
   const result = await runTool(tool, call.input, ctx);
   for (const option of result.options) offered.set(option.id, option);
-  return {
-    result: { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false },
-    handedOff: result.handedOff ?? false,
-  };
+  return { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false };
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
@@ -236,10 +269,6 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let llmCalls = 0;
   let hitToolLimit = false;
-  // ¿Alguna herramienta derivó la conversación en esta vuelta? Lo dice el código, no el modelo (6.4).
-  let handedOff = false;
-  // Solo se le hace notar UNA vez que prometió una persona sin derivar.
-  let corrected = false;
   let answer: FinalAnswer | null;
   let response: LlmResponse;
 
@@ -263,44 +292,30 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
       answer =
         response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
-      // Promete una persona y nadie fue avisado (6.4): una vez se lo hace notar para que derive o corrija el texto.
-      // Un turno que quedó con herramientas pedidas no admite un mensaje de texto a continuación: la API exige sus resultados.
-      if (answer?.derivada && !handedOff && !corrected && response.toolCalls.length === 0) {
-        corrected = true;
-        messages.push(
-          { role: 'assistant_turn', turn: response.assistantTurn },
-          { role: 'system_note', text: UNFULFILLED_HANDOFF_NOTICE },
-        );
-        continue;
-      }
       break;
     }
 
     const room = MAX_TOOL_CALLS_PER_REPLY - executedTools.length;
-    const executions = await Promise.all(
-      response.toolCalls.map((call, index): Promise<ToolExecution> => {
+    const results = await Promise.all(
+      response.toolCalls.map((call, index): Promise<LlmToolResult> => {
         if (index >= room) {
           return Promise.resolve({
-            result: {
-              toolCallId: call.id,
-              content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
-              isError: true,
-            },
-            handedOff: false,
+            toolCallId: call.id,
+            content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
+            isError: true,
           });
         }
         return executeToolCall(call, toolsByName, toolContext, offered);
       }),
     );
-    const results = executions.map((execution) => execution.result);
-    handedOff ||= executions.some((execution) => execution.handedOff);
     executedTools.push(...response.toolCalls.slice(0, room).map((call) => call.name));
 
     messages.push({ role: 'assistant_turn', turn: response.assistantTurn }, { role: 'tool_results', results });
   }
 
-  const finish = (message: OutgoingMessage, outcome: AgentOutcome): AgentResult => ({
+  const finish = (message: OutgoingMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
     message,
+    handoff,
     run: {
       model: response.model,
       llmCalls,
@@ -310,16 +325,13 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
       outcome,
     },
   });
-  const fallback = (outcome: FallbackOutcome) => finish({ type: 'text', body: FALLBACK_REPLY_TEXT }, outcome);
+  // Una respuesta que no se puede usar nunca deriva: la clienta recibe la frase fija y nada se pausa.
+  const fallback = (outcome: FallbackOutcome) => finish({ type: 'text', body: FALLBACK_REPLY_TEXT }, outcome, null);
 
   if (response.stopReason === 'refusal') return fallback('fallback_refusal');
   if (response.stopReason === 'max_tokens') return fallback('fallback_max_tokens');
 
   if (!answer) return fallback('fallback_invalid_output');
-  // Sigue prometiendo una persona que nadie sabe que tiene que atenderla, ni después del aviso.
-  if (answer.derivada && !handedOff) return fallback('fallback_unfulfilled_handoff');
-  // El caso inverso no deja a nadie esperando en falso: no se corrige.
-  if (!answer.derivada && handedOff) logger.debug('La respuesta no dice que derivó, pero la conversación se derivó');
 
   const requested = new Set(answer.opciones);
   const chosen: OfferableOption[] = [];
@@ -333,5 +345,8 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     logger.debug({ discarded }, 'Se descartaron opciones que ninguna herramienta ofreció');
   }
 
-  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied');
+  const handoff: AgentHandoff | null = answer.derivar
+    ? { reason: MODEL_HANDOFF_REASONS[answer.derivar.motivo].reason, summary: answer.derivar.resumen }
+    : null;
+  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
 }

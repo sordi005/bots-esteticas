@@ -91,10 +91,6 @@ function toApiMessages(messages: LlmMessage[], turnContext: string): Anthropic.M
         if (!Array.isArray(raw)) throw new TypeError('El turno del asistente no es de este adaptador');
         return { role: 'assistant', content: raw as Anthropic.ContentBlockParam[] };
       }
-      case 'system_note':
-        // Después de un turno del asistente la API pide un mensaje de la clienta, no uno de sistema:
-        // va con el mismo rótulo que el contexto de la vuelta para que el modelo sepa que no lo escribió ella.
-        return { role: 'user', content: `Contexto del sistema (no lo escribió la clienta): ${message.text}` };
       case 'tool_results':
         return {
           role: 'user',

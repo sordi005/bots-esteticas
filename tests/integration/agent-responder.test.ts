@@ -19,7 +19,7 @@ import { appointments } from '../../src/modules/scheduling/schema.js';
 import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
-import { callTools, finalAnswer, promisedHandoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
+import { callTools, finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
 import { at, createCatalogFixture, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
@@ -752,7 +752,7 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
     expect(await conversationOf(f)).toMatchObject({ assistantStatus: 'active' });
   });
 
-  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output', 'fallback_unfulfilled_handoff'] as const)(
+  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output'] as const)(
     'si la vuelta anterior terminó en %s y esta también falla, deriva con "no entiende" y la clienta recibe el texto fijo',
     async (previous) => {
       const f = await setup();
@@ -776,61 +776,6 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
       expect((await runsOf(f)).map((run) => run.outcome)).toEqual([previous, 'handoff_not_understood']);
     },
   );
-
-  it('prometer una persona sin derivar, aun después del aviso, es un fallo: frase fija, registrado con las dos llamadas, y no deriva', async () => {
-    const f = await setup();
-    const pending = await pendingTexts(f, 'estoy muy enojada con el turno de ayer');
-
-    const { result, requests } = reply(f, pending, [
-      promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.'),
-      promisedHandoffAnswer('Ya le aviso a una persona del equipo.'),
-    ]);
-
-    expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
-    expect(requests).toHaveLength(2);
-    expect(await handoffsOf(f)).toEqual([]);
-    expect(await runsOf(f)).toEqual([
-      expect.objectContaining({ outcome: 'fallback_unfulfilled_handoff', llmCalls: 2, toolCalls: [] }),
-    ]);
-  });
-
-  it('el segundo intento seguido que promete una persona sin derivar cuenta como fallo y deriva el código', async () => {
-    const f = await setup();
-    await addPreviousRun(f, { outcome: 'fallback_refusal', at: minutesAgo(5) });
-    const pending = await pendingTexts(f, 'estoy muy enojada con el turno de ayer');
-
-    const { result } = reply(f, pending, [
-      promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.'),
-      promisedHandoffAnswer('Ya le aviso a una persona del equipo.'),
-    ]);
-
-    expect(await result).toEqual({ type: 'text', body: notUnderstoodHandoffText('lo antes posible') });
-    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: 'not_understood', status: 'open' })]);
-    expect((await runsOf(f)).map((run) => run.outcome)).toEqual(['fallback_refusal', 'handoff_not_understood']);
-  });
-
-  it('si en la corrección el modelo deriva con la herramienta de verdad, la derivación queda registrada y la respuesta sale', async () => {
-    const f = await setup();
-    const pending = await pendingTexts(f, 'estoy muy enojada con el turno de ayer');
-
-    const { result } = reply(f, pending, [
-      promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.'),
-      callTools([
-        {
-          name: 'derivar_a_persona',
-          input: { motivo: 'queja', resumen: 'Reclamo por el turno de ayer' },
-        },
-      ]),
-      promisedHandoffAnswer('Una persona del equipo te responde por acá lo antes posible.'),
-    ]);
-
-    expect(await result).toEqual({ type: 'text', body: 'Una persona del equipo te responde por acá lo antes posible.' });
-    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: 'complaint', status: 'open' })]);
-    expect(await runsOf(f)).toEqual([
-      expect.objectContaining({ outcome: 'replied', llmCalls: 3, toolCalls: ['derivar_a_persona'] }),
-    ]);
-    expect(await conversationOf(f)).toMatchObject({ assistantStatus: 'paused' });
-  });
 
   it('el texto fijo dice cuándo responde una persona, según el horario del negocio', async () => {
     const f = await setup(null, {

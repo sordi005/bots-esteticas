@@ -5,16 +5,19 @@ import {
   FALLBACK_REPLY_TEXT,
   MAX_TOOL_CALLS_PER_REPLY,
   runAgent,
-  UNFULFILLED_HANDOFF_NOTICE,
   type AgentInput,
 } from '../../../../src/modules/conversation/agent/agent.js';
 import type { LlmMessage } from '../../../../src/modules/conversation/agent/llm-client.js';
 import type { AgentTool, OfferableOption, ToolContext } from '../../../../src/modules/conversation/tools/tool.js';
+import {
+  MODEL_HANDOFF_REASONS,
+  MODEL_HANDOFF_REASON_NAMES,
+} from '../../../../src/modules/conversation/handoff-reasons.js';
 import { createLogger } from '../../../../src/shared/logger.js';
 import {
   callTools,
   finalAnswer,
-  promisedHandoffAnswer,
+  handoffAnswer,
   rawAnswer,
   scriptedLlm,
   type ScriptStep,
@@ -97,23 +100,38 @@ describe('runAgent: una respuesta directa', () => {
     expect(requests[0]?.tools[0]?.inputSchema).toMatchObject({ type: 'object' });
     expect(requests[0]?.responseSchema).toMatchObject({
       type: 'object',
-      required: ['texto', 'opciones', 'derivada'],
+      required: ['texto', 'opciones', 'derivar'],
       additionalProperties: false,
     });
   });
 
-  it('el modelo ve el campo "derivada" como un booleano obligatorio, con su descripción', async () => {
+  it('el modelo ve el campo "derivar" como obligatorio: null o un objeto con el motivo y el resumen', async () => {
     const { run, requests } = agent([finalAnswer('Hola')]);
 
     await run();
 
-    const properties = (requests[0]?.responseSchema as { properties: Record<string, { type: string; description: string }> })
-      .properties;
-    expect(properties.derivada?.type).toBe('boolean');
-    // Cubre también «una persona va a revisar tu reclamo»: con esa frase el modelo esquivaba derivar.
-    expect(properties.derivada?.description).toMatch(/^true si .*una persona del equipo.*atender/);
-    expect(properties.derivada?.description).toMatch(/revisar o recibir su consulta o su reclamo/);
-    expect(properties.derivada?.description).toMatch(/false si no\.$/);
+    const schema = requests[0]?.responseSchema as {
+      properties: Record<string, { description: string; anyOf: Record<string, unknown>[] }>;
+    };
+    const derivar = schema.properties.derivar;
+    expect(derivar?.anyOf).toHaveLength(2);
+    expect(derivar?.anyOf[0]).toEqual({ type: 'null' });
+    const object = derivar?.anyOf[1] as {
+      type: string;
+      required: string[];
+      additionalProperties: boolean;
+      properties: { motivo: { type: string; enum: string[]; description: string }; resumen: { type: string; description: string } };
+    };
+    expect(object).toMatchObject({ type: 'object', required: ['motivo', 'resumen'], additionalProperties: false });
+    expect(object.properties.motivo.enum).toEqual([...MODEL_HANDOFF_REASON_NAMES]);
+    expect(object.properties.resumen.type).toBe('string');
+    // La descripción de cada motivo la lee el modelo: la de la lista cerrada de 4.8.
+    for (const name of MODEL_HANDOFF_REASON_NAMES) {
+      expect(object.properties.motivo.description).toContain(`${name} (${MODEL_HANDOFF_REASONS[name].description})`);
+    }
+    expect(derivar?.description).toMatch(/null si no derivás/);
+    // Ya no existe el booleano que desmentía al texto.
+    expect(schema.properties).not.toHaveProperty('derivada');
   });
 
   it('el esquema de la respuesta final no trae restricciones que los proveedores rechazan', async () => {
@@ -473,16 +491,10 @@ describe('runAgent: cuando el modelo no da una respuesta que se pueda usar', () 
     ['la respuesta se cortó por el largo máximo', finalAnswer('Hola', [], { stopReason: 'max_tokens' }), 'fallback_max_tokens'],
     ['la salida no es JSON', rawAnswer('Hola, ¿cómo estás?'), 'fallback_invalid_output'],
     ['falta el texto', rawAnswer(JSON.stringify({ opciones: [] })), 'fallback_invalid_output'],
-    ['el texto está vacío', rawAnswer(JSON.stringify({ texto: '   ', opciones: [], derivada: false })), 'fallback_invalid_output'],
+    ['el texto está vacío', rawAnswer(JSON.stringify({ texto: '   ', opciones: [], derivar: null })), 'fallback_invalid_output'],
     [
       'las opciones no son una lista de textos',
-      rawAnswer(JSON.stringify({ texto: 'Hola', opciones: [1], derivada: false })),
-      'fallback_invalid_output',
-    ],
-    ['falta el campo derivada', rawAnswer(JSON.stringify({ texto: 'Hola', opciones: [] })), 'fallback_invalid_output'],
-    [
-      'derivada no es un booleano',
-      rawAnswer(JSON.stringify({ texto: 'Hola', opciones: [], derivada: 'si' })),
+      rawAnswer(JSON.stringify({ texto: 'Hola', opciones: [1], derivar: null })),
       'fallback_invalid_output',
     ],
   ];
@@ -526,243 +538,181 @@ describe('runAgent: cuando el modelo no da una respuesta que se pueda usar', () 
   });
 });
 
-describe('runAgent: la respuesta dice si derivó, y el código lo verifica (6.4)', () => {
-  const NOTICE =
-    'En tu respuesta pusiste derivada=true pero no llamaste a derivar_a_persona y no se derivó la conversación. Si corresponde derivar, llamala ahora con el motivo y un resumen; si no, corregí el texto para no prometer que la atiende una persona.';
+describe('runAgent: derivar va en la respuesta (6.4, decisión 27)', () => {
+  const REAL_SUMMARY = 'Reclamo por la atención de su última visita';
 
-  /** Una herramienta que deriva (como derivar_a_persona o cancelar_turno fuera de plazo): lo indica en el resultado. */
-  function derivingTool(name: string) {
-    const run = vi.fn<AgentTool<Record<string, never>>['run']>(() =>
-      Promise.resolve({ content: { derivada: true, cuando: 'mañana' }, options: [], handedOff: true }),
-    );
-    const tool: AgentTool<Record<string, never>> = {
-      name,
-      description: `Deriva (${name}).`,
-      input: z.object({}),
-      run,
-    };
-    return { tool: tool as AgentTool<unknown>, run };
-  }
+  it('sin derivar, la respuesta no trae ninguna derivación', async () => {
+    const { run } = agent([finalAnswer('El semi sale $18.000.')]);
 
-  it('el aviso es el texto aprobado', () => {
-    expect(UNFULFILLED_HANDOFF_NOTICE).toBe(NOTICE);
+    const { handoff, run: record } = await run();
+
+    expect(handoff).toBeNull();
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 1 });
   });
 
-  it('promete una persona sin derivar: se lo hace notar al modelo y, si deriva en la corrección, la respuesta sale', async () => {
-    const hand = derivingTool('derivar_a_persona');
-    const promise = promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.');
-    const derive = callTools([{ name: 'derivar_a_persona', id: 'toolu_derivar' }]);
-    const { run, requests } = agent(
-      [promise, derive, promisedHandoffAnswer('Una persona del equipo te responde por acá mañana.')],
-      [hand.tool],
-    );
-
-    const { message, run: record } = await run();
-
-    expect(requests).toHaveLength(3);
-    expect(requests[1]?.messages).toEqual([
-      ...HISTORY,
-      { role: 'assistant_turn', turn: promise.assistantTurn },
-      { role: 'system_note', text: NOTICE },
-    ]);
-    expect(requests[1]?.allowTools).toBe(true);
-    expect(hand.run).toHaveBeenCalledTimes(1);
-    expect(message).toEqual({ type: 'text', body: 'Una persona del equipo te responde por acá mañana.' });
-    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3, toolCalls: ['derivar_a_persona'] });
-  });
-
-  it('promete una persona sin derivar y el modelo corrige el texto: sale el texto corregido', async () => {
+  it('con motivo y resumen, el ciclo devuelve la derivación pedida y la respuesta sale igual', async () => {
     const { run, requests } = agent([
-      promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.'),
-      finalAnswer('Lamento lo que pasó. ¿Querés que te ayude una persona del equipo?'),
+      handoffAnswer('Lamento lo que pasó. Una persona del equipo te responde por acá en este horario.', {
+        motivo: 'queja',
+        resumen: REAL_SUMMARY,
+      }),
     ]);
 
-    const { message, run: record } = await run();
+    const { message, handoff, run: record } = await run();
 
-    expect(requests).toHaveLength(2);
-    expect(message).toEqual({ type: 'text', body: 'Lamento lo que pasó. ¿Querés que te ayude una persona del equipo?' });
-    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2 });
-    // Las dos llamadas se registran: el costo de la corrección también cuenta.
-    expect(record.usage).toEqual({ inputTokens: 200, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 });
-  });
-
-  it('solo se corrige una vez: si sigue prometiendo una persona sin derivar, sale la frase fija', async () => {
-    const { run, requests } = agent([
-      promisedHandoffAnswer('Te paso el reclamo a una persona del equipo.'),
-      promisedHandoffAnswer('Ya le aviso a una persona del equipo.'),
-    ]);
-
-    const { message, run: record } = await run();
-
-    expect(requests).toHaveLength(2);
-    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
-    expect(record).toMatchObject({ outcome: 'fallback_unfulfilled_handoff', llmCalls: 2, toolCalls: [] });
-  });
-
-  it('después de la corrección el modelo puede usar herramientas que no derivan, pero sin derivar sigue siendo una promesa vacía', async () => {
-    const search = fakeTool('buscar_servicios');
-    const { run, requests } = agent(
-      [
-        promisedHandoffAnswer('Te paso con una persona.'),
-        callTools([{ name: 'buscar_servicios' }]),
-        promisedHandoffAnswer('Una persona del equipo te contesta.'),
-      ],
-      [search.tool],
-    );
-
-    const { message, run: record } = await run();
-
-    expect(requests).toHaveLength(3);
-    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
-    expect(record).toMatchObject({ outcome: 'fallback_unfulfilled_handoff', toolCalls: ['buscar_servicios'] });
-  });
-
-  it('derivada=true con derivar_a_persona en la misma vuelta: no hay corrección', async () => {
-    const hand = derivingTool('derivar_a_persona');
-    const { run, requests } = agent(
-      [callTools([{ name: 'derivar_a_persona' }]), promisedHandoffAnswer('Una persona del equipo te responde por acá mañana.')],
-      [hand.tool],
-    );
-
-    const { message, run: record } = await run();
-
-    expect(requests).toHaveLength(2);
-    expect(message).toEqual({ type: 'text', body: 'Una persona del equipo te responde por acá mañana.' });
-    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2 });
-  });
-
-  it('derivada=true cuando cancelar_turno derivó sola por la política: no hay corrección', async () => {
-    const cancel = derivingTool('cancelar_turno');
-    const { run, requests } = agent(
-      [
-        callTools([{ name: 'cancelar_turno' }]),
-        promisedHandoffAnswer('Ese turno ya no se puede cancelar sin costo; una persona del equipo te responde mañana.'),
-      ],
-      [cancel.tool],
-    );
-
-    const { run: record } = await run();
-
-    expect(requests).toHaveLength(2);
-    expect(record.outcome).toBe('replied');
-  });
-
-  it('una derivación anterior en la misma respuesta (antes de otras herramientas) también vale', async () => {
-    const hand = derivingTool('derivar_a_persona');
-    const search = fakeTool('buscar_servicios');
-    const { run, requests } = agent(
-      [
-        callTools([{ name: 'derivar_a_persona' }]),
-        callTools([{ name: 'buscar_servicios' }]),
-        promisedHandoffAnswer('Una persona del equipo te responde.'),
-      ],
-      [hand.tool, search.tool],
-    );
-
-    const { run: record } = await run();
-
-    expect(requests).toHaveLength(3);
-    expect(record.outcome).toBe('replied');
-  });
-
-  it('derivada=false sin derivar es lo normal: una sola llamada, sin aviso', async () => {
-    const { run, requests } = agent([finalAnswer('El semi sale $18.000.')]);
-
-    const { run: record } = await run();
-
+    expect(handoff).toEqual({ reason: 'complaint', summary: REAL_SUMMARY });
+    expect(message).toEqual({
+      type: 'text',
+      body: 'Lamento lo que pasó. Una persona del equipo te responde por acá en este horario.',
+    });
+    // Una sola llamada: nadie le hace notar nada al modelo (no hay corrección).
     expect(requests).toHaveLength(1);
     expect(record).toMatchObject({ outcome: 'replied', llmCalls: 1 });
   });
 
-  it('derivada=false aunque hubo derivación: no se corrige, solo queda un aviso de depuración sin contenido', async () => {
-    const debug = vi.spyOn(logger, 'debug');
-    const hand = derivingTool('derivar_a_persona');
-    const { run, requests } = agent(
-      [callTools([{ name: 'derivar_a_persona' }]), finalAnswer('Quedó anotado, gracias por avisar.')],
-      [hand.tool],
+  it.each([
+    ['pedido_de_la_clienta', 'customer_request'],
+    ['queja', 'complaint'],
+    ['tema_sensible', 'sensitive_topic'],
+    ['imagen', 'unsupported_media'],
+    ['consulta_previa', 'requires_consultation'],
+    ['fuera_de_catalogo', 'off_catalog'],
+    ['excepcion', 'policy_exception'],
+    ['no_entiende', 'not_understood'],
+  ])('el motivo %s se traduce al motivo %s de la base', async (motivo, reason) => {
+    const { run } = agent([handoffAnswer('Una persona te responde.', { motivo, resumen: REAL_SUMMARY })]);
+
+    const { handoff } = await run();
+
+    expect(handoff).toEqual({ reason, summary: REAL_SUMMARY });
+  });
+
+  it('las opciones de una respuesta que deriva se arman igual que siempre', async () => {
+    const search = fakeTool('buscar_servicios', [SEMI]);
+    const { run } = agent(
+      [
+        callTools([{ name: 'buscar_servicios' }]),
+        handoffAnswer(
+          'Te paso con una persona.',
+          { motivo: 'pedido_de_la_clienta', resumen: REAL_SUMMARY },
+          {},
+          [SEMI.id],
+        ),
+      ],
+      [search.tool],
     );
 
-    const { message, run: record } = await run();
+    const { message, handoff } = await run();
 
+    expect(handoff).not.toBeNull();
+    expect(message.type).toBe('buttons');
+  });
+
+  describe('el resumen de relleno no deriva (4.8)', () => {
+    // Salieron de las evaluaciones: el modelo emitía la derivación sin haberla decidido.
+    it.each(['placeholder', 'x', 'Ignorar', 'Reclamo atención', 'esto es una prueba', '   ', ''])(
+      'el resumen «%s» no sirve: frase fija, fallo de formato y ninguna derivación',
+      async (resumen) => {
+        const { run, requests } = agent([handoffAnswer('Te paso con una persona.', { motivo: 'queja', resumen })]);
+
+        const { message, handoff, run: record } = await run();
+
+        expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+        expect(handoff).toBeNull();
+        expect(record.outcome).toBe('fallback_invalid_output');
+        expect(requests).toHaveLength(1);
+      },
+    );
+
+    it('con tema_sensible no se exige: el código guarda un resumen fijo y descarta el del modelo', async () => {
+      const { run } = agent([
+        handoffAnswer('Una persona te responde.', { motivo: 'tema_sensible', resumen: 'Embarazada' }),
+      ]);
+
+      const { handoff, run: record } = await run();
+
+      expect(handoff).toEqual({ reason: 'sensitive_topic', summary: 'Embarazada' });
+      expect(record.outcome).toBe('replied');
+    });
+
+    it('con tema_sensible un resumen vacío tampoco rompe la respuesta', async () => {
+      const { run } = agent([handoffAnswer('Una persona te responde.', { motivo: 'tema_sensible', resumen: '' })]);
+
+      const { handoff, run: record } = await run();
+
+      expect(handoff).toEqual({ reason: 'sensitive_topic', summary: '' });
+      expect(record.outcome).toBe('replied');
+    });
+  });
+
+  describe('una derivación mal formada es una salida inválida', () => {
+    const invalid: [string, Record<string, unknown>][] = [
+      ['falta el campo derivar', { texto: 'Hola', opciones: [] }],
+      ['solo trae el booleano viejo (derivada)', { texto: 'Hola', opciones: [], derivada: true }],
+      ['derivar es un texto', { texto: 'Hola', opciones: [], derivar: 'queja' }],
+      ['derivar es un booleano', { texto: 'Hola', opciones: [], derivar: true }],
+      [
+        'el motivo no está en la lista',
+        { texto: 'Hola', opciones: [], derivar: { motivo: 'curiosidad', resumen: REAL_SUMMARY } },
+      ],
+      [
+        'el motivo viene en inglés',
+        { texto: 'Hola', opciones: [], derivar: { motivo: 'complaint', resumen: REAL_SUMMARY } },
+      ],
+      ['falta el resumen', { texto: 'Hola', opciones: [], derivar: { motivo: 'queja' } }],
+      ['falta el motivo', { texto: 'Hola', opciones: [], derivar: { resumen: REAL_SUMMARY } }],
+      ['el resumen no es un texto', { texto: 'Hola', opciones: [], derivar: { motivo: 'queja', resumen: 5 } }],
+    ];
+
+    it.each(invalid)('%s: frase fija y sin derivación', async (_name, body) => {
+      const { run } = agent([rawAnswer(JSON.stringify(body))]);
+
+      const { message, handoff, run: record } = await run();
+
+      expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+      expect(handoff).toBeNull();
+      expect(record.outcome).toBe('fallback_invalid_output');
+    });
+  });
+
+  it('una respuesta cortada o rechazada no deriva aunque traiga el campo completo', async () => {
+    const request = { motivo: 'queja', resumen: REAL_SUMMARY };
+    const cut = agent([handoffAnswer('Te paso con una persona.', request, { stopReason: 'max_tokens' })]);
+    const refused = agent([handoffAnswer('Te paso con una persona.', request, { stopReason: 'refusal' })]);
+
+    const cutResult = await cut.run();
+    const refusedResult = await refused.run();
+
+    expect([cutResult.handoff, refusedResult.handoff]).toEqual([null, null]);
+    expect([cutResult.run.outcome, refusedResult.run.outcome]).toEqual(['fallback_max_tokens', 'fallback_refusal']);
+  });
+
+  it('al llegar al tope de herramientas, la respuesta sin herramientas todavía puede derivar', async () => {
+    const search = fakeTool('buscar_servicios');
+    const script: ScriptStep[] = [
+      ...Array.from({ length: 8 }, () => callTools([{ name: 'buscar_servicios' }])),
+      handoffAnswer('Te paso con una persona.', { motivo: 'pedido_de_la_clienta', resumen: REAL_SUMMARY }),
+    ];
+    const { run } = agent(script, [search.tool]);
+
+    const { handoff, run: record } = await run();
+
+    expect(handoff).toEqual({ reason: 'customer_request', summary: REAL_SUMMARY });
+    expect(record.outcome).toBe('tool_limit');
+  });
+
+  it('una herramienta que ya derivó por la política no obliga a nada: el campo puede venir null y no se corrige', async () => {
+    const cancel = fakeTool('cancelar_turno');
+    const { run, requests } = agent(
+      [callTools([{ name: 'cancelar_turno' }]), finalAnswer('Esa cancelación la ve una persona; te responde mañana.')],
+      [cancel.tool],
+    );
+
+    const { handoff, run: record } = await run();
+
+    expect(handoff).toBeNull();
     expect(requests).toHaveLength(2);
-    expect(message).toEqual({ type: 'text', body: 'Quedó anotado, gracias por avisar.' });
     expect(record.outcome).toBe('replied');
-    expect(debug).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(debug.mock.calls)).not.toContain('Quedó anotado');
-    debug.mockRestore();
-  });
-
-  it('una respuesta cortada o rechazada con derivada=true no se corrige: cae a su fallback de siempre', async () => {
-    const cut = agent([promisedHandoffAnswer('Te paso con una persona.', { stopReason: 'max_tokens' })]);
-    const refused = agent([promisedHandoffAnswer('Te paso con una persona.', { stopReason: 'refusal' })]);
-
-    expect((await cut.run()).run.outcome).toBe('fallback_max_tokens');
-    expect((await refused.run()).run.outcome).toBe('fallback_refusal');
-    expect(cut.requests).toHaveLength(1);
-    expect(refused.requests).toHaveLength(1);
-  });
-
-  it('una respuesta sin el campo derivada es inválida: frase fija, sin corrección', async () => {
-    const { run, requests } = agent([rawAnswer(JSON.stringify({ texto: 'Hola', opciones: [] }))]);
-
-    const { message, run: record } = await run();
-
-    expect(requests).toHaveLength(1);
-    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
-    expect(record.outcome).toBe('fallback_invalid_output');
-  });
-
-  it('una corrección inválida también cae a la frase fija', async () => {
-    const { run } = agent([promisedHandoffAnswer('Te paso con una persona.'), rawAnswer('texto suelto')]);
-
-    expect((await run()).run.outcome).toBe('fallback_invalid_output');
-  });
-
-  describe('y respeta el tope de herramientas', () => {
-    it('con lugar en el tope, la corrección permite herramientas y las que sobran vuelven como error', async () => {
-      const hand = derivingTool('derivar_a_persona');
-      const search = fakeTool('buscar_servicios');
-      const script: ScriptStep[] = [
-        callTools(Array.from({ length: 7 }, () => ({ name: 'buscar_servicios' }))),
-        promisedHandoffAnswer('Te paso con una persona.'),
-        callTools([
-          { name: 'derivar_a_persona', id: 'toolu_derivar' },
-          { name: 'buscar_servicios', id: 'toolu_extra' },
-        ]),
-        promisedHandoffAnswer('Una persona del equipo te responde.'),
-      ];
-      const { run, requests } = agent(script, [hand.tool, search.tool]);
-
-      const { run: record } = await run();
-
-      expect(requests[2]?.allowTools).toBe(true);
-      expect(requests[3]?.allowTools).toBe(false);
-      expect(requests[3]?.messages.at(-1)).toMatchObject({
-        results: [
-          { toolCallId: 'toolu_derivar', isError: false },
-          { toolCallId: 'toolu_extra', isError: true },
-        ],
-      });
-      expect(record.toolCalls).toHaveLength(8);
-      expect(record.outcome).toBe('tool_limit');
-    });
-
-    it('con el tope ya alcanzado, la corrección va sin herramientas: solo puede corregir el texto', async () => {
-      const search = fakeTool('buscar_servicios');
-      const script: ScriptStep[] = [
-        callTools(Array.from({ length: 8 }, () => ({ name: 'buscar_servicios' }))),
-        promisedHandoffAnswer('Te paso con una persona.'),
-        finalAnswer('Esto es lo que encontré.'),
-      ];
-      const { run, requests } = agent(script, [search.tool]);
-
-      const { message, run: record } = await run();
-
-      expect(requests.map((request) => request.allowTools)).toEqual([true, false, false]);
-      expect(message).toEqual({ type: 'text', body: 'Esto es lo que encontré.' });
-      expect(record).toMatchObject({ outcome: 'tool_limit', llmCalls: 3 });
-      expect(record.toolCalls).toHaveLength(8);
-    });
   });
 });
 
