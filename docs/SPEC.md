@@ -577,11 +577,12 @@ Herramientas del agente en el MVP:
 |---|---|
 | `buscar_servicios(texto)` | Devuelve servicios del catálogo que coinciden, con precio y duración |
 | `consultar_informacion(tema)` | Devuelve datos del negocio: dirección, medios de pago, promociones, políticas |
-| `consultar_disponibilidad(servicio, profesional?, desde, hasta, turno?)` | Devuelve horarios libres (con `turno`, los horarios para reprogramar ese turno) |
+| `consultar_disponibilidad(servicio, profesional?, desde, hasta)` | Devuelve horarios libres para reservar |
+| `consultar_horarios_para_reprogramar(turno, desde, hasta)` | Devuelve horarios libres para mover ese turno, con su servicio y su profesional |
 | `crear_reserva(horario, nombre?)` | Crea el turno o la reserva provisoria, aplicando las reglas de seña |
 | `generar_pago_seña(turno)` | Genera el link de Mercado Pago o devuelve el alias, según el medio que eligió el negocio (4.5) |
 | `listar_turnos_de_la_clienta()` | Turnos futuros de quien escribe |
-| `reprogramar_turno(horario)` | Aplica la política. El horario es uno de los que devolvió `consultar_disponibilidad` para ese turno |
+| `reprogramar_turno(horario)` | Aplica la política. El horario es uno de los que devolvió `consultar_horarios_para_reprogramar` |
 | `cancelar_turno(turno, confirmada)` | Aplica la política |
 
 **[D]** Derivar a una persona no es una herramienta: es parte de la respuesta del modelo (campo `derivar`, más abajo). El código registra la derivación, pausa el asistente y avisa a la dueña.
@@ -600,7 +601,9 @@ Detalle de las herramientas de consulta (H7):
 Detalle de las herramientas de turnos y derivación (H8):
 
 - **[D]** `crear_reserva` y `reprogramar_turno` reciben el **id del horario** que devolvió `consultar_disponibilidad` (o el de la elección de la clienta). El modelo copia un id; no arma combinaciones ni convierte horarios. El código lo vuelve a validar todo con `booking.ts` (6.6).
-- **[D]** La intención va en el id. Un horario para reservar (`horario:<servicio>:<profesional>:<inicio>`) y uno para reprogramar (`reprogramar:<turno>:<inicio>`) son ids distintos: `crear_reserva` solo acepta los primeros y `reprogramar_turno` solo los segundos. `consultar_disponibilidad` con `turno` devuelve horarios para reprogramar ese turno, con su servicio y su profesional (4.6), y valida que sea de la clienta que escribe. Las evaluaciones mostraron que, después de pedir una reprogramación, la clienta tocaba el horario y el modelo llamaba a `crear_reserva`: quedaba con dos turnos.
+- **[D]** La intención va en el id. Un horario para reservar (`horario:<servicio>:<profesional>:<inicio>`) y uno para reprogramar (`reprogramar:<turno>:<inicio>`) son ids distintos: `crear_reserva` solo acepta los primeros y `reprogramar_turno` solo los segundos. `consultar_horarios_para_reprogramar` devuelve los horarios para mover un turno, con su servicio y su profesional (4.6), y valida que sea de la clienta que escribe. Las evaluaciones mostraron que, después de pedir una reprogramación, la clienta tocaba el horario y el modelo llamaba a `crear_reserva`: quedaba con dos turnos.
+- **[D]** Reservar y reprogramar consultan horarios con herramientas distintas, y cada una tiene sus parámetros obligatorios. Un parámetro opcional que cambia lo que hace la herramienta se omite: con `turno` opcional en `consultar_disponibilidad`, el modelo dejaba de mandar el servicio también al consultar para reservar.
+- **[D]** Cada respuesta es la única de la vuelta: el asistente no puede anunciar que va a buscar algo ("dame un momento que busco tus turnos") y seguir después. Consulta con las herramientas y contesta con el resultado.
 - **[D]** `crear_reserva` y `reprogramar_turno` solo actúan sobre un horario que **la clienta eligió** con un botón o una lista, en esa vuelta o en las últimas 24 horas. Si el modelo pasa un horario que ella no tocó (por ejemplo, porque lo escribió o porque el modelo lo eligió por su cuenta), la herramienta no cambia nada y devuelve ese horario como opción, para que lo confirme con un botón. Elegir es la confirmación (principio 5), y lo garantiza el código: las evaluaciones mostraron al modelo reprogramando un turno a un horario que la clienta nunca eligió.
 - **[D]** El historial que ve el modelo muestra, de cada elección vieja, el id de la opción elegida además de su título. Así, si después de elegir el horario hay que pedir el nombre, el modelo todavía tiene el id para reservar.
 - `crear_reserva(horario, nombre?)`: el nombre es obligatorio si la clienta todavía no tiene uno cargado (4.9) y se guarda en su ficha. Devuelve el estado del turno y, si lleva seña, el monto y hasta cuándo pagarla, escritos por el código. **[D]** Es idempotente: si la clienta ya tiene ese mismo turno, lo devuelve en vez de responder que el horario se ocupó (un reintento puede volver a pedirlo).
