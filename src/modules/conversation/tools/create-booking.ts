@@ -153,13 +153,22 @@ export const createBookingTool: AgentTool<Input> = {
     'reservado=true. Solo reserva un horario que la clienta eligió con un botón o una lista: si todavía no lo ' +
     'eligió, no reserva nada y devuelve motivo=falta_que_elija con ese horario para que se lo ofrezcas como ' +
     'opción. Si el horario se ocupó, volvé a consultar la disponibilidad y ofrecé otros. Pedirlo dos veces ' +
-    'no duplica la reserva.',
+    'no duplica la reserva. Es solo para turnos nuevos: un horario_id que empieza con "reprogramar:" es para mover un ' +
+    'turno que la clienta ya tiene y va a reprogramar_turno, no acá.',
   input,
   async run({ horario_id, nombre }, ctx) {
     ctx.signal.throwIfAborted();
     const { db, tenantId, customerId, now } = ctx;
 
     const choice = parseChoiceId(horario_id);
+    // La intención va en el id (decisión 28): un horario para mover un turno nunca reserva uno nuevo.
+    if (choice?.kind === 'reschedule') {
+      return refusal(
+        'horario_para_reprogramar',
+        'Ese horario es para reprogramar su turno: usá reprogramar_turno con ese mismo horario_id. No reservaste nada.',
+        true,
+      );
+    }
     if (choice?.kind !== 'slot') {
       return refusal(
         'id_de_horario_invalido',

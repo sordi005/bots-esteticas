@@ -65,7 +65,12 @@ export type EvalChoice =
   /** Uno de sus turnos (por la `clave` con la que lo preparó el caso). */
   | { tipo: 'turno'; turno: string }
   /** El botón «Sí, cancelar» de uno de sus turnos. */
-  | { tipo: 'cancelar'; turno: string };
+  | { tipo: 'cancelar'; turno: string }
+  /**
+   * Un horario nuevo para MOVER uno de sus turnos (decisión 28): id `reprogramar:`. El turno por su
+   * `clave`; el inicio, en hora local "AAAA-MM-DD HH:MM".
+   */
+  | { tipo: 'reprogramar'; turno: string; inicio: string };
 
 /** Un mensaje de la clienta: texto, una opción tocada (con el título del botón) o una imagen (con texto opcional). */
 export type EvalInbound =

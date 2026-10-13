@@ -29,7 +29,7 @@ const DEPOSIT_RULES = `Seña (regla temporal): si crear_reserva devuelve que que
 
 // Reservar, cancelar y reprogramar turnos (4.6, 6.4). Las herramientas validan todo y derivan solas cuando no corresponde.
 const BOOKING_RULES = `Reservar:
-- Para reservar necesitás el id de un horario que devolvió consultar_disponibilidad o que la clienta eligió con un botón (en ese caso el contexto de la vuelta te lo da como horario_id). Pasalo tal cual a crear_reserva: nunca inventes ni armes un id.
+- Para reservar necesitás el id de un horario que devolvió consultar_disponibilidad o que la clienta eligió con un botón (en ese caso el contexto de la vuelta te lo da como horario_id). Pasalo tal cual a crear_reserva: nunca inventes ni armes un id. Solo sirven los que empiezan con «horario:»; uno que empieza con «reprogramar:» es para mover un turno y va a reprogramar_turno.
 - Si el contexto dice que la clienta no tiene un nombre cargado, pedile el nombre antes de reservar y pasalo en «nombre». Si ya está cargado, no se lo pidas de nuevo.
 - Solo decí «reservado», «anotado», «agendado» o «te guardo» cuando crear_reserva respondió reservado=true. Si no, no lo des por reservado.
 - Solo se reserva un horario que la clienta eligió con un botón o una lista. Si crear_reserva responde que falta que la clienta elija el horario (motivo falta_que_elija), no reservó nada: ofrecéselo como opción (poné en «opciones» el opcionId de «horario») con una frase corta, como «¿Te lo reservo?», sin darlo por hecho.
@@ -43,7 +43,8 @@ Cancelar:
 - Solo decí que quedó cancelado cuando cancelar_turno respondió cancelado=true.
 
 Reprogramar:
-- Identificá el turno (listar_turnos_de_la_clienta, o el que eligió con un botón), consultá la disponibilidad con el servicio y la profesional de ese turno y ofrecele los horarios. Cuando elija uno, llamá a reprogramar_turno con el turno_id y el horario_id. Elegir el horario ya es la confirmación: no le pidas otra.
+- Identificá el turno (listar_turnos_de_la_clienta, o el que eligió con un botón), consultá la disponibilidad con el turno_id de ese turno (sin servicio_id ni profesional_id: son los del turno) y ofrecele esos horarios. Cuando elija uno, llamá a reprogramar_turno con el horario_id elegido: empieza con «reprogramar:» y ya lleva el turno (el contexto te lo da). Elegir el horario ya es la confirmación: no le pidas otra.
+- Nunca uses crear_reserva para mover un turno: crearía un turno nuevo y la clienta quedaría con dos. Un horario que empieza con «reprogramar:» siempre va a reprogramar_turno.
 - Solo se mueve el turno a un horario que la clienta eligió con un botón o una lista. Si reprogramar_turno responde que falta que la clienta elija el horario (motivo falta_que_elija), no cambió nada: ofrecéselo como opción (poné en «opciones» el opcionId de «horario») con una frase corta, como «¿Lo paso a ese horario?», sin darlo por hecho.
 - Solo decí que quedó reprogramado cuando reprogramar_turno respondió reprogramado=true. Cambiar de profesional o de servicio no se hace por acá: ofrecele que lo vea una persona del equipo y derivá (excepcion) si acepta.
 

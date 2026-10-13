@@ -91,6 +91,33 @@ export async function offerForConfirmation(
   };
 }
 
+/**
+ * Lo mismo para un horario de REPROGRAMAR que el modelo pidió sin que la clienta lo eligiera: el
+ * horario nuevo de ese turno, con id `reprogramar:` y su duración. Null si el turno no es de la clienta.
+ * `free` dice si sigue libre (contando al propio turno como libre) y el turno ocupa horario.
+ */
+export async function offerRescheduleForConfirmation(
+  ctx: ToolContext,
+  slot: { appointmentId: string; start: Date },
+): Promise<{ offer: SlotOffer; free: boolean } | null> {
+  const resolved = await resolveChoice(ctx.db, ctx, choiceIds.reschedule(slot.appointmentId, slot.start));
+  if (resolved.tipo !== 'reprogramar') return null;
+  return {
+    offer: slotOffer(
+      {
+        serviceId: resolved.servicioId,
+        professionalId: resolved.profesionalId,
+        professionalName: resolved.profesionalNombre,
+        start: new Date(resolved.inicio),
+        durationMinutes: resolved.duracionMinutos,
+        rescheduleAppointmentId: resolved.turnoId,
+      },
+      ctx.timeZone,
+    ),
+    free: resolved.sigueLibre,
+  };
+}
+
 /** Lo que se le dice al modelo cuando pidió actuar sobre un horario que la clienta no eligió. */
 export const NEEDS_CHOICE_MESSAGE =
   'No se hizo nada: la clienta todavía no eligió este horario: ofrecéselo como opción para que lo confirme ' +

@@ -8,23 +8,20 @@ import {
   loadAppointmentSettings,
   summarizeAppointment,
 } from './appointment-summary.js';
-import { parseAppointmentRef, parseChoiceId } from './choice-ids.js';
+import { parseChoiceId } from './choice-ids.js';
 import { deriveForPolicy } from './policy-handoff.js';
-import { NEEDS_CHOICE_MESSAGE, offerForConfirmation, wasChosenByCustomer } from './slot-offer.js';
+import { NEEDS_CHOICE_MESSAGE, offerRescheduleForConfirmation, wasChosenByCustomer } from './slot-offer.js';
 import type { AgentTool, ToolContext, ToolResult } from './tool.js';
 
 /** El motivo que queda en el evento de auditoría del turno. */
 const RESCHEDULE_REASON = 'La clienta pidió reprogramar por WhatsApp';
 
 const input = z.object({
-  turno_id: z
-    .string()
-    .describe('Id del turno, TAL CUAL lo devolvió listar_turnos_de_la_clienta (turnoId) o el contexto (turno_id=…).'),
   horario_id: z
     .string()
     .describe(
-      'Id del horario nuevo, TAL CUAL lo devolvió consultar_disponibilidad (opcionId) o lo indica el contexto ' +
-        '(horario_id=…). Tiene que ser del mismo servicio y de la misma profesional del turno.',
+      'Id del horario nuevo, TAL CUAL lo devolvió consultar_disponibilidad con turno_id (opcionId, empieza con ' +
+        '"reprogramar:") o lo indica el contexto (horario_id=…). Ya lleva el turno que se mueve. Nunca lo armes ni lo cambies.',
     ),
 });
 
@@ -80,8 +77,9 @@ function rescheduledResult(
 }
 
 /**
- * `reprogramar_turno(turno_id, horario_id)` (6.4, 4.6): mueve un turno de la clienta que escribe a
- * otro horario del mismo servicio con la misma profesional. Elegir el horario nuevo ya es la
+ * `reprogramar_turno(horario_id)` (6.4, 4.6, decisión 28): mueve un turno de la clienta que escribe a
+ * otro horario del mismo servicio con la misma profesional. El id `reprogramar:<turno>:<inicio>` ya
+ * trae el turno: solo acepta esos ids, nunca uno de reservar. Elegir el horario nuevo ya es la
  * confirmación. Si no corresponde (fuera de plazo, ya empezó, sin reprogramaciones que conserven
  * la seña), no toca el turno y deriva sola. Es idempotente: si el turno ya está en ese horario, lo dice.
  */
@@ -89,37 +87,41 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
   name: 'reprogramar_turno',
   description:
     'Reprograma un turno de la clienta a otro horario del MISMO servicio con la MISMA profesional. Pasale el ' +
-    'turno_id del turno y el horario_id que devolvió consultar_disponibilidad (consultala con el servicio y la ' +
-    'profesional del turno) o que eligió la clienta. Solo mueve el turno a un horario que la clienta eligió con ' +
-    'un botón o una lista: si todavía no lo eligió, no cambia nada y devuelve motivo=falta_que_elija con ese ' +
-    'horario para que se lo ofrezcas como opción. Cuando ella lo elige ya está confirmado: no hace falta ' +
-    'pedirle otra confirmación. Si no corresponde (faltan menos horas que el plazo, el turno ya empezó ' +
-    'o ya usó las reprogramaciones que conservan la seña), la herramienta no cambia nada, deriva sola a una ' +
-    'persona y devuelve la política y cuándo le responde una persona: explicalo con amabilidad, sin discutir ni ' +
-    'prometer excepciones. Cambiar de servicio o de profesional no se hace acá. Solo reprograma turnos de la ' +
-    'clienta que escribe.',
+    'horario_id que devolvió consultar_disponibilidad cuando la consultaste con el turno_id del turno (empieza con ' +
+    '"reprogramar:") o que indica el contexto cuando ella eligió ese horario con un botón: ya trae el turno, no hace ' +
+    'falta otro dato. No sirve un horario_id de reservar (empieza con "horario:"). Solo mueve el turno a un horario ' +
+    'que la clienta eligió con un botón o una lista: si todavía no lo eligió, no cambia nada y devuelve ' +
+    'motivo=falta_que_elija con ese horario para que se lo ofrezcas como opción. Cuando ella lo elige ya está ' +
+    'confirmado: no hace falta pedirle otra confirmación. Si no corresponde (faltan menos horas que el plazo, el ' +
+    'turno ya empezó o ya usó las reprogramaciones que conservan la seña), la herramienta no cambia nada, deriva ' +
+    'sola a una persona y devuelve la política y cuándo le responde una persona: explicalo con amabilidad, sin ' +
+    'discutir ni prometer excepciones. Cambiar de servicio o de profesional no se hace acá. Solo reprograma turnos ' +
+    'de la clienta que escribe.',
   input,
-  async run({ turno_id, horario_id }, ctx) {
+  async run({ horario_id }, ctx) {
     ctx.signal.throwIfAborted();
     const { db, tenantId, customerId, now, timeZone } = ctx;
 
-    const appointmentId = parseAppointmentRef(turno_id);
-    if (!appointmentId) {
+    const slot = parseChoiceId(horario_id);
+    // La intención va en el id: un horario para reservar nunca mueve un turno (decisión 28).
+    if (slot?.kind === 'slot') {
       return failure(
-        'id_de_turno_invalido',
-        'Ese no es el id de un turno: usá el turnoId que devolvió listar_turnos_de_la_clienta, sin cambiarlo.',
+        'horario_para_reservar',
+        'Ese horario es para reservar un turno nuevo, no para mover uno que la clienta ya tiene: no mueve nada. ' +
+          'Para reprogramar, consultá la disponibilidad con consultar_disponibilidad pasando el turno_id del turno ' +
+          '(sin servicio_id) y usá el opcionId de los horarios que devuelve.',
       );
     }
-    const slot = parseChoiceId(horario_id);
-    if (slot?.kind !== 'slot') {
+    if (slot?.kind !== 'reschedule') {
       return failure(
         'id_de_horario_invalido',
-        'Ese no es el id de un horario: usá el opcionId que devolvió consultar_disponibilidad (o el horario_id ' +
-          'del contexto), sin cambiarlo.',
+        'Ese no es el id de un horario para reprogramar: usá el opcionId que devolvió consultar_disponibilidad con ' +
+          'turno_id (empieza con "reprogramar:") o el horario_id del contexto, sin cambiarlo.',
       );
     }
 
-    const appointment = await findCustomerAppointment(db, { tenantId, customerId, appointmentId });
+    // El turno sale del id, pero nunca se confía en él: tiene que ser de ESTA clienta (regla 2).
+    const appointment = await findCustomerAppointment(db, { tenantId, customerId, appointmentId: slot.appointmentId });
     if (!appointment) {
       return failure(
         'turno_no_encontrado',
@@ -130,15 +132,6 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
       return failure(
         'turno_no_activo',
         `Ese turno ya no está activo (${displayStatus(appointment, now)}), así que no se puede reprogramar.`,
-      );
-    }
-    if (slot.serviceId !== appointment.serviceId || slot.professionalId !== appointment.professionalId) {
-      return failure(
-        'otro_servicio_o_profesional',
-        'Solo se reprograma al mismo servicio con la misma profesional. Consultá la disponibilidad con ' +
-          `servicio_id=${appointment.serviceId} y profesional_id=${appointment.professionalId} (los del turno) y ` +
-          'ofrecé esos horarios. Si la clienta quiere cambiar de profesional o de servicio, ofrecele que lo vea una ' +
-          'persona del equipo y, si acepta, derivá con el motivo excepcion en el campo «derivar» de tu respuesta.',
       );
     }
 
@@ -165,11 +158,27 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
     }
 
     // Elegir el horario nuevo es la confirmación (principio 5): si ella no lo eligió, se lo ofrecemos.
-    // Se ofrece aunque `free` sea falso: un horario que pisa al propio turno (correrlo 15 minutos) figura
-    // como ocupado por el turno mismo; si está tomado de verdad, lo dice `rescheduleAppointment` al elegirlo.
     if (!wasChosenByCustomer(ctx, horario_id)) {
-      const found = await offerForConfirmation(ctx, slot);
-      if (!found) return failure('no_encontrado', 'No encontré ese servicio, esa profesional o ese horario. Consultá la disponibilidad con consultar_disponibilidad.');
+      const found = await offerRescheduleForConfirmation(ctx, { appointmentId: appointment.id, start: slot.start });
+      if (!found) {
+        return failure(
+          'no_encontrado',
+          'No encontré ese turno o ese horario. Consultá la disponibilidad con consultar_disponibilidad y el turno_id.',
+        );
+      }
+      // Un horario que ya no está libre no se ofrece como botón: se vuelve a consultar la disponibilidad.
+      if (!found.free) {
+        return {
+          content: {
+            reprogramado: false,
+            motivo: 'horario_no_disponible',
+            mensaje:
+              'Ese horario ya no está libre o no es válido. No se movió nada: volvé a consultar la disponibilidad ' +
+              'con consultar_disponibilidad y turno_id, y ofrecele otros horarios.',
+          },
+          options: [],
+        };
+      }
       return {
         content: { reprogramado: false, motivo: 'falta_que_elija', mensaje: NEEDS_CHOICE_MESSAGE, horario: found.offer.content },
         options: [found.offer.option],

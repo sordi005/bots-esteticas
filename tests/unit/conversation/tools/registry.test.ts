@@ -101,11 +101,25 @@ describe('agentTools: las herramientas que usa el agente', () => {
     expect(Object.keys(agentSchemaOf('listar_turnos_de_la_clienta').properties)).toEqual([]);
   });
 
-  it('cancelar_turno pide el turno y si la clienta confirmó; reprogramar_turno, el turno y el horario nuevo', () => {
+  it('cancelar_turno pide el turno y si la clienta confirmó; reprogramar_turno solo el id del horario, que ya lleva el turno', () => {
     expect(Object.keys(agentSchemaOf('cancelar_turno').properties)).toEqual(['turno_id', 'confirmada']);
     expect(agentSchemaOf('cancelar_turno').required).toEqual(['turno_id', 'confirmada']);
-    expect(Object.keys(agentSchemaOf('reprogramar_turno').properties)).toEqual(['turno_id', 'horario_id']);
-    expect(agentSchemaOf('reprogramar_turno').required).toEqual(['turno_id', 'horario_id']);
+    expect(Object.keys(agentSchemaOf('reprogramar_turno').properties)).toEqual(['horario_id']);
+    expect(agentSchemaOf('reprogramar_turno').required).toEqual(['horario_id']);
+  });
+
+  it('reprogramar_turno explica que su horario_id empieza con «reprogramar:» y que no sirve el de reservar', () => {
+    const tool = agentTools.find((candidate) => candidate.name === 'reprogramar_turno');
+
+    expect(agentSchemaOf('reprogramar_turno').properties.horario_id?.description).toMatch(/"reprogramar:"/);
+    expect(tool?.description).toMatch(/turno_id del turno/);
+    expect(tool?.description).toMatch(/No sirve un horario_id de reservar \(empieza con "horario:"\)/);
+  });
+
+  it('crear_reserva aclara que es para reservar y que un id de reprogramar no sirve', () => {
+    const tool = agentTools.find((candidate) => candidate.name === 'crear_reserva');
+
+    expect(tool?.description).toMatch(/reprogramar_turno/);
   });
 
   it('ninguna herramienta nombra a derivar_a_persona: derivar va en el campo «derivar» de la respuesta (decisión 27)', () => {

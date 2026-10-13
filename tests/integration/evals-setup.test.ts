@@ -62,6 +62,10 @@ const dialogue = (request: LlmRequest) =>
 const firstAppointmentId = (request: LlmRequest) =>
   (lastToolOutputs(request)[0] as { turnos: { turnoId: string }[] }).turnos[0]?.turnoId ?? '';
 
+/** El horario del miércoles 14/10 a las 15:30 (18:30 UTC) para mover el turno de la lista (decisión 28). */
+const wednesdayToMove = (request: LlmRequest) =>
+  `reprogramar:${firstAppointmentId(request).replace('turno:', '')}:2026-10-14T18:30:00.000Z`;
+
 /** La clienta tocó el horario del viernes 9/10 a las 15:00 con Mica: crear_reserva solo actúa sobre una elección suya. */
 const FRIDAY_CHOICE = {
   eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00' },
@@ -155,10 +159,7 @@ describe('preparar: los turnos', () => {
           {
             name: 'reprogramar_turno',
             // El horario del miércoles 14/10 15:30 con Mica es válido; la política lo rechaza, no la grilla.
-            input: {
-              turno_id: firstAppointmentId(request),
-              horario_id: 'horario:00000000-0000-4000-8000-000000000201:00000000-0000-4000-8000-000000000101:2026-10-14T18:30:00.000Z',
-            },
+            input: { horario_id: wednesdayToMove(request) },
           },
         ]),
       finalAnswer('No se puede'),
@@ -175,7 +176,7 @@ describe('preparar: los turnos', () => {
   it('sin la reprogramación usada, la misma herramienta sí mueve el turno', async () => {
     const turnos = [withAppointment({ senaAprobada: true })];
     const wednesday = {
-      eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 15:30' },
+      eleccion: { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' },
       titulo: 'mié 14/10 15:30',
     } as const;
     const { result } = run(caseWith({ mensajes: ['pasalo al miércoles', wednesday], preparar: { nombre: NAMED, turnos } }), [
@@ -184,10 +185,7 @@ describe('preparar: los turnos', () => {
         callTools([
           {
             name: 'reprogramar_turno',
-            input: {
-              turno_id: firstAppointmentId(request),
-              horario_id: 'horario:00000000-0000-4000-8000-000000000201:00000000-0000-4000-8000-000000000101:2026-10-14T18:30:00.000Z',
-            },
+            input: { horario_id: wednesdayToMove(request) },
           },
         ]),
       finalAnswer('Listo'),
@@ -197,6 +195,20 @@ describe('preparar: los turnos', () => {
     expect(evaluated.estado.turnos[0]).toMatchObject({ clave: 'martes', inicio: '2026-10-14 15:30', estado: 'CONFIRMED' });
     expect(evaluated.estado.derivaciones).toEqual([]);
     expect(evaluated.estado.pausada).toBe(false);
+  });
+
+  it('una elección para reprogramar usa el id reprogramar: del turno del caso, y el modelo la ve ya resuelta', async () => {
+    const wednesday = {
+      eleccion: { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' },
+      titulo: 'mié 14/10 15:30',
+    } as const;
+    const { result, requests } = run(caseWith({ mensajes: [wednesday], preparar: { nombre: NAMED, turnos: [withAppointment()] } }));
+    await result;
+
+    expect(requests[0]?.turnContext).toMatch(
+      /Eligió el horario miércoles 14\/10 15:30 para pasar su turno del martes 13\/10 17:00 \(Esmaltado semipermanente con Mica\), horario_id=reprogramar:[0-9a-f-]{36}:2026-10-14T18:30:00\.000Z; sigue libre/,
+    );
+    expect(requests[0]?.turnContext).toContain('llamá a reprogramar_turno con ese horario_id');
   });
 
   it('con la hora movida los turnos también se crean unos minutos antes: la seña todavía no venció', async () => {
@@ -250,6 +262,30 @@ describe('preparar: errores del caso', () => {
     const evalCase = caseWith({ preparar: { historial: [{ clienta: { eleccion: sunday, titulo: 'dom 11/10 10:00' } }] } });
 
     await expect(run(evalCase).result).rejects.toThrow(/no está libre según el seed/);
+  });
+
+  it('una elección para reprogramar a un horario que no está libre según el seed es un error del caso', async () => {
+    const sunday = { tipo: 'reprogramar' as const, turno: 'martes', inicio: '2026-10-18 10:00' };
+    const evalCase = caseWith({
+      nombre: 'domingo_mal',
+      mensajes: [{ eleccion: sunday, titulo: 'dom 18/10 10:00' }],
+      preparar: { nombre: NAMED, turnos: [withAppointment()] },
+    });
+
+    await expect(run(evalCase).result).rejects.toThrow(/«domingo_mal».*reprogramar.*2026-10-18 10:00.*no está libre según el seed/);
+  });
+
+  it('una elección para reprogramar que nombra un turno que el caso no preparó, o que es de otra clienta', async () => {
+    const ghost = caseWith({
+      mensajes: [{ eleccion: { tipo: 'reprogramar', turno: 'fantasma', inicio: '2026-10-14 15:30' }, titulo: 'x' }],
+    });
+    const theirs = caseWith({
+      mensajes: [{ eleccion: { tipo: 'reprogramar', turno: 'maria', inicio: '2026-10-14 15:30' }, titulo: 'x' }],
+      preparar: { nombre: NAMED, turnos: [withAppointment({ clave: 'maria', otraClienta: 'María González' })] },
+    });
+
+    await expect(run(ghost).result).rejects.toThrow(/turno «fantasma»/);
+    await expect(run(theirs).result).rejects.toThrow(/«maria».*es de otra clienta/);
   });
 
   it('una clienta con turnos propios y sin nombre es un caso inconsistente: reservar siempre guarda el nombre', async () => {

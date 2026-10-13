@@ -73,8 +73,8 @@ async function payDeposit(f: Fixture, appointmentId: string, status: 'approved' 
     .where(eq(deposits.appointmentId, appointmentId));
 }
 
-const slotId = (f: Fixture, start: Date, professionalId = f.mica, serviceId = f.semi) =>
-  choiceIds.slot(serviceId, professionalId, start);
+/** El id de un horario para MOVER un turno (decisión 28): `reprogramar:<turno>:<inicio>`. */
+const slotId = (appointmentId: string, start: Date) => choiceIds.reschedule(appointmentId, start);
 
 /**
  * Por defecto la clienta eligió el horario que se pide (el caso normal: tocó el botón). `chosen`
@@ -109,7 +109,7 @@ describe('reprogramar_turno: el camino feliz', () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: `turno:${id}`, horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toMatchObject({
@@ -131,11 +131,11 @@ describe('reprogramar_turno: el camino feliz', () => {
     expect(await handoffsOf(f)).toEqual([]);
   });
 
-  it('acepta el uuid del turno sin el prefijo y un horario que se pisa con el propio turno', async () => {
+  it('el turno sale del id del horario, y un horario que se pisa con el propio turno no choca con uno mismo', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, at('2026-10-06', '10:15')) });
+    const result = await reschedule(f, { horario_id: slotId(id, at('2026-10-06', '10:15')) });
 
     expect(result.content).toMatchObject({ reprogramado: true, turno: { fecha: 'martes 6/10 10:15' } });
   });
@@ -145,7 +145,7 @@ describe('reprogramar_turno: el camino feliz', () => {
     const id = await book(f);
     await payDeposit(f, id);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(result.content).toMatchObject({ reprogramado: true, senaConservada: true, turno: { estado: 'confirmado' } });
     expect((await rowOf(id)).timeRange.start).toEqual(WEDNESDAY_10);
@@ -155,8 +155,8 @@ describe('reprogramar_turno: el camino feliz', () => {
     const f = await setup();
     const id = await book(f);
 
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
-    const second = await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+    const second = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) });
 
     expect(second.content).toMatchObject({ reprogramado: true });
     expect(await reschedulesOf(id)).toHaveLength(2);
@@ -170,16 +170,16 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
     const id = await book(f);
     const now = at('2026-10-04', '09:30');
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, now, []);
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, now, []);
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toMatchObject({
       reprogramado: false,
       motivo: 'falta_que_elija',
-      horario: { opcionId: slotId(f, WEDNESDAY_10), texto: 'miércoles 7/10 10:00', profesional: 'Mica', inicio: WEDNESDAY_10.toISOString() },
+      horario: { opcionId: slotId(id, WEDNESDAY_10), texto: 'miércoles 7/10 10:00', profesional: 'Mica', inicio: WEDNESDAY_10.toISOString() },
     });
     expect(JSON.stringify(result.content)).toMatch(/todavía no eligió este horario.*ofrecéselo como opción/);
-    expect(result.options).toEqual([{ id: slotId(f, WEDNESDAY_10), title: 'mié 7/10 10:00', description: 'con Mica' }]);
+    expect(result.options).toEqual([{ id: slotId(id, WEDNESDAY_10), title: 'mié 7/10 10:00', description: 'con Mica' }]);
     expectOptionsShownToModel(result);
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
     expect(await reschedulesOf(id)).toEqual([]);
@@ -192,9 +192,9 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
 
     const result = await reschedule(
       f,
-      { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) },
+      { horario_id: slotId(id, WEDNESDAY_10) },
       at('2026-10-04', '09:30'),
-      [slotId(f, THURSDAY_10)],
+      [slotId(id, THURSDAY_10)],
     );
 
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'falta_que_elija', horario: { texto: 'miércoles 7/10 10:00' } });
@@ -207,9 +207,9 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
 
     const result = await reschedule(
       f,
-      { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) },
+      { horario_id: slotId(id, WEDNESDAY_10) },
       at('2026-10-04', '09:30'),
-      [slotId(f, THURSDAY_10), slotId(f, WEDNESDAY_10)],
+      [slotId(id, THURSDAY_10), slotId(id, WEDNESDAY_10)],
     );
 
     expect(result.content).toMatchObject({ reprogramado: true });
@@ -219,39 +219,44 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
   it('un reintento sin la elección sigue siendo idempotente: si el turno ya está en ese horario, lo dice', async () => {
     const f = await setup();
     const id = await book(f);
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    const again = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-04', '09:35'), []);
+    const again = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-04', '09:35'), []);
 
     expect(again.content).toMatchObject({ reprogramado: true, yaEstaba: true });
   });
 
-  it('lo que no depende de la elección se valida antes: otra profesional no se ofrece como botón', async () => {
+  it('un horario que ya no está libre no se ofrece como botón: se vuelve a consultar la disponibilidad', async () => {
     const f = await setup();
     const id = await book(f);
+    const other = single(
+      await db.insert(customers).values({ tenantId: f.tenantId, phone: '+5492614333333', name: 'Otra' }).returning({ id: customers.id }),
+    ).id;
+    await book(f, WEDNESDAY_10, other);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10, f.sofi) }, at('2026-10-04', '09:30'), []);
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-04', '09:30'), []);
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatchObject({ motivo: 'otro_servicio_o_profesional' });
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_no_disponible' });
+    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad y turno_id/);
     expect(result.options).toEqual([]);
+    expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
   });
 
   it('la política también va antes: fuera de plazo deriva sin pedirle que elija un horario', async () => {
     const f = await setup({ settings: { depositRequirement: 'never' } });
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '11:00'), []);
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-05', '11:00'), []);
 
     expect(result.content).toMatchObject({ reprogramado: false, derivada: true });
     expect(await handoffsOf(f)).toHaveLength(1);
   });
 
-  it('un horario que pisa al propio turno también se ofrece como botón (no cuenta como ocupado)', async () => {
+  it('un horario que pisa al propio turno se ofrece como botón: el turno no cuenta como ocupado', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, at('2026-10-06', '10:15')) }, at('2026-10-04', '09:30'), []);
+    const result = await reschedule(f, { horario_id: slotId(id, at('2026-10-06', '10:15')) }, at('2026-10-04', '09:30'), []);
 
     expect(result.content).toMatchObject({ motivo: 'falta_que_elija', horario: { texto: 'martes 6/10 10:15' } });
   });
@@ -261,9 +266,9 @@ describe('reprogramar_turno: es idempotente', () => {
   it('si el turno ya está en ese horario responde que está, sin evento nuevo', async () => {
     const f = await setup();
     const id = await book(f);
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    const again = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    const again = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(again.isError).toBeFalsy();
     expect(again.content).toMatchObject({ reprogramado: true, yaEstaba: true, turno: { fecha: 'miércoles 7/10 10:00' } });
@@ -274,9 +279,9 @@ describe('reprogramar_turno: es idempotente', () => {
     const f = await setup();
     const id = await book(f);
     await payDeposit(f, id);
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    const again = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    const again = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(again.content).toMatchObject({ reprogramado: true, yaEstaba: true });
     expect(await handoffsOf(f)).toEqual([]);
@@ -288,9 +293,9 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const f = await setup();
     const id = await book(f);
     await payDeposit(f, id);
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) });
 
     expect(result.isError).toBeFalsy();
     expect(result.options).toEqual([]);
@@ -317,9 +322,9 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const f = await setup();
     const id = await book(f);
     await payDeposit(f, id, 'in_review');
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) });
 
     expect(result.content).toMatchObject({ derivada: true });
   });
@@ -329,9 +334,9 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const id = await book(f);
     await payDeposit(f, id);
 
-    const first = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
-    const second = await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) });
-    const third = await reschedule(f, { turno_id: id, horario_id: slotId(f, at('2026-10-09', '10:00')) });
+    const first = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+    const second = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) });
+    const third = await reschedule(f, { horario_id: slotId(id, at('2026-10-09', '10:00')) });
 
     expect(first.content).toMatchObject({ reprogramado: true });
     expect(second.content).toMatchObject({ reprogramado: true });
@@ -344,7 +349,7 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const id = await book(f);
 
     // Lunes 5/10 a las 11:00: faltan 23 horas para el martes a las 10:00.
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '11:00'));
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-05', '11:00'));
 
     expect(result.content).toMatchObject({
       reprogramado: false,
@@ -362,7 +367,7 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const f = await setup({ settings: { depositRequirement: 'never' } });
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '10:00'));
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-05', '10:00'));
 
     expect(result.content).toMatchObject({ reprogramado: true });
   });
@@ -371,7 +376,7 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const f = await setup({ settings: { depositRequirement: 'never' } });
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) }, at('2026-10-06', '10:30'));
+    const result = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) }, at('2026-10-06', '10:30'));
 
     expect(result.content).toMatchObject({ derivada: true, motivo: 'el turno ya empezó' });
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
@@ -382,38 +387,63 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
     const id = await book(f);
     const late = at('2026-10-05', '11:00');
 
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, late);
-    await reschedule(f, { turno_id: id, horario_id: slotId(f, THURSDAY_10) }, late);
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, late);
+    await reschedule(f, { horario_id: slotId(id, THURSDAY_10) }, late);
 
     expect(await handoffsOf(f)).toHaveLength(1);
   });
 });
 
-describe('reprogramar_turno: solo el mismo servicio con la misma profesional', () => {
-  it('otra profesional: no reprograma ni deriva, y le dice al modelo qué consultar', async () => {
+describe('reprogramar_turno: solo acepta ids reprogramar: (decisión 28)', () => {
+  const reservationId = (f: Fixture, start: Date, professionalId = f.mica, serviceId = f.semi) =>
+    choiceIds.slot(serviceId, professionalId, start);
+
+  it('un id horario: es para reservar un turno nuevo: no mueve nada ni deriva, y le dice al modelo qué hacer', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10, f.sofi) });
+    const result = await reschedule(f, { horario_id: reservationId(f, WEDNESDAY_10) });
 
     expect(result.isError).toBe(true);
-    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'otro_servicio_o_profesional' });
-    expect(JSON.stringify(result.content)).toContain(`servicio_id=${f.semi}`);
-    expect(JSON.stringify(result.content)).toContain(`profesional_id=${f.mica}`);
-    expect(JSON.stringify(result.content)).toMatch(/excepcion en el campo «derivar»/);
-    expect(JSON.stringify(result.content)).not.toContain('derivar_a_persona');
+    expect(result.options).toEqual([]);
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_para_reservar' });
+    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad[^.]*turno_id/);
+    expect(JSON.stringify(result.content)).toMatch(/es para reservar un turno nuevo/);
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
     expect(await handoffsOf(f)).toEqual([]);
   });
 
-  it('otro servicio con la misma profesional tampoco', async () => {
+  it('un id horario: ni siquiera si la clienta lo eligió: la intención tiene que venir en el id', async () => {
+    const f = await setup();
+    const id = await book(f);
+    const wrongKind = reservationId(f, WEDNESDAY_10);
+
+    const result = await reschedule(f, { horario_id: wrongKind }, at('2026-10-04', '09:30'), [wrongKind]);
+
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_para_reservar' });
+    expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
+  });
+
+  it('el turno del id es el que se mueve: cambiar de profesional o de servicio ya no se puede pedir', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10, f.mica, f.sculpted) });
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatchObject({ motivo: 'otro_servicio_o_profesional' });
+    // El id solo lleva el turno y el inicio: el servicio y la profesional son los del turno.
+    expect(result.content).toMatchObject({ reprogramado: true });
+    expect((await rowOf(id)).professionalId).toBe(f.mica);
+    expect((await rowOf(id)).serviceId).toBe(f.semi);
+  });
+
+  it('no crea ningún turno nuevo: la clienta sigue con un solo turno', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    const mine = await db.select({ id: appointments.id }).from(appointments).where(eq(appointments.customerId, f.customerId));
+    expect(mine).toEqual([{ id }]);
   });
 });
 
@@ -426,7 +456,7 @@ describe('reprogramar_turno: rechazos del horario nuevo', () => {
     ).id;
     await book(f, WEDNESDAY_10, other);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_ocupado' });
@@ -438,7 +468,7 @@ describe('reprogramar_turno: rechazos del horario nuevo', () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, at('2026-10-11', '10:00')) });
+    const result = await reschedule(f, { horario_id: slotId(id, at('2026-10-11', '10:00')) });
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_no_valido' });
@@ -454,7 +484,7 @@ describe('reprogramar_turno: solo los turnos de esta clienta (regla 2)', () => {
     ).id;
     const theirs = await book(f, TUESDAY_10, other);
 
-    const result = await reschedule(f, { turno_id: `turno:${theirs}`, horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(theirs, WEDNESDAY_10) });
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'turno_no_encontrado' });
@@ -467,7 +497,7 @@ describe('reprogramar_turno: solo los turnos de esta clienta (regla 2)', () => {
     const other = await setup();
     const theirs = await book(other);
 
-    const result = await reschedule(f, { turno_id: theirs, horario_id: slotId(other, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(theirs, WEDNESDAY_10) });
 
     expect(result.isError).toBe(true);
     expect((await rowOf(theirs)).timeRange.start).toEqual(TUESDAY_10);
@@ -478,29 +508,29 @@ describe('reprogramar_turno: solo los turnos de esta clienta (regla 2)', () => {
     const id = await book(f);
     await changeAppointmentStatus(db, { tenantId: f.tenantId, appointmentId: id, to: 'CANCELLED_BY_CUSTOMER', actor: 'assistant', now: BOOKED_AT });
 
-    const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ motivo: 'turno_no_activo' });
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
   });
 
-  it('un turno_id que no es un turno no reprograma nada', async () => {
+  it('un turno que no existe en el id no reprograma nada', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: 'el del martes', horario_id: slotId(f, WEDNESDAY_10) });
+    const result = await reschedule(f, { horario_id: slotId('00000000-0000-4000-8000-0000000000ff', WEDNESDAY_10) });
 
     expect(result.isError).toBe(true);
-    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'id_de_turno_invalido' });
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'turno_no_encontrado' });
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
   });
 
-  it('un horario_id que no es un horario no reprograma nada', async () => {
+  it('un horario_id que no es un horario (ni un texto cualquiera) no reprograma nada', async () => {
     const f = await setup();
     const id = await book(f);
 
-    const result = await reschedule(f, { turno_id: id, horario_id: choiceIds.service(f.semi) });
+    const result = await reschedule(f, { horario_id: choiceIds.service(f.semi) });
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'id_de_horario_invalido' });

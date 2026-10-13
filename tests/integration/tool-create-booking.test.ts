@@ -463,6 +463,44 @@ describe('crear_reserva: rechazos traducidos para el modelo', () => {
     expect(await appointmentsOf(f)).toEqual([]);
   });
 
+  describe('un id reprogramar: es para mover un turno, no para reservar (decisión 28)', () => {
+    const rescheduleId = (appointmentId = '00000000-0000-4000-8000-000000000301', start = MONDAY_9) =>
+      choiceIds.reschedule(appointmentId, start);
+
+    it('no reserva nada y le dice al modelo que use reprogramar_turno', async () => {
+      const f = await createCatalogFixture(db);
+
+      const result = await book(f, { horario_id: rescheduleId(), nombre: 'Caro Pérez' });
+
+      expect(result.isError).toBe(true);
+      expect(result.options).toEqual([]);
+      expect(result.content).toMatchObject({ reservado: false, motivo: 'horario_para_reprogramar' });
+      expect(JSON.stringify(result.content)).toMatch(/ese horario es para reprogramar su turno: usá reprogramar_turno/i);
+      expect(await appointmentsOf(f)).toEqual([]);
+    });
+
+    it('tampoco si la clienta lo eligió con el botón: es la falla que vieron las evaluaciones, con dos turnos', async () => {
+      const f = await createCatalogFixture(db);
+      const existing = await bookAppointment(db, {
+        tenantId: f.tenantId,
+        customerId: f.customerId,
+        serviceId: f.semi,
+        professionalId: f.mica,
+        start: at('2026-10-06', '10:00'),
+        actor: 'assistant',
+        now: at('2026-10-04', '09:00'),
+      });
+      if (!existing.ok) throw new Error(existing.reason);
+      const chosen = rescheduleId(existing.appointmentId, at('2026-10-07', '10:00'));
+      await setName(f, 'Caro Pérez');
+
+      const result = await book(f, { horario_id: chosen }, { chosen: [chosen] });
+
+      expect(result.content).toMatchObject({ reservado: false, motivo: 'horario_para_reprogramar' });
+      expect((await appointmentsOf(f)).map((appointment) => appointment.id)).toEqual([existing.appointmentId]);
+    });
+  });
+
   it('el negocio y la clienta salen del contexto: lo que mande el modelo no cambia nada', async () => {
     const f = await createCatalogFixture(db);
     const other = await createCatalogFixture(db);

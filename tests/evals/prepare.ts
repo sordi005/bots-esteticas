@@ -185,8 +185,28 @@ async function prepareRest(input: {
     if (!appointment.ofCaseCustomer) {
       throw fail(`el turno «${choice.turno}» es de otra clienta: la clienta del caso no puede tocarlo`);
     }
-    return choice.tipo === 'turno' ? choiceIds.appointment(appointment.id) : choiceIds.cancel(appointment.id);
+    switch (choice.tipo) {
+      case 'turno':
+        return choiceIds.appointment(appointment.id);
+      case 'cancelar':
+        return choiceIds.cancel(appointment.id);
+      case 'reprogramar':
+        return choiceIds.reschedule(appointment.id, parseStart(choice.inicio));
+    }
   };
+
+  // Un horario nuevo para mover un turno tiene que ser válido según el seed (el turno ya existe): si no, es un
+  // error del caso y no del agente.
+  for (const choice of inbound.flatMap(choicesOf)) {
+    if (choice.tipo !== 'reprogramar') continue;
+    const id = resolveChoiceId(choice);
+    const resolved = await resolveChoice(db, { tenantId, customerId: prepared.customerId, now, timeZone: EVAL_TIME_ZONE }, id);
+    if (resolved.tipo !== 'reprogramar' || !resolved.sigueLibre) {
+      throw fail(
+        `el horario para reprogramar el turno «${choice.turno}» al ${choice.inicio} no está libre según el seed`,
+      );
+    }
+  }
 
   // El historial: ya procesado, termina unos minutos antes de la hora fija y un minuto separa cada mensaje.
   const history = setup.historial ?? [];

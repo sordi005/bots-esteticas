@@ -914,6 +914,49 @@ describe('createAgentResponder: turnos con las herramientas reales (H8)', () => 
     expect(second.requests[0]?.turnContext).toContain(`turno_id=${turnoId}`);
     expect(await statusOf(booked.appointmentId)).toBe('CANCELLED_BY_CUSTOMER');
   });
+
+  it('reprogramar: la clienta toca el horario y, aunque el modelo pida crear_reserva, el turno se mueve y no queda un turno nuevo (decisión 28)', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-08', '10:00'),
+      actor: 'assistant',
+      now: NOW,
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    // Ofreció horarios para mover el turno y la clienta toca el del viernes 9/10 a las 15:30.
+    const slotId = choiceIds.reschedule(booked.appointmentId, at('2026-10-09', '15:30'));
+    await addInbound(f, { text: 'puedo pasar mi turno del jueves al viernes?', at: minutesAgo(3) });
+    await addOutbound(
+      f,
+      { type: 'buttons', body: 'El viernes tengo estos horarios:', buttons: [{ id: slotId, title: 'vie 9/10 15:30' }] },
+      minutesAgo(2),
+    );
+    const tap = await addInbound(f, {
+      type: 'interactive',
+      content: interactiveReply(slotId, 'vie 9/10 15:30'),
+      at: new Date(NOW.getTime() - 1_000),
+      processed: false,
+    });
+
+    // El modelo falla como en las evaluaciones: copia el id a crear_reserva. Con el rechazo, usa reprogramar_turno.
+    const { result, requests } = reply(f, [tap], [
+      callTools([{ name: 'crear_reserva', input: { horario_id: slotId } }]),
+      callTools([{ name: 'reprogramar_turno', input: { horario_id: slotId } }]),
+      finalAnswer('Listo, te pasé el turno al viernes 9/10 a las 15:30 con Mica.'),
+    ]);
+    await result;
+
+    expect(requests[0]?.turnContext).toContain(`horario_id=${slotId}`);
+    expect(requests[0]?.turnContext).toContain('llamá a reprogramar_turno con ese horario_id');
+    const mine = await db.select().from(appointments).where(eq(appointments.customerId, f.customerId));
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ id: booked.appointmentId, status: 'CONFIRMED' });
+    expect(mine[0]?.timeRange.start).toEqual(at('2026-10-09', '15:30'));
+  });
 });
 
 describe('createAgentResponder: la respuesta que deriva a una persona (4.8, decisión 27)', () => {
