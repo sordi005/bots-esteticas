@@ -323,6 +323,171 @@ describe('resolveChoice: un turno elegido o la confirmación de cancelarlo (4.6)
   });
 });
 
+describe('resolveChoice: un horario para reprogramar un turno (4.6, decisión 28)', () => {
+  const TUESDAY_10 = at('2026-10-06', '10:00');
+
+  async function bookFor(fixture: CatalogFixture, input: { customerId?: string; start?: Date; professionalId?: string } = {}) {
+    const booked = await bookAppointment(db, {
+      tenantId: fixture.tenantId,
+      customerId: input.customerId ?? fixture.customerId,
+      serviceId: fixture.semi,
+      professionalId: input.professionalId ?? fixture.mica,
+      start: input.start ?? MONDAY_9,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    return booked.appointmentId;
+  }
+
+  const otherCustomer = async (fixture: CatalogFixture) =>
+    single(
+      await db
+        .insert(customers)
+        .values({ tenantId: fixture.tenantId, phone: '+5492614777777', name: 'Otra' })
+        .returning({ id: customers.id }),
+    ).id;
+
+  it('resuelve el turno, el horario nuevo escrito y que sigue libre', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+
+    const choice = await resolve(fixture, choiceIds.reschedule(appointmentId, TUESDAY_10));
+
+    expect(choice).toEqual({
+      tipo: 'reprogramar',
+      turnoId: appointmentId,
+      servicioId: fixture.semi,
+      profesionalId: fixture.mica,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      turnoTexto: 'lunes 5/10 9:00',
+      estado: 'pendiente de seña',
+      ocupaHorario: true,
+      inicio: TUESDAY_10.toISOString(),
+      texto: 'martes 6/10 10:00',
+      duracionMinutos: 60,
+      sigueLibre: true,
+    });
+  });
+
+  it('el horario nuevo puede pisar el lugar del propio turno: correrlo 30 minutos sigue libre', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+
+    const choice = await resolve(fixture, choiceIds.reschedule(appointmentId, at('2026-10-05', '09:30')));
+
+    expect(choice).toMatchObject({ tipo: 'reprogramar', sigueLibre: true });
+  });
+
+  it('si otra clienta tomó el horario nuevo, ya no sigue libre', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+    await bookFor(fixture, { customerId: await otherCustomer(fixture), start: TUESDAY_10 });
+
+    const choice = await resolve(fixture, choiceIds.reschedule(appointmentId, TUESDAY_10));
+
+    expect(choice).toMatchObject({ tipo: 'reprogramar', sigueLibre: false });
+  });
+
+  it('un horario fuera del horario de trabajo no está libre', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+
+    const choice = await resolve(fixture, choiceIds.reschedule(appointmentId, at('2026-10-06', '03:00')));
+
+    expect(choice).toMatchObject({ tipo: 'reprogramar', sigueLibre: false });
+  });
+
+  it('usa la duración que tiene el turno, no la actual del servicio', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+    await db.update(services).set({ durationMinutes: 30 }).where(eq(services.id, fixture.semi));
+
+    const choice = await resolve(fixture, choiceIds.reschedule(appointmentId, TUESDAY_10));
+
+    expect(choice).toMatchObject({ tipo: 'reprogramar', duracionMinutos: 60, sigueLibre: true });
+  });
+
+  it('un turno que ya no ocupa horario se resuelve igual, lo dice y el horario no sirve', async () => {
+    const fixture = await createCatalogFixture(db);
+    const appointmentId = await bookFor(fixture);
+    await changeAppointmentStatus(db, {
+      tenantId: fixture.tenantId,
+      appointmentId,
+      to: 'CANCELLED_BY_CUSTOMER',
+      actor: 'assistant',
+      now: at('2026-10-04', '09:05'),
+    });
+
+    expect(await resolve(fixture, choiceIds.reschedule(appointmentId, TUESDAY_10))).toMatchObject({
+      tipo: 'reprogramar',
+      estado: 'cancelado',
+      ocupaHorario: false,
+      sigueLibre: false,
+    });
+  });
+
+  it('el turno de otra clienta del mismo negocio, el de otro negocio o uno que no existe son desconocidos', async () => {
+    const mine = await createCatalogFixture(db);
+    const other = await createCatalogFixture(db);
+    const theirs = await bookFor(mine, { customerId: await otherCustomer(mine) });
+    const foreign = await bookFor(other);
+
+    expect(await resolve(mine, choiceIds.reschedule(theirs, TUESDAY_10))).toEqual({ tipo: 'desconocido' });
+    expect(await resolve(mine, choiceIds.reschedule(foreign, TUESDAY_10))).toEqual({ tipo: 'desconocido' });
+    expect(
+      await resolve(mine, choiceIds.reschedule('00000000-0000-4000-8000-0000000000ff', TUESDAY_10)),
+    ).toEqual({ tipo: 'desconocido' });
+  });
+});
+
+describe('resolveChoice: "ver otros horarios" de una reprogramación', () => {
+  it('devuelve el turno y desde qué horario seguir', async () => {
+    const fixture = await createCatalogFixture(db);
+    const booked = await bookAppointment(db, {
+      tenantId: fixture.tenantId,
+      customerId: fixture.customerId,
+      serviceId: fixture.semi,
+      professionalId: fixture.mica,
+      start: MONDAY_9,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    const after = at('2026-10-06', '12:00');
+
+    const choice = await resolve(fixture, choiceIds.moreReschedule(booked.appointmentId, after));
+
+    expect(choice).toEqual({
+      tipo: 'ver_mas_reprogramar',
+      turnoId: booked.appointmentId,
+      turnoTexto: 'lunes 5/10 9:00',
+      ocupaHorario: true,
+      despuesDe: after.toISOString(),
+    });
+  });
+
+  it('el turno de otra clienta o de otro negocio es desconocido', async () => {
+    const mine = await createCatalogFixture(db);
+    const other = await createCatalogFixture(db);
+    const booked = await bookAppointment(db, {
+      tenantId: other.tenantId,
+      customerId: other.customerId,
+      serviceId: other.semi,
+      professionalId: other.mica,
+      start: MONDAY_9,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+
+    expect(await resolve(mine, choiceIds.moreReschedule(booked.appointmentId, MONDAY_9))).toEqual({
+      tipo: 'desconocido',
+    });
+  });
+});
+
 describe('resolveChoice: nunca confía en el id', () => {
   it.each([
     ['vacío', ''],

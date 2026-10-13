@@ -6,6 +6,11 @@
  *   mas:<servicio>:<profesional o "-">:<inicio ISO del último horario ofrecido>
  *   turno:<turno>       un turno de la clienta, para elegir cuál cancelar o reprogramar
  *   cancelar:<turno>    el botón "Sí, cancelar" (4.6)
+ *   reprogramar:<turno>:<inicio ISO en UTC>
+ *                       un horario nuevo para mover un turno. La intención va en el id (decisión 28):
+ *                       `horario:` solo reserva y `reprogramar:` solo reprograma.
+ *   mas_reprogramar:<turno>:<inicio ISO del último horario ofrecido>
+ *                       "Ver otros horarios" de una reprogramación: sigue en modo reprogramar.
  *
  * Cuando la clienta elige, WhatsApp devuelve el id tal cual. Nunca se confía en él: se lee
  * con `parseChoiceId` y se vuelve a validar contra la base (`resolveChoice`).
@@ -19,6 +24,8 @@ const SLOT_ID = new RegExp(`^horario:(${UUID}):(${UUID}):(${INSTANT})$`);
 const MORE_ID = new RegExp(`^mas:(${UUID}):(${UUID}|-):(${INSTANT})$`);
 const APPOINTMENT_ID = new RegExp(`^turno:(${UUID})$`);
 const CANCEL_ID = new RegExp(`^cancelar:(${UUID})$`);
+const RESCHEDULE_ID = new RegExp(`^reprogramar:(${UUID}):(${INSTANT})$`);
+const MORE_RESCHEDULE_ID = new RegExp(`^mas_reprogramar:(${UUID}):(${INSTANT})$`);
 const BARE_UUID = new RegExp(`^${UUID}$`);
 
 export const choiceIds = {
@@ -29,6 +36,8 @@ export const choiceIds = {
     `mas:${serviceId}:${professionalId ?? '-'}:${after.toISOString()}`,
   appointment: (appointmentId: string) => `turno:${appointmentId}`,
   cancel: (appointmentId: string) => `cancelar:${appointmentId}`,
+  reschedule: (appointmentId: string, start: Date) => `reprogramar:${appointmentId}:${start.toISOString()}`,
+  moreReschedule: (appointmentId: string, after: Date) => `mas_reprogramar:${appointmentId}:${after.toISOString()}`,
 };
 
 export type ParsedChoiceId =
@@ -36,7 +45,9 @@ export type ParsedChoiceId =
   | { kind: 'slot'; serviceId: string; professionalId: string; start: Date }
   | { kind: 'more'; serviceId: string; professionalId: string | null; after: Date }
   | { kind: 'appointment'; appointmentId: string }
-  | { kind: 'cancel'; appointmentId: string };
+  | { kind: 'cancel'; appointmentId: string }
+  | { kind: 'reschedule'; appointmentId: string; start: Date }
+  | { kind: 'more_reschedule'; appointmentId: string; after: Date };
 
 /** Una fecha con la forma exacta de `toISOString()`, o null si no existe en el calendario. */
 function parseInstant(text: string): Date | null {
@@ -67,6 +78,18 @@ export function parseChoiceId(id: string): ParsedChoiceId | null {
 
   const cancel = CANCEL_ID.exec(id);
   if (cancel?.[1]) return { kind: 'cancel', appointmentId: cancel[1] };
+
+  const reschedule = RESCHEDULE_ID.exec(id);
+  if (reschedule?.[1] && reschedule[2]) {
+    const start = parseInstant(reschedule[2]);
+    return start ? { kind: 'reschedule', appointmentId: reschedule[1], start } : null;
+  }
+
+  const moreReschedule = MORE_RESCHEDULE_ID.exec(id);
+  if (moreReschedule?.[1] && moreReschedule[2]) {
+    const after = parseInstant(moreReschedule[2]);
+    return after ? { kind: 'more_reschedule', appointmentId: moreReschedule[1], after } : null;
+  }
 
   return null;
 }

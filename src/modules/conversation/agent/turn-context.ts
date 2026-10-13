@@ -51,9 +51,23 @@ export function describeChoice(choice: ResolvedChoice, timeZone: string): string
         return `Confirmó que quiere cancelar el turno del ${turn}: llamá a cancelar_turno con confirmada=true.${inactive}`;
       }
       return (
-        `Eligió su turno del ${turn}, servicio_id=${choice.servicioId}, profesional_id=${choice.profesionalId}: ` +
-        `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá la disponibilidad con ese servicio_id y profesional_id).${inactive}`
+        `Eligió su turno del ${turn}: ` +
+        `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá la disponibilidad con ese turno_id).${inactive}`
       );
+    }
+    case 'reprogramar': {
+      // Elegir el horario nuevo ya es la confirmación (principio 5): no se le pide otra.
+      const slotId = choiceIds.reschedule(choice.turnoId, new Date(choice.inicio));
+      const appointmentId = choiceIds.appointment(choice.turnoId);
+      const inactive = choice.ocupaHorario ? '' : ` Ojo: ese turno ya no está activo (${choice.estado}).`;
+      const next = choice.sigueLibre
+        ? 'sigue libre. Elegirlo ya es la confirmación: llamá a reprogramar_turno con ese horario_id.'
+        : `ya no está libre: consultá de nuevo la disponibilidad con turno_id=${appointmentId} y ofrecele otros horarios.`;
+      return `Eligió el horario ${choice.texto} para pasar su turno del ${choice.turnoTexto} (${choice.servicioNombre} con ${choice.profesionalNombre}), horario_id=${slotId}; ${next}${inactive}`;
+    }
+    case 'ver_mas_reprogramar': {
+      const inactive = choice.ocupaHorario ? '' : ' Ojo: ese turno ya no está activo.';
+      return `Pidió ver otros horarios para pasar su turno del ${choice.turnoTexto}, después de ${formatLocalSlot(new Date(choice.despuesDe), timeZone)}: consultá la disponibilidad con turno_id=${choiceIds.appointment(choice.turnoId)}, despues_de=${choice.despuesDe}.${inactive}`;
     }
     case 'desconocido':
       return 'Eligió una opción que ya no es válida (puede ser de una conversación vieja).';

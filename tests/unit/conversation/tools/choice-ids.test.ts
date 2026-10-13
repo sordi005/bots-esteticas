@@ -14,10 +14,21 @@ describe('choiceIds: los ids de las opciones que se ofrecen (5.3)', () => {
     expect(choiceIds.more(SERVICE, null, START)).toBe(`mas:${SERVICE}:-:2026-10-09T18:30:00.000Z`);
     expect(choiceIds.appointment(APPOINTMENT)).toBe(`turno:${APPOINTMENT}`);
     expect(choiceIds.cancel(APPOINTMENT)).toBe(`cancelar:${APPOINTMENT}`);
+    expect(choiceIds.reschedule(APPOINTMENT, START)).toBe(`reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`);
+    expect(choiceIds.moreReschedule(APPOINTMENT, START)).toBe(
+      `mas_reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`,
+    );
   });
 
   it('el id más largo entra en el límite de una fila de lista (200 caracteres)', () => {
     expect(choiceIds.slot(SERVICE, MICA, START).length).toBeLessThanOrEqual(200);
+    expect(choiceIds.reschedule(APPOINTMENT, START).length).toBeLessThanOrEqual(200);
+    expect(choiceIds.moreReschedule(APPOINTMENT, START).length).toBeLessThanOrEqual(200);
+  });
+
+  it('un horario para reservar y uno para reprogramar son ids distintos aunque sea la misma hora (decisión 28)', () => {
+    expect(choiceIds.reschedule(APPOINTMENT, START)).not.toBe(choiceIds.slot(SERVICE, MICA, START));
+    expect(choiceIds.reschedule(APPOINTMENT, START).startsWith('horario:')).toBe(false);
   });
 });
 
@@ -55,9 +66,41 @@ describe('parseChoiceId: lee un id sin confiar en él', () => {
     expect(parseChoiceId(`cancelar:${APPOINTMENT}`)).toEqual({ kind: 'cancel', appointmentId: APPOINTMENT });
   });
 
+  it('lee un horario para reprogramar: el turno y el inicio nuevo', () => {
+    expect(parseChoiceId(choiceIds.reschedule(APPOINTMENT, START))).toEqual({
+      kind: 'reschedule',
+      appointmentId: APPOINTMENT,
+      start: START,
+    });
+    expect(parseChoiceId(`reprogramar:${APPOINTMENT}:2026-10-14T18:30:00.000Z`)).toEqual({
+      kind: 'reschedule',
+      appointmentId: APPOINTMENT,
+      start: new Date('2026-10-14T18:30:00.000Z'),
+    });
+  });
+
+  it('lee "ver otros horarios" de una reprogramación: lleva el turno y el último horario ofrecido', () => {
+    expect(parseChoiceId(choiceIds.moreReschedule(APPOINTMENT, START))).toEqual({
+      kind: 'more_reschedule',
+      appointmentId: APPOINTMENT,
+      after: START,
+    });
+  });
+
   it.each([
     ['vacío', ''],
     ['un texto cualquiera', 'hola'],
+    ['un horario para reprogramar sin turno', `reprogramar:2026-10-09T18:30:00.000Z`],
+    ['un horario para reprogramar con un turno que no es uuid', 'reprogramar:el-del-martes:2026-10-09T18:30:00.000Z'],
+    ['un horario para reprogramar con el servicio y la profesional de más', `reprogramar:${APPOINTMENT}:${MICA}:2026-10-09T18:30:00.000Z`],
+    ['un horario para reprogramar sin fecha', `reprogramar:${APPOINTMENT}:`],
+    ['un horario para reprogramar con una fecha que no existe', `reprogramar:${APPOINTMENT}:2026-13-45T18:30:00.000Z`],
+    ['un horario para reprogramar con otra zona', `reprogramar:${APPOINTMENT}:2026-10-09T15:30:00.000-03:00`],
+    ['un horario para reprogramar sin milisegundos', `reprogramar:${APPOINTMENT}:2026-10-09T18:30:00Z`],
+    ['un horario para reprogramar con mayúsculas en el prefijo', `Reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`],
+    ['un "ver otros" de reprogramación sin turno', 'mas_reprogramar:2026-10-09T18:30:00.000Z'],
+    ['un "ver otros" de reprogramación con la profesional "-"', `mas_reprogramar:${APPOINTMENT}:-:2026-10-09T18:30:00.000Z`],
+    ['un "ver otros" de reprogramación sin fecha', `mas_reprogramar:${APPOINTMENT}:`],
     ['un prefijo que no existe', `cita:${SERVICE}`],
     ['un servicio sin uuid', 'servicio:semi'],
     ['un servicio con algo de más', `servicio:${SERVICE}:extra`],
