@@ -7,6 +7,7 @@ import {
   verifyCancelButtonOffered,
   verifyNoSlotsOnDay,
   verifyOffersFreeSlots,
+  verifyOffersRescheduleSlots,
   verifySlotNotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
@@ -40,6 +41,32 @@ function slot(start: Date, overrides: Partial<EvalOption> = {}): EvalOption {
     descripcion: 'con Mica',
     resuelta: resolved(start),
     ...overrides,
+  };
+}
+
+const APPOINTMENT = '00000000-0000-4000-8000-0000000000aa';
+
+/** Un horario para reprogramar un turno de la clienta, ya resuelto como lo hace la evaluación. */
+function rescheduleSlot(start: Date, overrides: { sigueLibre?: boolean; profesional?: string } = {}): EvalOption {
+  return {
+    id: choiceIds.reschedule(APPOINTMENT, start),
+    titulo: 'mié 14/10 15:30',
+    descripcion: 'con Mica',
+    resuelta: {
+      tipo: 'reprogramar',
+      turnoId: APPOINTMENT,
+      servicioId: SERVICE,
+      profesionalId: MICA,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: overrides.profesional ?? 'Mica',
+      turnoTexto: 'martes 13/10 17:00',
+      estado: 'pendiente de seña',
+      ocupaHorario: true,
+      inicio: start.toISOString(),
+      texto: 'texto',
+      duracionMinutos: 60,
+      sigueLibre: overrides.sigueLibre ?? true,
+    },
   };
 }
 
@@ -123,6 +150,58 @@ describe('verifySlotsOnDayFrom', () => {
 
     expect(verifySlotsOnDayFrom(result([unknown]), FRIDAY_FROM_13, MENDOZA)).toContain('no está libre');
     expect(verifySlotsOnDayFrom(result([missing]), FRIDAY_FROM_13, MENDOZA)).toContain('no está libre');
+  });
+});
+
+describe('los chequeos de horarios también leen los ids reprogramar: (decisión 28)', () => {
+  const WEDNESDAY_FROM_0 = { date: '2026-10-14', fromMinutes: 0 };
+
+  it('verifySlotsOnDayFrom cuenta los horarios para reprogramar, con su día y si siguen libres', () => {
+    const options = [rescheduleSlot(at('2026-10-14', '10:00')), rescheduleSlot(at('2026-10-14', '15:30'))];
+
+    expect(verifySlotsOnDayFrom(result(options), WEDNESDAY_FROM_0, MENDOZA)).toBeNull();
+    expect(verifySlotsOnDayFrom(result([rescheduleSlot(at('2026-10-15', '10:00'))]), WEDNESDAY_FROM_0, MENDOZA)).toContain(
+      '2026-10-15 10:00',
+    );
+    expect(
+      verifySlotsOnDayFrom(result([rescheduleSlot(at('2026-10-14', '10:00'), { sigueLibre: false })]), WEDNESDAY_FROM_0, MENDOZA),
+    ).toContain('no está libre');
+  });
+
+  it('verifySlotsOfProfessional lee la profesional del horario para reprogramar', () => {
+    const options = [rescheduleSlot(at('2026-10-14', '10:00')), rescheduleSlot(at('2026-10-14', '11:00'), { profesional: 'Sofi' })];
+
+    expect(verifySlotsOfProfessional(result(options), 'Mica', MENDOZA)).toContain('con Sofi');
+    expect(verifySlotsOfProfessional(result(options.slice(0, 1)), 'Mica', MENDOZA)).toBeNull();
+  });
+});
+
+describe('verifyOffersRescheduleSlots: ofrece horarios para mover el turno, nunca para reservar (decisión 28)', () => {
+  it('pasa si hay al menos un horario y todos son reprogramar:, aunque haya «Ver otros horarios»', () => {
+    const options = [rescheduleSlot(at('2026-10-14', '10:00')), rescheduleSlot(at('2026-10-14', '15:30')), seeMore];
+
+    expect(verifyOffersRescheduleSlots(result(options), MENDOZA)).toBeNull();
+  });
+
+  it('falla si ofreció un horario para reservar (horario:), que es lo que hacía reservar un turno nuevo', () => {
+    const options = [rescheduleSlot(at('2026-10-14', '10:00')), slot(at('2026-10-14', '15:30'))];
+
+    expect(verifyOffersRescheduleSlots(result(options), MENDOZA)).toBe(
+      'Ofreció un horario para reservar (horario:) en vez de uno para reprogramar: 2026-10-14 15:30 (hora local)',
+    );
+  });
+
+  it('falla si no ofreció ningún horario', () => {
+    expect(verifyOffersRescheduleSlots(result([seeMore]), MENDOZA)).toBe('No ofreció ningún horario');
+  });
+
+  it('falla si un horario no se pudo resolver como de un turno de la clienta', () => {
+    const start = at('2026-10-14', '10:00');
+    const unknown: EvalOption = { ...rescheduleSlot(start), resuelta: { tipo: 'desconocido' } };
+
+    expect(verifyOffersRescheduleSlots(result([unknown]), MENDOZA)).toBe(
+      'El horario para reprogramar 2026-10-14 10:00 (hora local) no es de un turno de la clienta',
+    );
   });
 });
 

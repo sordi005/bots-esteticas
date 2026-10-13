@@ -4,6 +4,7 @@ import {
   verifyCancelButtonOffered,
   verifyNoSlotsOnDay,
   verifyOffersFreeSlots,
+  verifyOffersRescheduleSlots,
   verifySlotNotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
@@ -15,6 +16,7 @@ import {
   verifyCustomerName,
   verifyHandoff,
   verifyHandoffSummaryWithout,
+  verifyMovedOrDerived,
   verifyNotHandedOff,
 } from './state-checks.js';
 
@@ -51,11 +53,13 @@ const FRIDAY_15_WITH_MICA: EvalChoice = {
   inicio: '2026-10-09 15:00',
 };
 
-/** El miércoles 14/10 a las 15:30 con Mica: el horario nuevo de las reprogramaciones. */
-const WEDNESDAY_1530_WITH_MICA: EvalChoice = {
-  tipo: 'horario',
-  servicio: SEMI,
-  profesional: 'Mica',
+/**
+ * El miércoles 14/10 a las 15:30 para mover su turno del martes (id `reprogramar:`, decisión 28): el
+ * horario nuevo de las reprogramaciones. Lo ofreció `consultar_disponibilidad` con el `turno_id`, con Mica.
+ */
+const WEDNESDAY_1530_TO_MOVE_TUESDAY: EvalChoice = {
+  tipo: 'reprogramar',
+  turno: 'martes',
   inicio: '2026-10-14 15:30',
 };
 
@@ -97,9 +101,14 @@ export const evalCases: EvalCase[] = [
   {
     // 4.1: lo que no está en el catálogo no tiene precio inventado.
     // Desde v0.11 no deriva de entrada: ofrece una persona y deriva si ella acepta o insiste (4.8, decisión 25).
+    // Se mira la base: no hay derivación ni pausa (derivar es el campo «derivar» de la respuesta, decisión 27).
     nombre: 'fuera_de_catalogo',
     mensajes: ['hacen masajes descontracturantes?'],
-    espera: { herramientas: ['buscar_servicios'], noLlama: ['derivar_a_persona'], noMenciona: ['$'] },
+    espera: {
+      herramientas: ['buscar_servicios'],
+      noMenciona: ['$'],
+      verifica: (resultado) => verifyNotHandedOff(resultado),
+    },
   },
   {
     nombre: 'direccion',
@@ -344,7 +353,8 @@ export const evalCases: EvalCase[] = [
   // ─── H8: reprogramar ───────────────────────────────────────────────────────────────────────
 
   {
-    // 5.4: ofrece horarios del miércoles con la misma profesional del turno. Todavía no mueve nada.
+    // 5.4: ofrece horarios del miércoles con la misma profesional del turno, con ids para reprogramar
+    // (consultó con el turno_id). Todavía no mueve nada.
     nombre: 'reprogramar_ofrece',
     mensajes: ['puedo pasar mi turno del martes al miércoles?'],
     preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
@@ -352,6 +362,7 @@ export const evalCases: EvalCase[] = [
       herramientas: ['listar_turnos_de_la_clienta', 'consultar_disponibilidad'],
       verifica: (resultado) =>
         combineChecks(
+          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
           verifySlotsOnDayFrom(resultado, { date: '2026-10-14', fromMinutes: 0 }, EVAL_TIME_ZONE),
           verifySlotsOfProfessional(resultado, 'Mica', EVAL_TIME_ZONE),
           verifyAppointment(resultado, 'martes', { estado: 'PENDING_DEPOSIT', inicio: '2026-10-13 17:00' }),
@@ -361,7 +372,7 @@ export const evalCases: EvalCase[] = [
   {
     // 4.6: elegir el horario nuevo ya es la confirmación.
     nombre: 'reprogramar_confirmado',
-    mensajes: [{ eleccion: WEDNESDAY_1530_WITH_MICA, titulo: 'mié 14/10 15:30' }],
+    mensajes: [{ eleccion: WEDNESDAY_1530_TO_MOVE_TUESDAY, titulo: 'mié 14/10 15:30' }],
     preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT], historial: RESCHEDULE_HISTORY },
     espera: {
       herramientas: ['reprogramar_turno'],
@@ -376,7 +387,7 @@ export const evalCases: EvalCase[] = [
     // 4.6: con la seña paga, solo una reprogramación la conserva. Ya usó esa: es una excepción, el turno no se
     // toca y la herramienta deriva sola.
     nombre: 'reprogramar_sin_reprogramaciones',
-    mensajes: [{ eleccion: WEDNESDAY_1530_WITH_MICA, titulo: 'mié 14/10 15:30' }],
+    mensajes: [{ eleccion: WEDNESDAY_1530_TO_MOVE_TUESDAY, titulo: 'mié 14/10 15:30' }],
     preparar: {
       nombre: CLIENT_NAME,
       turnos: [{ ...TUESDAY_APPOINTMENT, senaAprobada: true, reprogramadoDesde: ['2026-10-13 15:00'] }],
@@ -393,13 +404,27 @@ export const evalCases: EvalCase[] = [
     },
   },
 
+  {
+    // Decisión 28: el mismo escenario en que falló el modelo (pidió reprogramar, le ofrecieron horarios y toca uno).
+    // Llamaba a crear_reserva con ese horario y la clienta quedaba con dos turnos. Ahora el id es de reprogramar: el
+    // turno original queda movido (o derivado por la política) y nunca hay un turno nuevo.
+    nombre: 'reprogramar_no_reserva',
+    mensajes: [{ eleccion: WEDNESDAY_1530_TO_MOVE_TUESDAY, titulo: 'mié 14/10 15:30' }],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT], historial: RESCHEDULE_HISTORY },
+    espera: {
+      herramientas: ['reprogramar_turno'],
+      noLlama: ['crear_reserva'],
+      verifica: (resultado) =>
+        verifyMovedOrDerived(resultado, { clave: 'martes', movidoA: '2026-10-14 15:30', original: '2026-10-13 17:00' }),
+    },
+  },
+
   // ─── H8: derivar a una persona (4.8) ───────────────────────────────────────────────────────
 
   {
     nombre: 'pide_persona',
     mensajes: ['quiero hablar con una persona'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       menciona: ['en este horario'],
       verifica: (resultado) => verifyHandoff(resultado, 'customer_request'),
     },
@@ -408,7 +433,6 @@ export const evalCases: EvalCase[] = [
     nombre: 'queja',
     mensajes: ['estoy muy disconforme, la última vez me atendieron mal y quiero hacer un reclamo'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       verifica: (resultado) => verifyHandoff(resultado, 'complaint'),
     },
   },
@@ -417,7 +441,6 @@ export const evalCases: EvalCase[] = [
     nombre: 'salud_embarazo',
     mensajes: ['estoy embarazada, puedo hacerme el lifting?'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       verifica: (resultado) =>
         combineChecks(verifyHandoff(resultado, 'sensitive_topic'), verifyHandoffSummaryWithout(resultado, 'embaraz')),
     },
@@ -426,7 +449,6 @@ export const evalCases: EvalCase[] = [
     nombre: 'alergia',
     mensajes: ['tengo alergia al acrílico, puedo hacerme uñas esculpidas?'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       verifica: (resultado) =>
         combineChecks(verifyHandoff(resultado, 'sensitive_topic'), verifyHandoffSummaryWithout(resultado, 'alergi')),
     },
@@ -436,7 +458,6 @@ export const evalCases: EvalCase[] = [
     nombre: 'imagen',
     mensajes: [{ imagen: 'quiero este diseño' }],
     espera: {
-      herramientas: ['derivar_a_persona'],
       verifica: (resultado) => verifyHandoff(resultado, 'unsupported_media'),
     },
   },
@@ -445,7 +466,6 @@ export const evalCases: EvalCase[] = [
     nombre: 'consulta_previa',
     mensajes: ['quiero turno para depilación láser'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       verifica: (resultado) =>
         combineChecks(verifyHandoff(resultado, 'requires_consultation'), verifyAppointmentsOf(resultado, 'clienta', [])),
     },
@@ -456,7 +476,6 @@ export const evalCases: EvalCase[] = [
     ahora: '2026-10-08 20:30',
     mensajes: ['quiero hablar con una persona'],
     espera: {
-      herramientas: ['derivar_a_persona'],
       menciona: ['9/10', '9:00'],
       verifica: (resultado) => verifyHandoff(resultado, 'customer_request'),
     },

@@ -7,6 +7,7 @@ import {
   verifyCustomerName,
   verifyHandoff,
   verifyHandoffSummaryWithout,
+  verifyMovedOrDerived,
   verifyNotHandedOff,
 } from '../../evals/state-checks.js';
 
@@ -155,6 +156,61 @@ describe('verifyHandoff', () => {
     expect(verifyHandoff(result({ derivaciones: two, pausada: true }), 'policy_exception')).toBe(
       'Se esperaba una sola derivación y hubo 2 (policy_exception, complaint)',
     );
+  });
+});
+
+describe('verifyMovedOrDerived: el turno se movió o se derivó por la política, y no hay un turno nuevo', () => {
+  const expected = { clave: 'martes', movidoA: '2026-10-14 15:30', original: '2026-10-13 17:00' };
+  const turn = (inicio: string, overrides: Partial<EvalAppointmentState> = {}) =>
+    appointment({ clave: 'martes', inicio, ...overrides });
+  const exception = { motivo: 'policy_exception' as const, resumen: 'Pide reprogramar fuera de plazo' };
+
+  it('pasa si el único turno de la clienta quedó en el horario nuevo y no derivó', () => {
+    expect(verifyMovedOrDerived(result({ turnos: [turn('2026-10-14 15:30')] }), expected)).toBeNull();
+  });
+
+  it('pasa si el único turno sigue donde estaba y se derivó por excepción con la conversación pausada', () => {
+    const derived = result({ turnos: [turn('2026-10-13 17:00')], derivaciones: [exception], pausada: true });
+
+    expect(verifyMovedOrDerived(derived, expected)).toBeNull();
+  });
+
+  it('falla si la clienta quedó con un turno nuevo además del suyo (reservó en vez de reprogramar)', () => {
+    const twoTurns = result({ turnos: [turn('2026-10-13 17:00'), appointment({ inicio: '2026-10-14 15:30' })] });
+
+    expect(verifyMovedOrDerived(twoTurns, expected)).toContain('Se esperaba un solo turno de la clienta y hay 2');
+  });
+
+  it('falla si el turno nuevo reemplazó al suyo: el turno «martes» ya no figura', () => {
+    const replaced = result({ turnos: [appointment({ inicio: '2026-10-14 15:30' })] });
+
+    expect(verifyMovedOrDerived(replaced, expected)).toContain('«martes»');
+  });
+
+  it('falla si el turno se movió y además se derivó, o si quedó donde estaba sin derivar', () => {
+    const both = result({ turnos: [turn('2026-10-14 15:30')], derivaciones: [exception], pausada: true });
+    const neither = result({ turnos: [turn('2026-10-13 17:00')] });
+
+    expect(verifyMovedOrDerived(both, expected)).toContain('se movió y además derivó');
+    expect(verifyMovedOrDerived(neither, expected)).toContain('ni se movió ni se derivó');
+  });
+
+  it('falla si el turno quedó en un horario que no es ninguno de los dos', () => {
+    expect(verifyMovedOrDerived(result({ turnos: [turn('2026-10-15 10:00')] }), expected)).toContain('2026-10-15 10:00');
+  });
+
+  it('falla si el turno se canceló', () => {
+    const cancelled = turn('2026-10-13 17:00', { estado: 'CANCELLED_BY_CUSTOMER' });
+
+    expect(verifyMovedOrDerived(result({ turnos: [cancelled], derivaciones: [exception], pausada: true }), expected)).toContain(
+      'CANCELLED_BY_CUSTOMER',
+    );
+  });
+
+  it('ignora los turnos de otras clientas', () => {
+    const others = result({ turnos: [turn('2026-10-14 15:30'), appointment({ de: 'otra', inicio: '2026-10-14 11:00' })] });
+
+    expect(verifyMovedOrDerived(others, expected)).toBeNull();
   });
 });
 

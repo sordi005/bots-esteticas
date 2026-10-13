@@ -42,6 +42,32 @@ function offered(start: Date, professional = 'Mica'): EvalOption {
   };
 }
 
+const APPOINTMENT_ID = '00000000-0000-4000-8000-0000000000aa';
+
+/** Un horario para reprogramar el turno de la clienta, ya resuelto como lo hace la evaluación. */
+function offeredToMove(start: Date, professional = 'Mica'): EvalOption {
+  return {
+    id: choiceIds.reschedule(APPOINTMENT_ID, start),
+    titulo: 'horario',
+    descripcion: null,
+    resuelta: {
+      tipo: 'reprogramar',
+      turnoId: APPOINTMENT_ID,
+      servicioId: SERVICE,
+      servicioNombre: SEMI,
+      profesionalId: MICA,
+      profesionalNombre: professional,
+      turnoTexto: 'martes 13/10 17:00',
+      estado: 'pendiente de seña',
+      ocupaHorario: true,
+      inicio: start.toISOString(),
+      texto: 'texto',
+      duracionMinutos: 60,
+      sigueLibre: true,
+    },
+  };
+}
+
 function appointment(overrides: Partial<EvalAppointmentState> = {}): EvalAppointmentState {
   return {
     clave: null,
@@ -79,8 +105,21 @@ const handedOff = (motivo: EvalState['derivaciones'][number]['motivo'], resumen 
 });
 
 describe('fuera_de_catalogo: no deriva de entrada (decisión 25)', () => {
-  it('prohíbe llamar a derivar_a_persona', () => {
-    expect(byName('fuera_de_catalogo').espera.noLlama).toEqual(['derivar_a_persona']);
+  it('verifica en la base que no hubo ninguna derivación ni pausa, en vez de mirar una herramienta', () => {
+    expect(byName('fuera_de_catalogo').espera.noLlama).toBeUndefined();
+    expect(check('fuera_de_catalogo', withState({}))).toBeNull();
+  });
+
+  it('falla si derivó o si dejó la conversación pausada', () => {
+    expect(check('fuera_de_catalogo', withState(handedOff('off_catalog')))).toBe('No debía derivar y derivó por off_catalog');
+    expect(check('fuera_de_catalogo', withState({ pausada: true }))).toBe('No debía pausar la conversación');
+  });
+
+  it('sigue buscando en el catálogo y sin inventar un precio', () => {
+    const { espera } = byName('fuera_de_catalogo');
+
+    expect(espera.herramientas).toEqual(['buscar_servicios']);
+    expect(espera.noMenciona).toEqual(['$']);
   });
 });
 
@@ -349,27 +388,42 @@ describe('reprogramar_ofrece', () => {
   const MARTES = appointment({ clave: 'martes', inicio: '2026-10-13 17:00' });
 
   it('pasa si ofrece solo horarios del miércoles 14/10 con Mica y el turno sigue en el martes', () => {
-    const options = [offered(at('2026-10-14', '10:00')), offered(at('2026-10-14', '15:30'))];
+    const options = [offeredToMove(at('2026-10-14', '10:00')), offeredToMove(at('2026-10-14', '15:30'))];
 
     expect(check('reprogramar_ofrece', withState({ turnos: [MARTES] }, options))).toBeNull();
   });
 
   it('falla si ofrece un horario de otro día', () => {
-    expect(check('reprogramar_ofrece', withState({ turnos: [MARTES] }, [offered(at('2026-10-15', '10:00'))]))).toContain(
-      'Horario fuera de lo pedido',
-    );
+    expect(
+      check('reprogramar_ofrece', withState({ turnos: [MARTES] }, [offeredToMove(at('2026-10-15', '10:00'))])),
+    ).toContain('Horario fuera de lo pedido');
   });
 
   it('falla si ofrece un horario con otra profesional', () => {
     expect(
-      check('reprogramar_ofrece', withState({ turnos: [MARTES] }, [offered(at('2026-10-14', '11:00'), 'Sofi')])),
+      check('reprogramar_ofrece', withState({ turnos: [MARTES] }, [offeredToMove(at('2026-10-14', '11:00'), 'Sofi')])),
     ).toContain('con Sofi');
+  });
+
+  it('falla si ofrece un horario para reservar (horario:) en vez de uno para reprogramar el turno (decisión 28)', () => {
+    const options = [offeredToMove(at('2026-10-14', '10:00')), offered(at('2026-10-14', '15:30'))];
+
+    expect(check('reprogramar_ofrece', withState({ turnos: [MARTES] }, options))).toContain(
+      'Ofreció un horario para reservar (horario:)',
+    );
+  });
+
+  it('consulta la disponibilidad del turno, no del servicio: lista los turnos y consulta', () => {
+    expect(byName('reprogramar_ofrece').espera.herramientas).toEqual([
+      'listar_turnos_de_la_clienta',
+      'consultar_disponibilidad',
+    ]);
   });
 
   it('falla si ya movió el turno sin que ella eligiera', () => {
     const moved = { ...MARTES, inicio: '2026-10-14 10:00' };
 
-    expect(check('reprogramar_ofrece', withState({ turnos: [moved] }, [offered(at('2026-10-14', '10:00'))]))).toContain(
+    expect(check('reprogramar_ofrece', withState({ turnos: [moved] }, [offeredToMove(at('2026-10-14', '10:00'))]))).toContain(
       'quedó el 2026-10-14 10:00',
     );
   });
@@ -391,14 +445,11 @@ describe('reprogramar_confirmado', () => {
     );
   });
 
-  it('toca un horario del miércoles con Mica después de que el asistente se los ofreció', () => {
+  it('toca un horario del miércoles para reprogramar su turno (id reprogramar:) después de que el asistente se los ofreció', () => {
     const evalCase = byName('reprogramar_confirmado');
 
     expect(evalCase.mensajes).toEqual([
-      {
-        eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 15:30' },
-        titulo: 'mié 14/10 15:30',
-      },
+      { eleccion: { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' }, titulo: 'mié 14/10 15:30' },
     ]);
     expect(evalCase.espera.herramientas).toEqual(['reprogramar_turno']);
   });
@@ -421,6 +472,15 @@ describe('reprogramar_sin_reprogramaciones', () => {
     ).toBeNull();
   });
 
+  it('toca el mismo horario para reprogramar (id reprogramar:) y espera que la herramienta derive', () => {
+    const evalCase = byName('reprogramar_sin_reprogramaciones');
+
+    expect(evalCase.mensajes).toEqual([
+      { eleccion: { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' }, titulo: 'mié 14/10 15:30' },
+    ]);
+    expect(evalCase.espera.herramientas).toEqual(['reprogramar_turno']);
+  });
+
   it('falla si lo movió igual, o si no derivó', () => {
     const moved = { ...SAME, inicio: '2026-10-14 15:30' };
 
@@ -428,6 +488,45 @@ describe('reprogramar_sin_reprogramaciones', () => {
       check('reprogramar_sin_reprogramaciones', withState({ turnos: [moved], ...handedOff('policy_exception') })),
     ).toContain('quedó el 2026-10-14 15:30');
     expect(check('reprogramar_sin_reprogramaciones', withState({ turnos: [SAME] }))).toContain('No derivó');
+  });
+});
+
+describe('reprogramar_no_reserva: el horario que toca es para mover el turno, nunca para reservar uno nuevo (decisión 28)', () => {
+  const moved = appointment({ clave: 'martes', inicio: '2026-10-14 15:30' });
+  const original = appointment({ clave: 'martes', inicio: '2026-10-13 17:00' });
+
+  it('es el mismo escenario en que falló el modelo: pidió reprogramar, le ofrecieron horarios y toca uno', () => {
+    const evalCase = byName('reprogramar_no_reserva');
+
+    expect(evalCase.preparar?.turnos).toEqual(byName('reprogramar_confirmado').preparar?.turnos);
+    expect(evalCase.preparar?.historial).toEqual(byName('reprogramar_confirmado').preparar?.historial);
+    expect(evalCase.mensajes).toEqual([
+      { eleccion: { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' }, titulo: 'mié 14/10 15:30' },
+    ]);
+  });
+
+  it('espera reprogramar_turno y que no llame a crear_reserva', () => {
+    const { espera } = byName('reprogramar_no_reserva');
+
+    expect(espera.herramientas).toEqual(['reprogramar_turno']);
+    expect(espera.noLlama).toEqual(['crear_reserva']);
+  });
+
+  it('pasa si el turno quedó movido, y si quedó donde estaba y derivó por la política', () => {
+    expect(check('reprogramar_no_reserva', withState({ turnos: [moved] }))).toBeNull();
+    expect(check('reprogramar_no_reserva', withState({ turnos: [original], ...handedOff('policy_exception') }))).toBeNull();
+  });
+
+  it('falla si reservó un turno nuevo y dejó el suyo donde estaba', () => {
+    const reserved = appointment({ inicio: '2026-10-14 15:30' });
+
+    expect(check('reprogramar_no_reserva', withState({ turnos: [original, reserved] }))).toContain(
+      'Se esperaba un solo turno de la clienta y hay 2',
+    );
+  });
+
+  it('falla si no hizo nada: ni lo movió ni derivó', () => {
+    expect(check('reprogramar_no_reserva', withState({ turnos: [original] }))).toContain('ni se movió ni se derivó');
   });
 });
 
@@ -440,10 +539,24 @@ describe('los casos de derivación', () => {
     ['imagen', 'unsupported_media'],
     ['consulta_previa', 'requires_consultation'],
     ['derivacion_fuera_de_horario', 'customer_request'],
-  ] as const)('%s: espera derivar_a_persona con el motivo %s y la conversación pausada', (name, reason) => {
-    expect(byName(name).espera.herramientas).toEqual(['derivar_a_persona']);
+  ] as const)('%s: verifica en la base una derivación con el motivo %s y la conversación pausada', (name, reason) => {
     expect(check(name, withState(handedOff(reason, 'Tema sensible: ver la conversación')))).toBeNull();
   });
+
+  it.each([
+    'pide_persona',
+    'queja',
+    'salud_embarazo',
+    'alergia',
+    'imagen',
+    'consulta_previa',
+    'derivacion_fuera_de_horario',
+  ])('%s: no pide ninguna herramienta para derivar: derivar va en la respuesta, no se llama a nada', (name) => {
+    expect(byName(name).espera.herramientas).toBeUndefined();
+    expect(byName(name).espera.noLlama).toBeUndefined();
+  });
+
+
 
   it.each([
     ['pide_persona', 'complaint'],

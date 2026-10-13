@@ -19,17 +19,22 @@ interface OfferedSlot {
   stillFree: boolean;
 }
 
-/** Las opciones `horario:` del mensaje; "Ver otros horarios" y los servicios no cuentan. */
+/**
+ * Las opciones `horario:` (para reservar) y `reprogramar:` (para mover un turno) del mensaje;
+ * "Ver otros horarios" y los servicios no cuentan.
+ */
 function offeredSlots(result: EvalResult, timeZone: string): OfferedSlot[] {
   const slots: OfferedSlot[] = [];
   for (const option of result.opciones) {
     const choice = parseChoiceId(option.id);
-    if (choice?.kind !== 'slot') continue;
+    if (choice?.kind !== 'slot' && choice?.kind !== 'reschedule') continue;
+    const resolved = option.resuelta;
+    const known = resolved?.tipo === 'horario' || resolved?.tipo === 'reprogramar' ? resolved : null;
     slots.push({
       start: choice.start,
-      professional: option.resuelta?.tipo === 'horario' ? option.resuelta.profesionalNombre : null,
+      professional: known?.profesionalNombre ?? null,
       local: instantToLocal(choice.start, timeZone),
-      stillFree: option.resuelta?.tipo === 'horario' && option.resuelta.sigueLibre,
+      stillFree: known?.sigueLibre ?? false,
     });
   }
   return slots;
@@ -93,6 +98,35 @@ export function verifySlotNotOffered(
     (candidate) => candidate.professional === slot.profesional && formatLocalStart(candidate.start, timeZone) === slot.inicio,
   );
   return offered ? `Ofreció el horario ${slot.inicio} con ${slot.profesional}, que ya estaba ocupado` : null;
+}
+
+/**
+ * Ofreció horarios para MOVER el turno (`reprogramar:`) y ninguno para reservar (`horario:`): la
+ * intención va en el id (decisión 28). Cada uno se volvió a resolver contra la base, que solo
+ * resuelve turnos de ESTA clienta.
+ */
+export function verifyOffersRescheduleSlots(result: EvalResult, timeZone: string): string | null {
+  const reserve: OfferedSlot[] = [];
+  const reschedule: OfferedSlot[] = [];
+  for (const option of result.opciones) {
+    const choice = parseChoiceId(option.id);
+    if (choice?.kind !== 'slot' && choice?.kind !== 'reschedule') continue;
+    const slot: OfferedSlot = {
+      start: choice.start,
+      professional: null,
+      local: instantToLocal(choice.start, timeZone),
+      stillFree: option.resuelta?.tipo === 'reprogramar',
+    };
+    (choice.kind === 'slot' ? reserve : reschedule).push(slot);
+  }
+
+  const wrong = reserve[0];
+  if (wrong) return `Ofreció un horario para reservar (horario:) en vez de uno para reprogramar: ${label(wrong)} (hora local)`;
+  if (reschedule.length === 0) return 'No ofreció ningún horario';
+  const unresolved = reschedule.find((slot) => !slot.stillFree);
+  return unresolved
+    ? `El horario para reprogramar ${label(unresolved)} (hora local) no es de un turno de la clienta`
+    : null;
 }
 
 /**

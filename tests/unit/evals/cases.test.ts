@@ -56,7 +56,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 11 de H7 y las 21 de H8 (reservar, cancelar, reprogramar y derivar), en orden', () => {
+  it('son las 11 de H7 y las 22 de H8 (reservar, cancelar, reprogramar y derivar), en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -83,6 +83,7 @@ describe('evalCases', () => {
       'reprogramar_ofrece',
       'reprogramar_confirmado',
       'reprogramar_sin_reprogramaciones',
+      'reprogramar_no_reserva',
       'pide_persona',
       'queja',
       'salud_embarazo',
@@ -102,6 +103,13 @@ describe('evalCases', () => {
       expect(mensajes.length, nombre).toBeGreaterThan(0);
       expect(mensajes.every((mensaje) => typeof mensaje !== 'string' || mensaje.trim() !== ''), nombre).toBe(true);
       expect(Object.keys(espera).length, nombre).toBeGreaterThan(0);
+    }
+  });
+
+  it('ningún caso depende de derivar_a_persona como herramienta: derivar va en la respuesta (decisión 27)', () => {
+    for (const { nombre, espera } of evalCases) {
+      expect(espera.herramientas ?? [], nombre).not.toContain('derivar_a_persona');
+      expect(espera.noLlama ?? [], nombre).not.toContain('derivar_a_persona');
     }
   });
 

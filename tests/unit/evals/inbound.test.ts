@@ -5,6 +5,7 @@ import type { EvalChoice } from '../../evals/evaluate.js';
 import { buildInboundMessage } from '../../evals/inbound.js';
 
 const CANCEL: EvalChoice = { tipo: 'cancelar', turno: 'martes' };
+const RESCHEDULE: EvalChoice = { tipo: 'reprogramar', turno: 'martes', inicio: '2026-10-14 15:30' };
 const SLOT: EvalChoice = { tipo: 'horario', servicio: 'Esmaltado semipermanente', profesional: 'Mica', inicio: '2026-10-14 15:30' };
 
 /** Un resolvedor de ids de mentira: lo que arma el corredor con la base. */
@@ -47,6 +48,16 @@ describe('buildInboundMessage: elección', () => {
       type: 'interactive',
       interactive: { type: 'list_reply', list_reply: { id: 'id-de-horario', title: 'mié 14/10 15:30' } },
     });
+  });
+
+  it('un horario para reprogramar también es una fila de lista, con el id que arma el corredor', () => {
+    const message = buildInboundMessage({ eleccion: RESCHEDULE, titulo: 'mié 14/10 15:30' }, resolveId);
+
+    expect(message.content).toEqual({
+      type: 'interactive',
+      interactive: { type: 'list_reply', list_reply: { id: 'id-de-reprogramar', title: 'mié 14/10 15:30' } },
+    });
+    expect(describeInbound(message.type, message.content)).toMatchObject({ replyId: 'id-de-reprogramar' });
   });
 
   it('el agente lo lee como una elección con su id, no como texto', () => {

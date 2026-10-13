@@ -168,17 +168,17 @@ describe('evaluateCase: noLlama', () => {
   });
 
   it('pasa si no llamó a ninguna herramienta', () => {
-    expect(evaluateCase(caso({ noLlama: ['derivar_a_persona'] }), result()).ok).toBe(true);
+    expect(evaluateCase(caso({ noLlama: ['crear_reserva'] }), result()).ok).toBe(true);
   });
 
   it('falla y nombra la prohibida que se llamó', () => {
     const evaluation = evaluateCase(
-      caso({ noLlama: ['derivar_a_persona'] }),
-      result({ herramientas: ['buscar_servicios', 'derivar_a_persona'] }),
+      caso({ noLlama: ['crear_reserva'] }),
+      result({ herramientas: ['buscar_servicios', 'crear_reserva'] }),
     );
 
     expect(evaluation.motivos).toEqual([
-      'No debía llamar a derivar_a_persona y llamó: buscar_servicios, derivar_a_persona',
+      'No debía llamar a crear_reserva y llamó: buscar_servicios, crear_reserva',
     ]);
   });
 

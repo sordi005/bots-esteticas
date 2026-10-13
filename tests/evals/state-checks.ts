@@ -80,6 +80,39 @@ export function verifyHandoff(result: EvalResult, reason: Handoff['motivo']): st
   return null;
 }
 
+/**
+ * Reprogramar un turno (4.6): el único turno de la clienta es el que preparó el caso (`clave`) y
+ * quedó movido (en `movidoA`, sin derivar) o derivado por la política (en su horario `original` y con
+ * una derivación por excepción). Si hay un turno de más o el suyo no está, el agente reservó uno
+ * nuevo en vez de mover el que tenía (decisión 28).
+ */
+export function verifyMovedOrDerived(
+  result: EvalResult,
+  expected: { clave: string; movidoA: string; original: string },
+): string | null {
+  const { clave, movidoA, original } = expected;
+  const mine = result.estado.turnos.filter((appointment) => appointment.de === 'clienta');
+  if (mine.length !== 1) {
+    return `Se esperaba un solo turno de la clienta y hay ${String(mine.length)}: ${describeList(mine)}`;
+  }
+  const found = mine.find((appointment) => appointment.clave === clave);
+  if (!found) {
+    return `El único turno de la clienta no es el «${clave}» que preparó el caso (se reservó uno nuevo): ${describeList(mine)}`;
+  }
+  if (found.estado.startsWith('CANCELLED')) return `El turno «${clave}» quedó ${found.estado}`;
+
+  const handedOff = result.estado.derivaciones.length > 0;
+  if (found.inicio === movidoA) {
+    return handedOff ? `El turno «${clave}» se movió y además derivó: no corresponde las dos cosas` : null;
+  }
+  if (found.inicio === original) {
+    return handedOff
+      ? verifyHandoff(result, 'policy_exception')
+      : `El turno «${clave}» ni se movió ni se derivó: quedó el ${original}`;
+  }
+  return `El turno «${clave}» quedó el ${found.inicio} y se esperaba el ${movidoA} (movido) o el ${original} (derivado)`;
+}
+
 /** No derivó ni pausó la conversación. */
 export function verifyNotHandedOff(result: EvalResult): string | null {
   const { derivaciones, pausada } = result.estado;
