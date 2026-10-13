@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { addDaysToLocalDate, isoWeekday } from '../../../shared/time-zone.js';
+import { parseAppointmentRef } from './choice-ids.js';
 
 /** Cuántos días puede abarcar una consulta de disponibilidad, contando el primero y el último [S]. */
 export const MAX_AVAILABILITY_RANGE_DAYS = 7;
@@ -36,11 +37,22 @@ const localDate = z
  */
 export const availabilityInput = z
   .object({
-    servicio_id: z.uuid().describe('Id del servicio (lo devuelve buscar_servicios).'),
+    servicio_id: z
+      .uuid()
+      .optional()
+      .describe('Id del servicio (lo devuelve buscar_servicios). No lo mandes si pasás turno_id.'),
+    turno_id: z
+      .string()
+      .optional()
+      .describe(
+        'Solo para REPROGRAMAR un turno de la clienta: el turnoId que devolvió listar_turnos_de_la_clienta (o el ' +
+          'turno_id del contexto). Los horarios son del servicio y de la profesional de ese turno, con ids para ' +
+          'reprogramar_turno. No mandes servicio_id ni profesional_id.',
+      ),
     profesional_id: z
       .uuid()
       .optional()
-      .describe('Solo si la clienta pidió una profesional puntual. Si no, no lo mandes.'),
+      .describe('Solo si la clienta pidió una profesional puntual. Si no, no lo mandes. No lo mandes si pasás turno_id.'),
     desde: localDate.describe('Primer día a buscar, fecha local del negocio AAAA-MM-DD.'),
     hasta: localDate.describe(
       `Último día a buscar (incluido), AAAA-MM-DD. Hasta ${String(MAX_AVAILABILITY_RANGE_DAYS)} días en total.`,
@@ -55,6 +67,19 @@ export const availabilityInput = z
       .describe('Para "ver otros horarios": el inicio (UTC) del último horario ofrecido, tal como vino en la opción.'),
   })
   .superRefine((value, ctx) => {
+    if (value.turno_id !== undefined && parseAppointmentRef(value.turno_id) === null) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['turno_id'],
+        message: 'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
+      });
+    } else if (value.servicio_id === undefined && value.turno_id === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['servicio_id'],
+        message: 'Falta el servicio_id (o el turno_id, si es para reprogramar un turno de la clienta)',
+      });
+    }
     // Si alguna fecha es inválida, ya tiene su propio error: no se compara.
     if (!isRealDate(value.desde) || !isRealDate(value.hasta)) return;
     if (value.hasta < value.desde) {

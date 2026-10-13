@@ -29,10 +29,17 @@ export function slotOffer(
     professionalName: string;
     start: Date;
     durationMinutes: number;
+    /**
+     * Si el horario es para mover este turno: el id es `reprogramar:<turno>:<inicio>` y no
+     * `horario:...`, así lo que toca la clienta ya dice qué quiere hacer (decisión 28).
+     */
+    rescheduleAppointmentId?: string;
   },
   timeZone: string,
 ): SlotOffer {
-  const id = choiceIds.slot(input.serviceId, input.professionalId, input.start);
+  const id = input.rescheduleAppointmentId
+    ? choiceIds.reschedule(input.rescheduleAppointmentId, input.start)
+    : choiceIds.slot(input.serviceId, input.professionalId, input.start);
   return {
     content: {
       opcionId: id,

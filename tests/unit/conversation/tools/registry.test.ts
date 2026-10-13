@@ -38,7 +38,20 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
   it('los esquemas de entrada se pueden pasar a JSON Schema para el modelo', () => {
     expect(schemaOf('buscar_servicios')).toMatchObject({ type: 'object' });
     expect(Object.keys(schemaOf('consultar_informacion').properties)).toEqual(['tema']);
-    expect(schemaOf('consultar_disponibilidad').required).toEqual(['servicio_id', 'desde', 'hasta']);
+    // El servicio o el turno: uno de los dos (lo valida el esquema de Zod, no el JSON Schema).
+    expect(schemaOf('consultar_disponibilidad').required).toEqual(['desde', 'hasta']);
+  });
+
+  it('consultar_disponibilidad acepta turno_id para reprogramar, y le explica al modelo que va sin servicio_id', () => {
+    const { properties } = schemaOf('consultar_disponibilidad');
+
+    expect(Object.keys(properties)).toContain('turno_id');
+    expect(properties.turno_id?.description).toMatch(/REPROGRAMAR/);
+    expect(properties.turno_id?.description).toMatch(/No mandes servicio_id ni profesional_id/);
+    expect(properties.servicio_id?.description).toMatch(/No lo mandes si pasás turno_id/);
+    const tool = consultationTools.find((candidate) => candidate.name === 'consultar_disponibilidad');
+    expect(tool?.description).toMatch(/Para REPROGRAMAR un turno[^.]*pasá turno_id/);
+    expect(tool?.description).toMatch(/reprogramar_turno, no para crear_reserva/);
   });
 
   it('ninguna herramienta pide el negocio ni la clienta como parámetro (regla 2)', () => {

@@ -83,6 +83,51 @@ describe('availabilityInput: lo que puede pedir el modelo', () => {
   });
 });
 
+describe('availabilityInput: reprogramar un turno con turno_id (decisión 28)', () => {
+  const APPOINTMENT = '00000000-0000-4000-8000-000000000301';
+  const rescheduling = (overrides: Record<string, unknown>) =>
+    availabilityInput.safeParse({ desde: '2026-10-05', hasta: '2026-10-05', ...overrides });
+
+  it('con turno_id el servicio no hace falta: sale del turno', () => {
+    const result = rescheduling({ turno_id: APPOINTMENT });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ turno_id: APPOINTMENT, desde: '2026-10-05', hasta: '2026-10-05' });
+  });
+
+  it('acepta el turno con el prefijo turno: o el uuid solo, tal cual lo ve el modelo', () => {
+    expect(rescheduling({ turno_id: `turno:${APPOINTMENT}` }).success).toBe(true);
+    expect(rescheduling({ turno_id: APPOINTMENT }).success).toBe(true);
+  });
+
+  it.each([
+    ['un texto cualquiera', 'el del martes'],
+    ['un id de cancelación', `cancelar:${APPOINTMENT}`],
+    ['un horario', `reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`],
+    ['vacío', ''],
+  ])('rechaza un turno_id que es %s, con un mensaje que el modelo puede corregir', (_description, turno_id) => {
+    const result = rescheduling({ turno_id });
+
+    expect(result.success).toBe(false);
+    expect(messagesOf(result)).toEqual(['No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo']);
+  });
+
+  it('sin servicio_id ni turno_id no hay qué consultar: lo dice', () => {
+    const result = rescheduling({});
+
+    expect(result.success).toBe(false);
+    expect(messagesOf(result)).toEqual([
+      'Falta el servicio_id (o el turno_id, si es para reprogramar un turno de la clienta)',
+    ]);
+  });
+
+  it('puede traer los dos: es la herramienta la que decide si coinciden con el turno', () => {
+    const result = rescheduling({ turno_id: APPOINTMENT, servicio_id: SERVICE, profesional_id: MICA });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('periodOfDay: franjas [S] por hora local de inicio', () => {
   const minutes = (hour: number, minute = 0) => hour * 60 + minute;
 
