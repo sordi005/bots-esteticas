@@ -577,13 +577,14 @@ Herramientas del agente en el MVP:
 |---|---|
 | `buscar_servicios(texto)` | Devuelve servicios del catálogo que coinciden, con precio y duración |
 | `consultar_informacion(tema)` | Devuelve datos del negocio: dirección, medios de pago, promociones, políticas |
-| `consultar_disponibilidad(servicio, profesional?, desde, hasta)` | Devuelve horarios libres |
+| `consultar_disponibilidad(servicio, profesional?, desde, hasta, turno?)` | Devuelve horarios libres (con `turno`, los horarios para reprogramar ese turno) |
 | `crear_reserva(horario, nombre?)` | Crea el turno o la reserva provisoria, aplicando las reglas de seña |
 | `generar_pago_seña(turno)` | Genera el link de Mercado Pago o devuelve el alias, según el medio que eligió el negocio (4.5) |
 | `listar_turnos_de_la_clienta()` | Turnos futuros de quien escribe |
-| `reprogramar_turno(turno, horario)` | Aplica la política |
+| `reprogramar_turno(horario)` | Aplica la política. El horario es uno de los que devolvió `consultar_disponibilidad` para ese turno |
 | `cancelar_turno(turno, confirmada)` | Aplica la política |
-| `derivar_a_persona(motivo, resumen)` | Pausa el asistente y avisa a la dueña |
+
+**[D]** Derivar a una persona no es una herramienta: es parte de la respuesta del modelo (campo `derivar`, más abajo). El código registra la derivación, pausa el asistente y avisa a la dueña.
 
 **[D]** Las herramientas reciben el negocio y la clienta desde el contexto del servidor, nunca como parámetro elegido por el modelo. El modelo no puede consultar datos de otra clienta ni de otro negocio.
 
@@ -598,16 +599,18 @@ Detalle de las herramientas de consulta (H7):
 
 Detalle de las herramientas de turnos y derivación (H8):
 
-- **[D]** `crear_reserva` y `reprogramar_turno` reciben el **id del horario** que devolvió `consultar_disponibilidad` (o el de la elección de la clienta), que ya trae el servicio, la profesional y el inicio. El modelo copia un id; no arma combinaciones ni convierte horarios. El código lo vuelve a validar todo con `booking.ts` (6.6).
+- **[D]** `crear_reserva` y `reprogramar_turno` reciben el **id del horario** que devolvió `consultar_disponibilidad` (o el de la elección de la clienta). El modelo copia un id; no arma combinaciones ni convierte horarios. El código lo vuelve a validar todo con `booking.ts` (6.6).
+- **[D]** La intención va en el id. Un horario para reservar (`horario:<servicio>:<profesional>:<inicio>`) y uno para reprogramar (`reprogramar:<turno>:<inicio>`) son ids distintos: `crear_reserva` solo acepta los primeros y `reprogramar_turno` solo los segundos. `consultar_disponibilidad` con `turno` devuelve horarios para reprogramar ese turno, con su servicio y su profesional (4.6), y valida que sea de la clienta que escribe. Las evaluaciones mostraron que, después de pedir una reprogramación, la clienta tocaba el horario y el modelo llamaba a `crear_reserva`: quedaba con dos turnos.
 - **[D]** `crear_reserva` y `reprogramar_turno` solo actúan sobre un horario que **la clienta eligió** con un botón o una lista, en esa vuelta o en las últimas 24 horas. Si el modelo pasa un horario que ella no tocó (por ejemplo, porque lo escribió o porque el modelo lo eligió por su cuenta), la herramienta no cambia nada y devuelve ese horario como opción, para que lo confirme con un botón. Elegir es la confirmación (principio 5), y lo garantiza el código: las evaluaciones mostraron al modelo reprogramando un turno a un horario que la clienta nunca eligió.
 - **[D]** El historial que ve el modelo muestra, de cada elección vieja, el id de la opción elegida además de su título. Así, si después de elegir el horario hay que pedir el nombre, el modelo todavía tiene el id para reservar.
 - `crear_reserva(horario, nombre?)`: el nombre es obligatorio si la clienta todavía no tiene uno cargado (4.9) y se guarda en su ficha. Devuelve el estado del turno y, si lleva seña, el monto y hasta cuándo pagarla, escritos por el código. **[D]** Es idempotente: si la clienta ya tiene ese mismo turno, lo devuelve en vez de responder que el horario se ocupó (un reintento puede volver a pedirlo).
 - `listar_turnos_de_la_clienta()`: **[S]** hasta 10 turnos futuros que ocupan horario (4.3), del más cercano al más lejano, con su estado, su seña y hasta cuándo se pueden cancelar o reprogramar sin costo. Ofrece cada turno como opción para elegir cuál. Al resolver esa elección se verifica que el turno sea de la clienta que escribe, no solo del negocio.
 - `cancelar_turno(turno, confirmada)`: con `confirmada` en falso valida el turno y la política y ofrece el botón "Sí, cancelar" (4.6); con verdadero, cancela. Un turno que ya estaba cancelado responde que ya lo está.
-- `reprogramar_turno(turno, horario)`: el horario tiene que ser del mismo servicio y la misma profesional (4.6).
+- `reprogramar_turno(horario)`: el id `reprogramar:` ya trae el turno; el servicio y la profesional son los del turno (4.6).
 - **[D]** Si cancelar o reprogramar no corresponde, la herramienta deriva sola con motivo "excepción" y le devuelve al modelo la política para explicarla.
-- `derivar_a_persona(motivo, resumen)`: el motivo es una lista cerrada (pedido de la clienta, queja, tema sensible, imagen, consulta previa, fuera de catálogo, excepción, no entiende). Devuelve cuándo le va a responder una persona (4.8).
-- **[D]** La respuesta del modelo lleva, además del texto y las opciones, un campo obligatorio `derivada`: verdadero si el texto le dice a la clienta que la va a atender una persona. Si es verdadero y en esa vuelta no se derivó (ni con `derivar_a_persona` ni por una herramienta que derivó sola), el ciclo del agente se lo hace notar al modelo **una vez** para que derive o corrija el texto. Si sigue sin derivar, la clienta recibe el texto fijo «Perdón, no te entendí bien…» (8.5), que cuenta como intento fallido. Las evaluaciones mostraron que, ante una queja, el modelo prometía "te paso el reclamo a una persona" sin derivar, y que una regla del prompt no lo corregía: la clienta quedaba esperando a alguien que nunca se enteró.
+- **[D]** La respuesta del modelo lleva, además del texto y las opciones, un campo obligatorio `derivar`: vacío, o el motivo y un resumen de una línea. El motivo es una lista cerrada (pedido de la clienta, queja, tema sensible, imagen, consulta previa, fuera de catálogo, excepción, no entiende). Si viene completo, el código deriva al enviar la respuesta (4.8); si el resumen es relleno, no deriva y la clienta recibe el texto fijo «Perdón, no te entendí bien…» (8.5), que cuenta como intento fallido. La promesa ("le paso tu consulta a una persona") y la acción salen juntas, en el mismo bloque de la respuesta.
+- **[D]** Cuándo le va a responder una persona lo calcula el código (4.8) y va en el contexto de cada vuelta, para que el modelo lo escriba si deriva.
+- Por qué derivar no es una herramienta: las evaluaciones (con Haiku 5.5 y con Sonnet 5.5) mostraron al modelo llamando a `derivar_a_persona` sin haberlo decidido, justo al cerrar una respuesta con opciones, con resúmenes como «No, nada. Esta respuesta no deriva.». Una sola llamada suelta pausaba la conversación 12 horas, y ni los filtros de texto ni las reglas del prompt lo frenaban del todo. Una herramienta sirve para consultar o actuar en medio del razonamiento; la derivación es el resultado de la respuesta.
 - **[D]** Hasta H9, el prompt tiene una regla temporal para la seña: el asistente dice el monto y el plazo, y que una persona del equipo le pasa los datos para pagarla. Se reemplaza al sumar `generar_pago_seña`.
 
 ### 6.5 Recepción de mensajes
@@ -921,7 +924,7 @@ Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100) en `tests
 {
   nombre: 'salud_deriva',
   mensajes: ['estoy embarazada, puedo hacerme lifting?'],
-  espera: { herramientas: ['derivar_a_persona'] },
+  espera: { verifica: (resultado) => verifyHandoff(resultado, 'sensitive_topic') },
 },
 ```
 
@@ -1059,6 +1062,8 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 24 | Guardar la respuesta antes de enviarla y reintentar solo el envío | Volver a correr el agente en cada reintento | Las herramientas cambian datos: un segundo intento contestaría distinto (por ejemplo, "no tenés turnos" después de cancelar). Además no se paga dos veces al modelo |
 | 25 | Ofrecer una persona ante un servicio fuera del catálogo o un dato no cargado | Derivar de entrada | Derivar pausa el asistente; una pregunta suelta no justifica dejar de atender a la clienta |
 | 26 | Las herramientas de turnos reciben el id del horario | Servicio, profesional e inicio por separado | El modelo copia un id que el código valida; no puede armar una combinación que no se ofreció |
+| 27 | Derivar va en la respuesta del modelo (campo `derivar`) | Una herramienta `derivar_a_persona` | El modelo llamaba a la herramienta sin decidirlo, y cada llamada suelta pausaba la conversación 12 horas. En la respuesta, la promesa y la acción salen juntas |
+| 28 | Ids distintos para reservar y para reprogramar | Un solo id de horario para los dos | La intención queda en lo que tocó la clienta: el modelo no puede reservar un turno nuevo cuando ella pidió mover el que tenía |
 
 ---
 
