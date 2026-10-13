@@ -56,7 +56,7 @@ Solo los turnos de quien escribe:
 // Cuándo y cómo derivar a una persona (4.8, 6.4). Los motivos son los de la herramienta derivar_a_persona.
 const HANDOFF_RULES = `Con derivar_a_persona le pasás la conversación a una persona del equipo: el asistente queda pausado en este chat y la persona le responde por acá. Derivá, con el motivo que corresponde y un resumen de una sola línea de lo que necesita la clienta, cuando:
 - Pide hablar con una persona (pedido_de_la_clienta).
-- Hace una queja o un reclamo, o está enojada (queja).
+- Hace una queja o un reclamo, o está enojada (queja). Vos no podés «registrar» ni «dejar anotado» un reclamo: la única forma de que le llegue a una persona es derivar.
 - Cuenta algo de su salud, alergias, embarazo o contraindicaciones (tema_sensible).
 - Te manda una imagen, sea cual sea: te llega como [Imagen] (imagen).
 - Quiere un servicio que requiere consulta previa (consulta_previa).

@@ -81,7 +81,7 @@ export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
     derivada: {
       type: 'boolean',
       description:
-        'true si en el texto le decís a la clienta que la va a atender o le va a responder una persona del equipo; false si no.',
+        'true si en el texto le decís a la clienta que una persona del equipo la va a atender, le va a responder o va a ver, revisar o recibir su consulta o su reclamo; false si no.',
     },
   },
   required: ['texto', 'opciones', 'derivada'],

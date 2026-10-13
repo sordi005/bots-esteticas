@@ -110,9 +110,10 @@ describe('runAgent: una respuesta directa', () => {
     const properties = (requests[0]?.responseSchema as { properties: Record<string, { type: string; description: string }> })
       .properties;
     expect(properties.derivada?.type).toBe('boolean');
-    expect(properties.derivada?.description).toBe(
-      'true si en el texto le decís a la clienta que la va a atender o le va a responder una persona del equipo; false si no.',
-    );
+    // Cubre también «una persona va a revisar tu reclamo»: con esa frase el modelo esquivaba derivar.
+    expect(properties.derivada?.description).toMatch(/^true si .*una persona del equipo.*atender/);
+    expect(properties.derivada?.description).toMatch(/revisar o recibir su consulta o su reclamo/);
+    expect(properties.derivada?.description).toMatch(/false si no\.$/);
   });
 
   it('el esquema de la respuesta final no trae restricciones que los proveedores rechazan', async () => {
