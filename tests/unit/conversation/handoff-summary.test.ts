@@ -3,7 +3,6 @@ import {
   HANDOFF_SUMMARY_MAX_LENGTH,
   SENSITIVE_TOPIC_SUMMARY,
   buildHandoffSummary,
-  isFillerSummary,
 } from '../../../src/modules/conversation/handoff.js';
 
 describe('buildHandoffSummary: el resumen que ve la dueña (4.8)', () => {
@@ -45,30 +44,5 @@ describe('buildHandoffSummary: el resumen que ve la dueña (4.8)', () => {
     const exact = 'b'.repeat(HANDOFF_SUMMARY_MAX_LENGTH);
 
     expect(buildHandoffSummary('complaint', exact)).toBe(exact);
-  });
-});
-
-describe('isFillerSummary: resúmenes de relleno que no derivan (4.8)', () => {
-  // Salieron de las evaluaciones: el modelo emitía la derivación sin haberla decidido.
-  it.each([
-    ['la palabra placeholder', 'placeholder'],
-    ['una letra', 'x'],
-    ['una palabra suelta', 'Ignorar'],
-    ['dos palabras', 'Reclamo atención'],
-    ['relleno de más de tres palabras', 'placeholder del resumen acá'],
-    ['texto de prueba', 'esto es una prueba'],
-    ['lorem ipsum', 'Lorem ipsum dolor sit'],
-    ['solo signos y espacios', '  ...  ---  '],
-  ])('%s es relleno', (_case, summary) => {
-    expect(isFillerSummary(summary)).toBe(true);
-  });
-
-  it.each([
-    'Reclamo por mala atención en su última visita',
-    'Quiere hablar con una persona',
-    'Pide cancelar fuera de plazo el turno del mar 13/10 17:00',
-    'Consulta por masajes, que no están en el catálogo',
-  ])('«%s» es un resumen real', (summary) => {
-    expect(isFillerSummary(summary)).toBe(false);
   });
 });

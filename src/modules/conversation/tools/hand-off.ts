@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { handOff, HANDOFF_SUMMARY_MAX_LENGTH, isFillerSummary, type HandoffReason } from '../handoff.js';
+import { handOff, HANDOFF_SUMMARY_MAX_LENGTH, type HandoffReason } from '../handoff.js';
+import { isFillerSummary } from '../handoff-reasons.js';
 import type { AgentTool } from './tool.js';
 
 /** Los motivos que ve el modelo (en español) y el motivo que guarda la base (en inglés), sección 4.8. */

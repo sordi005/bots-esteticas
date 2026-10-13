@@ -26,28 +26,6 @@ export const HANDOFF_PAUSE_MS = 12 * 60 * 60 * 1_000;
 
 /** [S] El resumen es de una línea, hasta 200 caracteres (4.8). */
 export const HANDOFF_SUMMARY_MAX_LENGTH = 200;
-/** [S] Un resumen real tiene por lo menos 3 palabras (4.8). */
-export const HANDOFF_SUMMARY_MIN_WORDS = 3;
-
-/** Palabras que delatan un resumen de relleno. */
-const FILLER_WORDS = new Set(['placeholder', 'lorem', 'ipsum', 'prueba', 'test', 'ignorar']);
-
-/**
- * ¿El resumen es relleno? Las evaluaciones mostraron al modelo emitiendo la derivación sin haberla
- * decidido, justo cuando tenía que contestar con opciones: con resúmenes como «placeholder», «x» o
- * «Ignorar». Una derivación pausa al asistente, así que eso no deriva: la herramienta lo rechaza y el
- * modelo, con el error, contesta lo que correspondía.
- */
-export function isFillerSummary(summary: string): boolean {
-  const words = summary
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((word) => word !== '');
-  return words.length < HANDOFF_SUMMARY_MIN_WORDS || words.some((word) => FILLER_WORDS.has(word));
-}
-
 /** Lo único que se guarda de una derivación por un tema de salud (4.8, regla 9). */
 export const SENSITIVE_TOPIC_SUMMARY = 'Tema sensible: ver la conversación';
 
