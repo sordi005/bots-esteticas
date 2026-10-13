@@ -125,7 +125,9 @@ describe('agentTools: las herramientas que usa el agente', () => {
     expect(tool.description).toMatch(/resumen real/i);
     expect(tool.description).toMatch(/nunca la llames para probar, por las dudas ni con un resumen de relleno/i);
     expect(tool.description).toMatch(/deja al asistente callado en este chat/i);
-    expect(agentSchemaOf('derivar_a_persona').properties.resumen?.description).toMatch(/8 a 200 caracteres/);
+    expect(agentSchemaOf('derivar_a_persona').properties.resumen?.description).toMatch(
+      /por lo menos 3 palabras y hasta 200 caracteres/,
+    );
   });
 
   it('ninguna pide el negocio, la clienta ni la conversación como parámetro (regla 2)', () => {

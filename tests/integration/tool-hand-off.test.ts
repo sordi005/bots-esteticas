@@ -128,8 +128,9 @@ describe('derivar_a_persona', () => {
   it.each([
     ['una palabra suelta', 'Ignorar'],
     ['un par de letras', 'ok'],
-    ['relleno con espacios que no cuentan', '   prueba   '],
-  ])('un resumen de menos de 8 caracteres (%s) es un error para el modelo y no deriva nada', async (_case, resumen) => {
+    ['la palabra placeholder', 'placeholder'],
+    ['relleno de más de tres palabras', 'placeholder del resumen acá'],
+  ])('un resumen de relleno (%s) es un error para el modelo y no deriva nada', async (_case, resumen) => {
     const f = await setup();
 
     const result = await derive(f, { motivo: 'queja', resumen });
@@ -143,13 +144,22 @@ describe('derivar_a_persona', () => {
     expect(conversation).toMatchObject({ assistantStatus: 'active', pausedUntil: null });
   });
 
-  it('un resumen de 8 caracteres (sin contar los espacios de los costados) alcanza', async () => {
+  it('un resumen real de tres palabras alcanza (sin los espacios de los costados)', async () => {
     const f = await setup();
 
-    const result = await derive(f, { motivo: 'queja', resumen: '  Reclamo.  ' });
+    const result = await derive(f, { motivo: 'queja', resumen: '  Reclamo por atención.  ' });
 
     expect(result.isError).toBeFalsy();
-    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ summary: 'Reclamo.' })]);
+    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ summary: 'Reclamo por atención.' })]);
+  });
+
+  it('con tema_sensible no se exige el resumen: el código lo reemplaza igual (regla 9)', async () => {
+    const f = await setup();
+
+    const result = await derive(f, { motivo: 'tema_sensible', resumen: 'consulta sensible' });
+
+    expect(result.isError).toBeFalsy();
+    expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: 'sensitive_topic' })]);
   });
 
   it('si el modelo deriva dos veces en la misma vuelta, queda una sola derivación y la misma respuesta', async () => {
