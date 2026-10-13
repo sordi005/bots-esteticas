@@ -70,6 +70,7 @@ describe('findCustomerAppointment: un turno de esta clienta', () => {
       status: 'PENDING_DEPOSIT',
       start: at('2026-10-05', '09:00'),
       durationMinutes: 60,
+      bufferMinutes: 10,
       serviceId: f.semi,
       serviceName: 'Esmaltado semipermanente',
       professionalId: f.mica,

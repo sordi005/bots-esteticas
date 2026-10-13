@@ -16,6 +16,7 @@ import {
 } from './appointment-state-machine.js';
 import {
   loadAvailabilityContext,
+  loadRescheduleContext,
   overlaps,
   type AvailabilityContext,
 } from './availability-context.js';
@@ -356,26 +357,17 @@ export async function rescheduleAppointment(
   if (!current) return { ok: false, reason: 'not_found' };
   if (!canReschedule(current.status, actor)) return { ok: false, reason: 'not_reschedulable' };
 
-  const context = await loadAvailabilityContext(db, {
+  // La duración y el margen son los del momento de reservar, no los actuales del servicio.
+  const context = await loadRescheduleContext(db, {
     tenantId,
-    serviceId: current.serviceId,
-    professionalIds: [current.professionalId],
+    appointment: current,
     window: { start: newStart, end: new Date(newStart.getTime() + MINUTE_MS) },
     now,
-    excludeAppointmentId: appointmentId,
   });
   const professional = context?.query.professionals.find((p) => p.id === current.professionalId);
   if (!context || !professional) return { ok: false, reason: 'slot_unavailable' };
 
-  // La duración y el margen son los del momento de reservar, no los actuales del servicio.
-  const snapshot: AvailabilityContext = {
-    ...context,
-    query: {
-      ...context.query,
-      service: { durationMinutes: current.durationMinutes, bufferMinutes: current.bufferMinutes },
-    },
-  };
-  const slot = checkSlot(snapshot, { ...professional, durationOverrideMinutes: null }, newStart);
+  const slot = checkSlot(context, professional, newStart);
   if (slot !== 'ok') return { ok: false, reason: slot };
 
   const newRange = occupiedRange(newStart, current.durationMinutes, current.bufferMinutes);

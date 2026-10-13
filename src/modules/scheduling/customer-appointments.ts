@@ -22,6 +22,8 @@ export interface CustomerAppointment {
   /** Inicio del turno que ve la clienta (el margen posterior no cuenta). */
   start: Date;
   durationMinutes: number;
+  /** El margen posterior guardado al reservar: reprogramar usa el mismo, no el actual del servicio. */
+  bufferMinutes: number;
   serviceId: string;
   serviceName: string;
   professionalId: string;
@@ -46,6 +48,7 @@ async function selectCustomerAppointments(
       status: appointments.status,
       timeRange: appointments.timeRange,
       durationMinutes: appointments.durationMinutes,
+      bufferMinutes: appointments.bufferMinutes,
       serviceId: appointments.serviceId,
       serviceName: services.name,
       professionalId: appointments.professionalId,
@@ -78,6 +81,7 @@ async function selectCustomerAppointments(
     status: row.status,
     start: row.timeRange.start,
     durationMinutes: row.durationMinutes,
+    bufferMinutes: row.bufferMinutes,
     serviceId: row.serviceId,
     serviceName: row.serviceName,
     professionalId: row.professionalId,
