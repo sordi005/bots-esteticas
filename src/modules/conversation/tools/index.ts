@@ -2,7 +2,6 @@ import { businessInfoTool } from './business-info.js';
 import { cancelAppointmentTool } from './cancel-appointment.js';
 import { checkAvailabilityTool } from './check-availability.js';
 import { createBookingTool } from './create-booking.js';
-import { handOffTool } from './hand-off.js';
 import { listAppointmentsTool } from './list-appointments.js';
 import { rescheduleAppointmentTool } from './reschedule-appointment.js';
 import { searchServicesTool } from './search-services.js';
@@ -24,7 +23,8 @@ export const consultationTools: AgentTool<unknown>[] = [
 
 /**
  * Todas las herramientas del agente: las de consulta más las que cambian cosas (H8): reservar,
- * listar, reprogramar y cancelar turnos, y derivar a una persona. El orden es el de la tabla de 6.4.
+ * listar, reprogramar y cancelar turnos. El orden es el de la tabla de 6.4. Derivar a una persona no es
+ * una herramienta: es el campo `derivar` de la respuesta del modelo (decisión 27).
  */
 export const agentTools: AgentTool<unknown>[] = [
   ...consultationTools,
@@ -32,5 +32,4 @@ export const agentTools: AgentTool<unknown>[] = [
   listAppointmentsTool,
   rescheduleAppointmentTool,
   cancelAppointmentTool,
-  handOffTool,
 ];

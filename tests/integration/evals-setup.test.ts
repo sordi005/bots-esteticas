@@ -8,7 +8,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { evalCases } from '../evals/cases.js';
 import type { EvalCase, EvalResult } from '../evals/evaluate.js';
 import { EvalPreparationError, runEvalCase } from '../evals/run-case.js';
-import { callTools, finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
+import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
 
@@ -419,8 +419,7 @@ describe('el estado que queda en la base', () => {
 
   it('una derivación figura con su motivo y su resumen, y la conversación pausada', async () => {
     const { result } = run(caseWith({ mensajes: ['quiero hablar con una persona'] }), [
-      callTools([{ name: 'derivar_a_persona', input: { motivo: 'pedido_de_la_clienta', resumen: 'Quiere hablar con una persona' } }]),
-      finalAnswer('Una persona te responde'),
+      handoffAnswer('Una persona te responde', { motivo: 'pedido_de_la_clienta', resumen: 'Quiere hablar con una persona' }),
     ]);
     const evaluated: EvalResult = await result;
 
@@ -430,8 +429,7 @@ describe('el estado que queda en la base', () => {
 
   it('un tema sensible guarda el resumen fijo y no lo que escribió el modelo', async () => {
     const { result } = run(caseWith({ mensajes: ['estoy embarazada, puedo hacerme el lifting?'] }), [
-      callTools([{ name: 'derivar_a_persona', input: { motivo: 'tema_sensible', resumen: 'Embarazada' } }]),
-      finalAnswer('Eso lo ve una persona'),
+      handoffAnswer('Eso lo ve una persona', { motivo: 'tema_sensible', resumen: 'Embarazada' }),
     ]);
     const evaluated = await result;
 

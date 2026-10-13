@@ -13,7 +13,7 @@ export interface ToolContext {
   db: NodePgDatabase;
   tenantId: string;
   customerId: string;
-  /** La conversación de esta vuelta: también del servidor (la usa `derivar_a_persona`). */
+  /** La conversación de esta vuelta: también del servidor (la usan las herramientas que derivan por la política). */
   conversationId: string;
   /** La hora actual, inyectada (regla 5). */
   now: Date;
@@ -55,12 +55,6 @@ export interface ToolResult {
   options: OfferableOption[];
   /** El modelo pidió algo inválido (no encontrado, fuera de rango…): que lo corrija o lo explique. */
   isError?: boolean;
-  /**
-   * La herramienta derivó la conversación a una persona en esta llamada (también si ya había una
-   * derivación abierta). Lo lee el ciclo del agente para verificar que la respuesta no le prometa
-   * a la clienta una persona que nadie avisó (6.4). Lo escribe el código, nunca el modelo.
-   */
-  handedOff?: boolean;
 }
 
 export interface AgentTool<Input> {

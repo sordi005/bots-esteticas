@@ -842,7 +842,6 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
 });
 
 describe('createAgentResponder: turnos con las herramientas reales (H8)', () => {
-  const handoffsOf = (f: Fixture) => db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId));
   const statusOf = async (appointmentId: string) =>
     single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
 
@@ -914,33 +913,6 @@ describe('createAgentResponder: turnos con las herramientas reales (H8)', () => 
     expect(second.requests[0]?.turnContext).toContain(`Confirmó que quiere cancelar el turno del miércoles 7/10 10:00`);
     expect(second.requests[0]?.turnContext).toContain(`turno_id=${turnoId}`);
     expect(await statusOf(booked.appointmentId)).toBe('CANCELLED_BY_CUSTOMER');
-  });
-
-  it('cancelar fuera de plazo y derivar en la misma vuelta deja una sola derivación y el turno intacto', async () => {
-    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
-    const booked = await bookAppointment(db, {
-      tenantId: f.tenantId,
-      customerId: f.customerId,
-      serviceId: f.semi,
-      professionalId: f.mica,
-      start: at('2026-10-06', '09:00'),
-      actor: 'assistant',
-      now: NOW,
-    });
-    if (!booked.ok) throw new Error(booked.reason);
-
-    // Lunes 5/10 a las 10:00 y el turno es el martes a las 9:00: faltan 23 horas.
-    const { result } = reply(f, await pendingTexts(f, 'cancelame el turno de mañana'), [
-      callTools([
-        { name: 'cancelar_turno', input: { turno_id: booked.appointmentId, confirmada: true } },
-        { name: 'derivar_a_persona', input: { motivo: 'excepcion', resumen: 'Quiere cancelar fuera de plazo' } },
-      ]),
-      finalAnswer('Como faltan menos de 24 horas, lo ve una persona del equipo.'),
-    ]);
-    await result;
-
-    expect(await statusOf(booked.appointmentId)).toBe('CONFIRMED');
-    expect(await handoffsOf(f)).toHaveLength(1);
   });
 });
 

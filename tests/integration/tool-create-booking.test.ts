@@ -413,7 +413,8 @@ describe('crear_reserva: rechazos traducidos para el modelo', () => {
     const result = await book(f, { horario_id: slot(f, at('2026-10-06', '11:00'), f.laser, f.sofi), nombre: 'Caro Pérez' });
 
     expect(result.content).toMatchObject({ reservado: false, motivo: 'servicio_no_reservable' });
-    expect(JSON.stringify(result.content)).toMatch(/derivar_a_persona.*consulta_previa/);
+    expect(JSON.stringify(result.content)).toMatch(/consulta_previa en el campo «derivar»/);
+    expect(JSON.stringify(result.content)).not.toContain('derivar_a_persona');
     expect(await appointmentsOf(f)).toEqual([]);
   });
 

@@ -58,14 +58,13 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
 });
 
 describe('agentTools: las herramientas que usa el agente', () => {
-  it('son las de consulta, las de turnos (H8) y derivar_a_persona, con los nombres de la especificación (6.4)', () => {
+  it('son las de consulta y las de turnos (H8), con los nombres de la especificación (6.4): derivar no es una herramienta', () => {
     expect(agentTools.map((tool) => tool.name)).toEqual([
       ...consultationTools.map((tool) => tool.name),
       'crear_reserva',
       'listar_turnos_de_la_clienta',
       'reprogramar_turno',
       'cancelar_turno',
-      'derivar_a_persona',
     ]);
   });
 
@@ -96,38 +95,11 @@ describe('agentTools: las herramientas que usa el agente', () => {
     expect(agentSchemaOf('reprogramar_turno').required).toEqual(['turno_id', 'horario_id']);
   });
 
-  it('derivar_a_persona pide un motivo de una lista cerrada y un resumen, y nada más', () => {
-    const tool = agentTools.find((candidate) => candidate.name === 'derivar_a_persona');
-    if (!tool) throw new Error('No está derivar_a_persona');
-    const schema = z.toJSONSchema(tool.input, { io: 'input' }) as unknown as ObjectSchema & {
-      properties: Record<string, { enum?: string[] }>;
-    };
-
-    expect(Object.keys(schema.properties)).toEqual(['motivo', 'resumen']);
-    expect(schema.required).toEqual(['motivo', 'resumen']);
-    expect(schema.properties.motivo?.enum).toEqual([
-      'pedido_de_la_clienta',
-      'queja',
-      'tema_sensible',
-      'imagen',
-      'consulta_previa',
-      'fuera_de_catalogo',
-      'excepcion',
-      'no_entiende',
-    ]);
-  });
-
-  it('derivar_a_persona avisa que pausa al asistente y que no se llama para probar, por las dudas ni con relleno', () => {
-    const tool = agentTools.find((candidate) => candidate.name === 'derivar_a_persona');
-    if (!tool) throw new Error('No está derivar_a_persona');
-
-    expect(tool.description).toMatch(/solo cuando una de las reglas de derivación lo pide/i);
-    expect(tool.description).toMatch(/resumen real/i);
-    expect(tool.description).toMatch(/nunca la llames para probar, por las dudas ni con un resumen de relleno/i);
-    expect(tool.description).toMatch(/deja al asistente callado en este chat/i);
-    expect(agentSchemaOf('derivar_a_persona').properties.resumen?.description).toMatch(
-      /por lo menos 3 palabras y hasta 200 caracteres/,
-    );
+  it('ninguna herramienta nombra a derivar_a_persona: derivar va en el campo «derivar» de la respuesta (decisión 27)', () => {
+    for (const tool of agentTools) {
+      const text = `${tool.description} ${JSON.stringify(z.toJSONSchema(tool.input, { io: 'input' }))}`;
+      expect(text, tool.name).not.toContain('derivar_a_persona');
+    }
   });
 
   it('ninguna pide el negocio, la clienta ni la conversación como parámetro (regla 2)', () => {

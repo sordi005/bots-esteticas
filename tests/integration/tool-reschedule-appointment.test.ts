@@ -244,7 +244,6 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
     const result = await reschedule(f, { turno_id: id, horario_id: slotId(f, WEDNESDAY_10) }, at('2026-10-05', '11:00'), []);
 
     expect(result.content).toMatchObject({ reprogramado: false, derivada: true });
-    expect(result.handedOff).toBe(true);
     expect(await handoffsOf(f)).toHaveLength(1);
   });
 
@@ -336,8 +335,7 @@ describe('reprogramar_turno: si no corresponde, no toca el turno y deriva sola (
 
     expect(first.content).toMatchObject({ reprogramado: true });
     expect(second.content).toMatchObject({ reprogramado: true });
-    expect([first.handedOff, second.handedOff]).toEqual([undefined, undefined]);
-    expect(third.handedOff).toBe(true);
+    expect([first.content.derivada, second.content.derivada]).toEqual([undefined, undefined]);
     expect(third.content).toMatchObject({ derivada: true, motivo: 'ya usaste las 2 reprogramaciones que conservan la seña' });
   });
 
@@ -402,7 +400,8 @@ describe('reprogramar_turno: solo el mismo servicio con la misma profesional', (
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'otro_servicio_o_profesional' });
     expect(JSON.stringify(result.content)).toContain(`servicio_id=${f.semi}`);
     expect(JSON.stringify(result.content)).toContain(`profesional_id=${f.mica}`);
-    expect(JSON.stringify(result.content)).toMatch(/derivar_a_persona/);
+    expect(JSON.stringify(result.content)).toMatch(/excepcion en el campo «derivar»/);
+    expect(JSON.stringify(result.content)).not.toContain('derivar_a_persona');
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
     expect(await handoffsOf(f)).toEqual([]);
   });

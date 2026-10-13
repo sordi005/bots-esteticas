@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
 import { buildSystemPrompt, type PromptTenant } from '../../../../src/modules/conversation/agent/system-prompt.js';
+import { MODEL_HANDOFF_REASON_NAMES } from '../../../../src/modules/conversation/handoff-reasons.js';
 import { agentTools } from '../../../../src/modules/conversation/tools/index.js';
 
 const example: PromptTenant = { name: 'Estética Ejemplo', assistantName: 'Luna', emojiUsage: 'low', usesVoseo: true };
@@ -91,15 +91,9 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(prompt).toMatch(/## Derivar a una persona/);
   });
 
-  it('nombra todos los motivos de la herramienta, con los mismos nombres que ve el modelo', () => {
-    const tool = agentTools.find((candidate) => candidate.name === 'derivar_a_persona');
-    if (!tool) throw new Error('No está derivar_a_persona');
-    const motivos = (z.toJSONSchema(tool.input, { io: 'input' }) as unknown as {
-      properties: { motivo: { enum: string[] } };
-    }).properties.motivo.enum;
-
-    expect(motivos).toHaveLength(8);
-    for (const motivo of motivos) expect(prompt, motivo).toContain(motivo);
+  it('nombra los ocho motivos del campo «derivar», con los mismos nombres que ve el modelo', () => {
+    expect(MODEL_HANDOFF_REASON_NAMES).toHaveLength(8);
+    for (const motivo of MODEL_HANDOFF_REASON_NAMES) expect(prompt, motivo).toContain(motivo);
   });
 
   it('pide derivar cuando la clienta pide una persona, se queja, manda una imagen, quiere un servicio con consulta previa o pide una excepción', () => {
@@ -124,8 +118,9 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(prompt).toMatch(/solo si (ella )?acepta o insiste/i);
   });
 
-  it('después de derivar usa el texto de cuándo que devuelve la herramienta y no promete nada más', () => {
-    expect(prompt).toMatch(/«cuando»/);
+  it('al derivar usa el texto de cuándo del contexto de la vuelta, tal cual, y no promete nada más', () => {
+    expect(prompt).toMatch(/texto de cuándo que está en el contexto de la vuelta/);
+    expect(prompt).toMatch(/«te va a responder por acá » y ese texto, tal cual/);
     expect(prompt).toMatch(/no le prometas nada más/i);
     expect(prompt).toMatch(/«opciones» va vacía/);
   });
@@ -144,31 +139,47 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(image).toMatch(/derivá con el motivo imagen/);
   });
 
-  it('nunca dice que derivó, pasó la consulta o que alguien la va a contactar sin haber llamado a derivar_a_persona', () => {
+  it('derivar y decírselo a la clienta van juntos: si el texto promete una persona, completa «derivar» en la misma respuesta', () => {
     // Lo encontró una evaluación: ante una queja contestó «Ya le paso tu reclamo a una persona» sin derivar.
-    const rule = /Nunca digas que le pasaste la consulta[^\n]*/.exec(prompt)?.[0] ?? '';
+    const rule = /Derivar y decírselo a la clienta van juntos[^\n]*/.exec(prompt)?.[0] ?? '';
 
-    expect(rule).toMatch(/que la derivaste o que alguien del equipo la va a contactar/);
-    expect(rule).toMatch(/si no llamaste a derivar_a_persona en esta misma respuesta/);
-    expect(rule).toMatch(/derivada=true/);
-    expect(rule).toMatch(/Si corresponde derivar, llamala\./);
+    expect(rule).toMatch(/Si tu texto dice que le pasás la consulta o el reclamo a una persona/);
+    expect(rule).toMatch(/que la derivaste/);
+    expect(rule).toMatch(/que alguien del equipo la va a atender, contactar, ver o revisar/);
+    expect(rule).toMatch(/completá «derivar» en esta misma respuesta/);
+    expect(rule).toMatch(/Vos no podés «registrar» ni «dejar anotado» nada/);
   });
 
-  it('llama a derivar_a_persona solo si una regla lo pide y con un resumen real; nunca para probar, por las dudas ni con relleno', () => {
+  it('completa «derivar» solo si una regla lo pide y con un resumen real; nunca para probar, por las dudas ni con relleno', () => {
     // Lo encontró una evaluación: derivaciones con resumen «placeholder» e «Ignorar» que pausaban el chat.
-    const rule = /Llamá a derivar_a_persona solo cuando[^\n]*/.exec(prompt)?.[0] ?? '';
+    const rule = /Completá «derivar» solo cuando[^\n]*/.exec(prompt)?.[0] ?? '';
 
     expect(rule).toMatch(/solo cuando una de estas reglas lo pide/);
     expect(rule).toMatch(/con un resumen real de lo que necesita la clienta/);
-    expect(rule).toMatch(/Nunca la llames para probar, por las dudas, ni con un resumen de relleno/);
+    expect(rule).toMatch(/Nunca para probar, por las dudas, ni con un resumen de relleno/);
     expect(rule).toMatch(/deja al asistente callado en este chat/);
+    expect(rule).toMatch(/Si no corresponde derivar, «derivar» va null/);
   });
 
-  it('las dos reglas están en la parte de cómo derivar, después de la lista de cuándo', () => {
+  it('si cancelar_turno o reprogramar_turno ya derivaron (derivada=true en su resultado), «derivar» va null', () => {
+    expect(prompt).toMatch(/Si cancelar_turno o reprogramar_turno ya derivaron[^\n]*«derivar» va null/);
+  });
+
+  it('ofrecerle una persona sin que acepte no es derivar: «derivar» va null', () => {
+    expect(prompt).toMatch(/Ofrecerle que la ayude una persona[^.]*no es derivar[^.]*«derivar» va null/);
+  });
+
+  it('las reglas están en la parte de cómo derivar, después de la lista de cuándo', () => {
     const how = prompt.slice(prompt.indexOf('Cómo derivar:'), prompt.indexOf('## Reservar, cancelar y reprogramar turnos'));
 
-    expect(how).toContain('Nunca digas que le pasaste la consulta');
-    expect(how).toContain('Llamá a derivar_a_persona solo cuando');
+    expect(how).toContain('Derivar y decírselo a la clienta van juntos');
+    expect(how).toContain('Completá «derivar» solo cuando');
+  });
+
+  it('no queda ninguna mención a la herramienta derivar_a_persona ni al booleano derivada como campo de la respuesta', () => {
+    expect(prompt).not.toContain('derivar_a_persona');
+    expect(prompt).not.toMatch(/«derivada»/);
+    expect(prompt).not.toMatch(/derivada=false/);
   });
 
   it('sigue siendo idéntico entre llamadas del mismo negocio, para la caché del proveedor', () => {
@@ -272,7 +283,7 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(booking).toMatch(/política con amabilidad/);
     expect(booking).toMatch(/cuándo le responde una persona/);
     expect(booking).toMatch(/no discutas ni prometas excepciones/i);
-    expect(booking).toMatch(/no llames a derivar_a_persona de nuevo/i);
+    expect(booking).toMatch(/«derivar» va null[^.]*ya derivó/i);
   });
 
   it('solo ve y cambia los turnos de la clienta que escribe', () => {
@@ -294,37 +305,37 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
   });
 });
 
-describe('buildSystemPrompt: el campo "derivada" de la respuesta (6.4)', () => {
+describe('buildSystemPrompt: el campo «derivar» de la respuesta (6.4, decisión 27)', () => {
   const prompt = buildSystemPrompt(example);
   const answer = prompt.slice(prompt.indexOf('## Tu respuesta'));
 
-  it('nombra los tres campos de la respuesta: texto, opciones y derivada', () => {
+  it('nombra los tres campos de la respuesta: texto, opciones y derivar', () => {
     const format = /Siempre contestás con el formato pedido[^\n]*/.exec(answer)?.[0] ?? '';
 
     expect(format).toContain('«texto»');
     expect(format).toContain('«opciones»');
-    expect(format).toContain('«derivada»');
+    expect(format).toContain('«derivar»');
   });
 
-  it('derivada es true solo si el texto promete que la atiende una persona, y entonces tiene que haber derivado', () => {
-    const rule = /«derivada» es true[^\n]*/.exec(answer)?.[0] ?? '';
+  it('«derivar» es null si no derivás, y el motivo y el resumen si derivás', () => {
+    const rule = /«derivar» es null[^\n]*/.exec(answer)?.[0] ?? '';
 
-    expect(rule).toMatch(/solo si tu texto le dice a la clienta que una persona del equipo la va a atender o le va a responder/);
-    expect(rule).toMatch(/en cualquier otro caso, false/);
-    expect(rule).toMatch(/Si ponés true, tenés que haber derivado en esta respuesta/);
+    expect(rule).toMatch(/«derivar» es null si no derivás/);
+    expect(rule).toMatch(/el «motivo» y el «resumen»/);
+    expect(rule).toMatch(/si tu texto le dice a la clienta que una persona del equipo la va a atender/);
   });
 
-  it('ofrecerle que la ayude una persona no es prometerlo: ahí derivada es false', () => {
-    expect(answer).toMatch(/Ofrecerle que la ayude una persona[^.]*no es prometerlo[^.]*«derivada» es false/);
+  it('ofrecerle que la ayude una persona no es prometerlo: ahí «derivar» es null', () => {
+    expect(answer).toMatch(/Ofrecerle que la ayude una persona[^.]*no es derivar[^.]*«derivar» es null/);
   });
 
-  it('la revisión final es coherente con el campo: si el texto promete una persona, derivada true y derivó; si no corresponde, se saca la promesa', () => {
+  it('la revisión final es coherente con el campo: si el texto promete una persona, «derivar» está completo; si no corresponde, se saca la promesa', () => {
     const review = answer.slice(answer.indexOf('Antes de contestar'));
 
     expect(review).toMatch(/una persona del equipo la va a atender o contactar/);
-    expect(review).toMatch(/«derivada» tiene que ser true/);
-    expect(review).toMatch(/llamar a derivar_a_persona|llamado a derivar_a_persona/);
-    expect(review).toMatch(/sacá esa promesa del texto y poné «derivada» en false/);
+    expect(review).toMatch(/«derivar» tiene que estar completo/);
+    expect(review).toMatch(/cancelar_turno o reprogramar_turno ya derivaron/);
+    expect(review).toMatch(/sacá esa promesa del texto y dejá «derivar» en null/);
     // Lo otro que revisa sigue ahí.
     expect(review).toMatch(/reservado, cancelado o reprogramado/);
   });

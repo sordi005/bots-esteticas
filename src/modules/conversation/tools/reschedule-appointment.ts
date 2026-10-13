@@ -138,7 +138,7 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
         'Solo se reprograma al mismo servicio con la misma profesional. Consultá la disponibilidad con ' +
           `servicio_id=${appointment.serviceId} y profesional_id=${appointment.professionalId} (los del turno) y ` +
           'ofrecé esos horarios. Si la clienta quiere cambiar de profesional o de servicio, ofrecele que lo vea una ' +
-          'persona del equipo y derivá con derivar_a_persona (motivo excepcion) si acepta.',
+          'persona del equipo y, si acepta, derivá con el motivo excepcion en el campo «derivar» de tu respuesta.',
       );
     }
 

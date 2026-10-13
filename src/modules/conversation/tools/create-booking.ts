@@ -68,7 +68,7 @@ function describeRefusal(reason: BookingRefusal): ToolResult {
       return refusal(
         'servicio_no_reservable',
         'Este servicio no se reserva por este medio (requiere consulta previa o no se ofrece). No reservaste ' +
-          'nada: ofrecele que lo vea una persona y derivá con derivar_a_persona (motivo consulta_previa).',
+          'nada: ofrecele que lo vea una persona y, si acepta, derivá con el motivo consulta_previa en el campo «derivar» de tu respuesta.',
         false,
       );
     case 'professional_unavailable':
