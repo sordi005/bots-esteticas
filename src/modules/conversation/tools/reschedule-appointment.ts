@@ -20,7 +20,7 @@ const input = z.object({
   horario_id: z
     .string()
     .describe(
-      'Id del horario nuevo, TAL CUAL lo devolvió consultar_disponibilidad con turno_id (opcionId, empieza con ' +
+      'Id del horario nuevo, TAL CUAL lo devolvió consultar_horarios_para_reprogramar (opcionId, empieza con ' +
         '"reprogramar:") o lo indica el contexto (horario_id=…). Ya lleva el turno que se mueve. Nunca lo armes ni lo cambies.',
     ),
 });
@@ -42,7 +42,7 @@ function slotRefusal(reason: 'slot_taken' | 'slot_unavailable'): ToolResult {
         motivo: 'horario_ocupado',
         mensaje:
           'Ese horario se acaba de ocupar. El turno sigue donde estaba. Avisale a la clienta, volvé a consultar ' +
-          'la disponibilidad con consultar_disponibilidad y ofrecele otros horarios.',
+          'los horarios con consultar_horarios_para_reprogramar y ofrecele otros.',
       },
       options: [],
     };
@@ -50,7 +50,7 @@ function slotRefusal(reason: 'slot_taken' | 'slot_unavailable'): ToolResult {
   return failure(
     'horario_no_valido',
     'Ese no es un horario válido (fuera del horario de atención, de la grilla o sin la anticipación necesaria). ' +
-      'El turno sigue donde estaba. Consultá la disponibilidad y ofrecé uno de los horarios que devuelve.',
+      'El turno sigue donde estaba. Consultá los horarios con consultar_horarios_para_reprogramar y ofrecé uno de los que devuelve.',
   );
 }
 
@@ -87,8 +87,7 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
   name: 'reprogramar_turno',
   description:
     'Reprograma un turno de la clienta a otro horario del MISMO servicio con la MISMA profesional. Pasale el ' +
-    'horario_id que devolvió consultar_disponibilidad cuando la consultaste con el turno_id del turno (empieza con ' +
-    '"reprogramar:") o que indica el contexto cuando ella eligió ese horario con un botón: ya trae el turno, no hace ' +
+    'horario_id que devolvió consultar_horarios_para_reprogramar (empieza con "reprogramar:") o que indica el contexto cuando ella eligió ese horario con un botón: ya trae el turno, no hace ' +
     'falta otro dato. No sirve un horario_id de reservar (empieza con "horario:"). Solo mueve el turno a un horario ' +
     'que la clienta eligió con un botón o una lista: si todavía no lo eligió, no cambia nada y devuelve ' +
     'motivo=falta_que_elija con ese horario para que se lo ofrezcas como opción. Cuando ella lo elige ya está ' +
@@ -108,15 +107,15 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
       return failure(
         'horario_para_reservar',
         'Ese horario es para reservar un turno nuevo, no para mover uno que la clienta ya tiene: no mueve nada. ' +
-          'Para reprogramar, consultá la disponibilidad con consultar_disponibilidad pasando el turno_id del turno ' +
-          '(sin servicio_id) y usá el opcionId de los horarios que devuelve.',
+          'Para reprogramar, consultá los horarios con consultar_horarios_para_reprogramar pasando el turno_id del ' +
+          'turno y usá el opcionId de los horarios que devuelve.',
       );
     }
     if (slot?.kind !== 'reschedule') {
       return failure(
         'id_de_horario_invalido',
-        'Ese no es el id de un horario para reprogramar: usá el opcionId que devolvió consultar_disponibilidad con ' +
-          'turno_id (empieza con "reprogramar:") o el horario_id del contexto, sin cambiarlo.',
+        'Ese no es el id de un horario para reprogramar: usá el opcionId que devolvió ' +
+          'consultar_horarios_para_reprogramar (empieza con "reprogramar:") o el horario_id del contexto, sin cambiarlo.',
       );
     }
 
@@ -163,7 +162,7 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
       if (!found) {
         return failure(
           'no_encontrado',
-          'No encontré ese turno o ese horario. Consultá la disponibilidad con consultar_disponibilidad y el turno_id.',
+          'No encontré ese turno o ese horario. Consultá los horarios con consultar_horarios_para_reprogramar y el turno_id.',
         );
       }
       // Un horario que ya no está libre no se ofrece como botón: se vuelve a consultar la disponibilidad.
@@ -173,8 +172,8 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
             reprogramado: false,
             motivo: 'horario_no_disponible',
             mensaje:
-              'Ese horario ya no está libre o no es válido. No se movió nada: volvé a consultar la disponibilidad ' +
-              'con consultar_disponibilidad y turno_id, y ofrecele otros horarios.',
+              'Ese horario ya no está libre o no es válido. No se movió nada: volvé a consultar los horarios ' +
+              'con consultar_horarios_para_reprogramar y ofrecele otros.',
           },
           options: [],
         };

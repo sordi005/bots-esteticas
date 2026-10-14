@@ -52,7 +52,7 @@ export function describeChoice(choice: ResolvedChoice, timeZone: string): string
       }
       return (
         `Eligió su turno del ${turn}: ` +
-        `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá la disponibilidad con ese turno_id).${inactive}`
+        `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá los horarios con consultar_horarios_para_reprogramar y ese turno_id).${inactive}`
       );
     }
     case 'reprogramar': {
@@ -62,12 +62,12 @@ export function describeChoice(choice: ResolvedChoice, timeZone: string): string
       const inactive = choice.ocupaHorario ? '' : ` Ojo: ese turno ya no está activo (${choice.estado}).`;
       const next = choice.sigueLibre
         ? 'sigue libre. Elegirlo ya es la confirmación: llamá a reprogramar_turno con ese horario_id.'
-        : `ya no está libre: consultá de nuevo la disponibilidad con turno_id=${appointmentId} y ofrecele otros horarios.`;
+        : `ya no está libre: volvé a consultar los horarios con consultar_horarios_para_reprogramar y turno_id=${appointmentId}, y ofrecele otros.`;
       return `Eligió el horario ${choice.texto} para pasar su turno del ${choice.turnoTexto} (${choice.servicioNombre} con ${choice.profesionalNombre}), horario_id=${slotId}; ${next}${inactive}`;
     }
     case 'ver_mas_reprogramar': {
       const inactive = choice.ocupaHorario ? '' : ' Ojo: ese turno ya no está activo.';
-      return `Pidió ver otros horarios para pasar su turno del ${choice.turnoTexto}, después de ${formatLocalSlot(new Date(choice.despuesDe), timeZone)}: consultá la disponibilidad con turno_id=${choiceIds.appointment(choice.turnoId)}, despues_de=${choice.despuesDe}.${inactive}`;
+      return `Pidió ver otros horarios para pasar su turno del ${choice.turnoTexto}, después de ${formatLocalSlot(new Date(choice.despuesDe), timeZone)}: consultá los horarios con consultar_horarios_para_reprogramar, turno_id=${choiceIds.appointment(choice.turnoId)} y despues_de=${choice.despuesDe}.${inactive}`;
     }
     case 'desconocido':
       return 'Eligió una opción que ya no es válida (puede ser de una conversación vieja).';
@@ -79,7 +79,7 @@ export function buildTurnContext(input: TurnContextInput): string {
   const lines = [
     'Contexto del sistema (no lo escribió la clienta):',
     `- Fecha y hora actual: ${formatLocalDateTime(now, timeZone)} (${timeZone}).`,
-    `- Hoy, para consultar_disponibilidad: ${instantToLocal(now, timeZone).date}.`,
+    `- Hoy, para consultar horarios: ${instantToLocal(now, timeZone).date}.`,
     `- Conversación nueva: ${input.isNewConversation ? 'sí, presentate' : 'no'}.`,
     `- Nombre de la clienta: ${input.customerName ?? 'no se conoce'}.`,
     input.bookingName

@@ -123,8 +123,18 @@ describe('agentTools: las herramientas que usa el agente', () => {
     const tool = agentTools.find((candidate) => candidate.name === 'reprogramar_turno');
 
     expect(agentSchemaOf('reprogramar_turno').properties.horario_id?.description).toMatch(/"reprogramar:"/);
-    expect(tool?.description).toMatch(/turno_id del turno/);
+    expect(tool?.description).toMatch(/devolvió consultar_horarios_para_reprogramar/);
     expect(tool?.description).toMatch(/No sirve un horario_id de reservar \(empieza con "horario:"\)/);
+  });
+
+  it('reprogramar_turno y listar_turnos_de_la_clienta mandan a consultar_horarios_para_reprogramar, no a consultar_disponibilidad (decisión 28)', () => {
+    for (const name of ['reprogramar_turno', 'listar_turnos_de_la_clienta']) {
+      const tool = agentTools.find((candidate) => candidate.name === name);
+      const text = `${tool?.description ?? ''} ${JSON.stringify(z.toJSONSchema(tool?.input ?? z.never(), { io: 'input' }))}`;
+
+      expect(text, name).toContain('consultar_horarios_para_reprogramar');
+      expect(text, name).not.toContain('consultar_disponibilidad');
+    }
   });
 
   it('crear_reserva aclara que es para reservar y que un id de reprogramar no sirve', () => {

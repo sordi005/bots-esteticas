@@ -25,8 +25,8 @@ export const listAppointmentsTool: AgentTool<z.infer<typeof input>> = {
     'Lista los turnos futuros de la clienta que escribe (hasta 10, del más cercano al más lejano), con su estado, ' +
     'la seña y hasta cuándo se pueden cancelar o reprogramar sin costo. Usala para identificar de qué turno habla ' +
     'cuando quiere cancelar o reprogramar. Cada turno trae su turnoId, que es el que se pasa a cancelar_turno y ' +
-    'reprogramar_turno, y los ids del servicio y de la profesional para consultar la disponibilidad al ' +
-    'reprogramar. Si tiene varios y no queda claro cuál, ofrecelos para que elija. Solo muestra los turnos de ' +
+    'reprogramar_turno, y para ver los horarios ' +
+    'a los que moverlo se pasa ese mismo turnoId a consultar_horarios_para_reprogramar. Si tiene varios y no queda claro cuál, ofrecelos para que elija. Solo muestra los turnos de ' +
     'la clienta que escribe.',
   input,
   async run(_input, ctx) {
@@ -54,7 +54,6 @@ export const listAppointmentsTool: AgentTool<z.infer<typeof input>> = {
           ...summarizeAppointment(appointment, summaryContext),
           // El id para ofrecer el turno como opción (es el mismo que `turnoId`).
           opcionId: choiceIds.appointment(appointment.id),
-          // Para reprogramar: se consulta la disponibilidad con el mismo servicio y la misma profesional.
           servicioId: appointment.serviceId,
           profesionalId: appointment.professionalId,
           cancelarOReprogramarSinCostoHasta: describeChangeDeadline(appointment, summaryContext),

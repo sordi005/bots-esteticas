@@ -237,7 +237,7 @@ describe('reprogramar_turno: solo a un horario que eligió la clienta (6.4)', ()
     const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-04', '09:30'), []);
 
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_no_disponible' });
-    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad y turno_id/);
+    expect(JSON.stringify(result.content)).toMatch(/consultar_horarios_para_reprogramar/);
     expect(result.options).toEqual([]);
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
   });
@@ -407,7 +407,8 @@ describe('reprogramar_turno: solo acepta ids reprogramar: (decisión 28)', () =>
     expect(result.isError).toBe(true);
     expect(result.options).toEqual([]);
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_para_reservar' });
-    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad[^.]*turno_id/);
+    expect(JSON.stringify(result.content)).toMatch(/consultar_horarios_para_reprogramar[^.]*turno_id/);
+    expect(JSON.stringify(result.content)).not.toContain('consultar_disponibilidad');
     expect(JSON.stringify(result.content)).toMatch(/es para reservar un turno nuevo/);
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
     expect(await handoffsOf(f)).toEqual([]);
@@ -460,7 +461,8 @@ describe('reprogramar_turno: rechazos del horario nuevo', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_ocupado' });
-    expect(JSON.stringify(result.content)).toMatch(/consultar_disponibilidad/);
+    expect(JSON.stringify(result.content)).toMatch(/consultar_horarios_para_reprogramar/);
+    expect(JSON.stringify(result.content)).not.toContain('consultar_disponibilidad');
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
   });
 

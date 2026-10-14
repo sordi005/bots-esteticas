@@ -6,7 +6,8 @@ import { MAX_OPTION_DESCRIPTION_LENGTH, type OfferableOption, type ToolContext }
 /**
  * Un horario que se le ofrece a la clienta: lo que lee el modelo (con el `opcionId`, que es lo que
  * tiene que poner en «opciones») y la opción para el botón o la fila de lista. Lo comparten
- * `consultar_disponibilidad` y las herramientas que piden que la clienta confirme un horario.
+ * `consultar_disponibilidad`, `consultar_horarios_para_reprogramar` y las herramientas que piden que la
+ * clienta confirme un horario.
  */
 
 export interface SlotOffer {
