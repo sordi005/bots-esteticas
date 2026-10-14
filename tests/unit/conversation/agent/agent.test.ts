@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   FALLBACK_REPLY_TEXT,
   MAX_TOOL_CALLS_PER_REPLY,
+  PENDING_WORK_NOTICE,
   runAgent,
   type AgentInput,
 } from '../../../../src/modules/conversation/agent/agent.js';
@@ -713,6 +714,225 @@ describe('runAgent: derivar va en la respuesta (6.4, decisión 27)', () => {
     expect(handoff).toBeNull();
     expect(requests).toHaveLength(2);
     expect(record.outcome).toBe('replied');
+  });
+});
+
+describe('runAgent: el modelo anuncia una búsqueda y no la hace (6.4)', () => {
+  const ANNOUNCEMENT = 'Hola, soy Luna. Dejame consultar los medios de pago para responderte.';
+  const REAL_SUMMARY = 'Reclamo por la atención de su última visita';
+
+  it('el aviso es el que aprobó el equipo', () => {
+    expect(PENDING_WORK_NOTICE).toBe(
+      'En tu respuesta anunciaste que ibas a buscar o consultar algo, pero no llamaste a ninguna herramienta, y la respuesta se envía tal cual: la clienta no recibiría nada más. Llamá ahora a las herramientas que hagan falta y contestá con el resultado. Si no hace falta consultar nada, contestá sin anunciar una búsqueda.',
+    );
+  });
+
+  it('anuncia sin herramientas: se lo marca y, en la segunda llamada, consulta y contesta con el resultado', async () => {
+    const info = fakeTool('consultar_informacion', [SEMI]);
+    const announced = finalAnswer(ANNOUNCEMENT);
+    const script: ScriptStep[] = [
+      announced,
+      callTools([{ name: 'consultar_informacion' }]),
+      finalAnswer('Aceptamos efectivo y transferencia.', [SEMI.id]),
+    ];
+    const { run, requests } = agent(script, [info.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    // La segunda llamada ve su propio anuncio, tal cual, y el aviso del sistema.
+    expect(requests[1]?.messages).toEqual([
+      ...HISTORY,
+      { role: 'assistant_turn', turn: announced.assistantTurn },
+      { role: 'system_note', text: PENDING_WORK_NOTICE },
+    ]);
+    expect(requests.every((request) => request.allowTools)).toBe(true);
+    expect(info.run).toHaveBeenCalledTimes(1);
+    expect(message).toMatchObject({ type: 'buttons', body: 'Aceptamos efectivo y transferencia.' });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3, toolCalls: ['consultar_informacion'] });
+  });
+
+  it('el anuncio nunca le llega a la clienta si después contesta otra cosa', async () => {
+    const { run, requests } = agent([finalAnswer(ANNOUNCEMENT), finalAnswer('El semi sale $18.000.')]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: 'El semi sale $18.000.' });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2, toolCalls: [] });
+  });
+
+  it('las llamadas al modelo de la corrección cuentan en el registro: tokens y herramientas', async () => {
+    const info = fakeTool('consultar_informacion');
+    const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    const script: ScriptStep[] = [
+      finalAnswer(ANNOUNCEMENT, [], { usage: usage(100) }),
+      callTools([{ name: 'consultar_informacion' }], { usage: usage(200) }),
+      finalAnswer('Aceptamos efectivo.', [], { usage: usage(300), model: 'modelo-b' }),
+    ];
+    const { run } = agent(script, [info.tool]);
+
+    const { run: record } = await run();
+
+    expect(record).toMatchObject({
+      model: 'modelo-b',
+      llmCalls: 3,
+      usage: { inputTokens: 600, outputTokens: 30 },
+      toolCalls: ['consultar_informacion'],
+    });
+  });
+
+  it('anuncia dos veces: se envía la segunda sin otra corrección, y el log no lleva el texto', async () => {
+    const debug = vi.spyOn(logger, 'debug');
+    const second = 'Un momento, ya busco los medios de pago.';
+    const { run, requests } = agent([finalAnswer(ANNOUNCEMENT), finalAnswer(second)]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: second });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2 });
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(debug.mock.calls)).not.toMatch(/medios de pago|momento/);
+    debug.mockRestore();
+  });
+
+  it('anuncia, consulta y vuelve a anunciar: ya hubo herramienta, no se corrige otra vez', async () => {
+    const info = fakeTool('consultar_informacion');
+    const script: ScriptStep[] = [
+      finalAnswer(ANNOUNCEMENT),
+      callTools([{ name: 'consultar_informacion' }]),
+      finalAnswer('Dejame ver si hay algo más y te cuento.'),
+    ];
+    const { run, requests } = agent(script, [info.tool]);
+
+    const { message } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(message).toEqual({ type: 'text', body: 'Dejame ver si hay algo más y te cuento.' });
+  });
+
+  it('anuncia pero ya llamó a una herramienta en la vuelta: no se corrige', async () => {
+    const info = fakeTool('consultar_informacion');
+    const script: ScriptStep[] = [
+      callTools([{ name: 'consultar_informacion' }]),
+      finalAnswer('Ya tengo los medios de pago. Un momento y te cuento los horarios.'),
+    ];
+    const { run, requests } = agent(script, [info.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: 'Ya tengo los medios de pago. Un momento y te cuento los horarios.' });
+    expect(record.llmCalls).toBe(2);
+  });
+
+  it.each(['El semi sale $18.000.', '¿Querés que te busque otros horarios?', '¡Hola! Soy Luna. ¿En qué te ayudo?'])(
+    'una respuesta normal sin herramientas no se corrige: %s',
+    async (text) => {
+      const { run, requests } = agent([finalAnswer(text)]);
+
+      const { message, run: record } = await run();
+
+      expect(requests).toHaveLength(1);
+      expect(message).toEqual({ type: 'text', body: text });
+      expect(record.llmCalls).toBe(1);
+    },
+  );
+
+  describe('un fallback no se corrige', () => {
+    const cases: [string, ScriptStep, string][] = [
+      ['el proveedor se negó', finalAnswer(ANNOUNCEMENT, [], { stopReason: 'refusal' }), 'fallback_refusal'],
+      ['la respuesta se cortó', finalAnswer(ANNOUNCEMENT, [], { stopReason: 'max_tokens' }), 'fallback_max_tokens'],
+      ['la salida no es JSON', rawAnswer(ANNOUNCEMENT), 'fallback_invalid_output'],
+      [
+        'deriva con un resumen de relleno',
+        handoffAnswer(ANNOUNCEMENT, { motivo: 'pedido_de_la_clienta', resumen: 'x' }),
+        'fallback_invalid_output',
+      ],
+    ];
+
+    it.each(cases)('%s', async (_name, step, outcome) => {
+      const { run, requests } = agent([step]);
+
+      const { message, run: record } = await run();
+
+      expect(requests).toHaveLength(1);
+      expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+      expect(record.outcome).toBe(outcome);
+    });
+  });
+
+  it('un turno que quedó con herramientas pedidas sin ejecutar no admite un aviso a continuación', async () => {
+    const info = fakeTool('consultar_informacion');
+    const withPendingTools = callTools([{ name: 'consultar_informacion' }], {
+      stopReason: 'end',
+      text: JSON.stringify({ texto: ANNOUNCEMENT, opciones: [], derivar: null }),
+    });
+    const { run, requests } = agent([withPendingTools], [info.tool]);
+
+    const { message } = await run();
+
+    expect(requests).toHaveLength(1);
+    expect(message).toEqual({ type: 'text', body: ANNOUNCEMENT });
+  });
+
+  it('el tope de herramientas se respeta después de la corrección', async () => {
+    const search = fakeTool('buscar_servicios');
+    const script: ScriptStep[] = [
+      finalAnswer(ANNOUNCEMENT),
+      ...Array.from({ length: MAX_TOOL_CALLS_PER_REPLY }, () => callTools([{ name: 'buscar_servicios' }])),
+      finalAnswer('Esto es lo que encontré.'),
+    ];
+    const { run, requests } = agent(script, [search.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(search.run).toHaveBeenCalledTimes(8);
+    expect(requests).toHaveLength(10);
+    expect(requests.slice(0, 9).every((request) => request.allowTools)).toBe(true);
+    expect(requests[9]?.allowTools).toBe(false);
+    expect(message).toEqual({ type: 'text', body: 'Esto es lo que encontré.' });
+    expect(record).toMatchObject({ outcome: 'tool_limit', llmCalls: 10 });
+  });
+
+  it('si la respuesta corregida deriva, se respeta la derivación de después de la corrección', async () => {
+    const script: ScriptStep[] = [
+      finalAnswer(ANNOUNCEMENT),
+      handoffAnswer('Le paso tu consulta a una persona.', { motivo: 'queja', resumen: REAL_SUMMARY }),
+    ];
+    const { run } = agent(script);
+
+    const { handoff } = await run();
+
+    expect(handoff).toEqual({ reason: 'complaint', summary: REAL_SUMMARY });
+  });
+
+  it('una derivación que venía en la respuesta anunciada no sobrevive a la corrección', async () => {
+    const script: ScriptStep[] = [
+      handoffAnswer(ANNOUNCEMENT, { motivo: 'queja', resumen: REAL_SUMMARY }),
+      finalAnswer('Aceptamos efectivo y transferencia.'),
+    ];
+    const { run } = agent(script);
+
+    const { handoff, message } = await run();
+
+    expect(handoff).toBeNull();
+    expect(message).toEqual({ type: 'text', body: 'Aceptamos efectivo y transferencia.' });
+  });
+
+  it('si se cancela la tarea después del aviso, no vuelve a llamar al modelo', async () => {
+    const controller = new AbortController();
+    const script: ScriptStep[] = [
+      () => {
+        controller.abort(new Error('tiempo agotado'));
+        return finalAnswer(ANNOUNCEMENT);
+      },
+    ];
+    const { run, requests } = agent(script);
+
+    await expect(run({ toolContext: { ...toolContext, signal: controller.signal } })).rejects.toThrow('tiempo agotado');
+    expect(requests).toHaveLength(1);
   });
 });
 

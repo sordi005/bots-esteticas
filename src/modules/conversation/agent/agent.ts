@@ -20,6 +20,7 @@ import {
 } from '../tools/tool.js';
 import type { LlmClient, LlmMessage, LlmResponse, LlmToolCall, LlmToolResult, LlmUsage } from './llm-client.js';
 import type { AgentOutcome } from './outcome.js';
+import { announcesPendingWork } from './pending-work.js';
 
 /**
  * El ciclo del agente (8.5, decisión 20): llama al modelo, ejecuta las herramientas que pide,
@@ -44,6 +45,13 @@ export const NOT_UNDERSTOOD_HANDOFF_TEXT =
 export function notUnderstoodHandoffText(when: string): string {
   return NOT_UNDERSTOOD_HANDOFF_TEXT.replace('{cuándo}', when);
 }
+
+/**
+ * Lo que se le dice al modelo cuando su respuesta anuncia una búsqueda («dejame consultar…») y en la vuelta
+ * no llamó a ninguna herramienta (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export const PENDING_WORK_NOTICE =
+  'En tu respuesta anunciaste que ibas a buscar o consultar algo, pero no llamaste a ninguna herramienta, y la respuesta se envía tal cual: la clienta no recibiría nada más. Llamá ahora a las herramientas que hagan falta y contestá con el resultado. Si no hace falta consultar nada, contestá sin anunciar una búsqueda.';
 
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
@@ -269,6 +277,8 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let llmCalls = 0;
   let hitToolLimit = false;
+  // Solo se le hace notar UNA vez que anunció una búsqueda sin hacerla.
+  let corrected = false;
   let answer: FinalAnswer | null;
   let response: LlmResponse;
 
@@ -292,6 +302,24 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
       answer =
         response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
+      // Anuncia una búsqueda y en toda la vuelta no consultó nada (6.4): la respuesta se envía tal cual, así que
+      // una vez se lo hace notar. Un turno que quedó con herramientas pedidas no admite un mensaje de texto a
+      // continuación: la API exige sus resultados.
+      const announcesWithoutTools =
+        answer !== null &&
+        executedTools.length === 0 &&
+        response.toolCalls.length === 0 &&
+        announcesPendingWork(answer.texto);
+      if (announcesWithoutTools && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: PENDING_WORK_NOTICE },
+        );
+        continue;
+      }
+      // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
+      if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');
       break;
     }
 
