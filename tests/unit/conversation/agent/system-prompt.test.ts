@@ -161,12 +161,16 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
     expect(rule).toMatch(/Si no corresponde derivar, «derivar» va null/);
   });
 
-  it('si cancelar_turno o reprogramar_turno ya derivaron (derivada=true en su resultado), «derivar» va null', () => {
-    expect(prompt).toMatch(/Si cancelar_turno o reprogramar_turno ya derivaron[^\n]*«derivar» va null/);
+  it('si cancelar_turno o reprogramar_turno responden derivada=true, «derivar» va null (se dice una sola vez, en los turnos)', () => {
+    expect(prompt).toMatch(/responden derivada=true[^\n]*«derivar» va null/);
   });
 
-  it('ofrecerle una persona sin que acepte no es derivar: «derivar» va null', () => {
-    expect(prompt).toMatch(/Ofrecerle que la ayude una persona[^.]*no es derivar[^.]*«derivar» va null/);
+  it('cada regla de derivar está una sola vez: no se repite entre "Cómo derivar", "Tu respuesta" y los turnos', () => {
+    const occurrences = (text: string) => prompt.split(text).length - 1;
+
+    expect(occurrences('Ofrecerle que la ayude una persona')).toBe(1);
+    expect(occurrences('Vos no podés «registrar»')).toBe(1);
+    expect(occurrences('ya derivaron')).toBe(1); // la excepción de la revisión final
   });
 
   it('las reglas están en la parte de cómo derivar, después de la lista de cuándo', () => {
@@ -252,6 +256,16 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(reschedule).not.toMatch(/con el turno_id y el horario_id/);
   });
 
+  it('no hay ninguna mención a consultar_disponibilidad con turno_id: reprogramar consulta con su herramienta (decisión 28)', () => {
+    for (const line of prompt.split('\n')) {
+      for (const sentence of line.split(/(?<=[.:;])\s/)) {
+        expect(sentence.includes('consultar_disponibilidad') && sentence.includes('turno_id'), sentence).toBe(false);
+      }
+    }
+    expect(prompt).not.toMatch(/disponibilidad con el turno_id/);
+    expect(prompt).toMatch(/Para consultar horarios de un turno nuevo necesitás el servicio/);
+  });
+
   it('reprogramar: nunca usa crear_reserva para mover un turno, porque quedaría con dos turnos (decisión 28)', () => {
     const reschedule = section('Reprogramar:', 'Cuando no corresponde:');
 
@@ -259,11 +273,13 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(reschedule).toMatch(/«reprogramar:»[^.]*siempre va a reprogramar_turno/);
   });
 
-  it('reservar: un horario «reprogramar:» no se reserva, va a reprogramar_turno', () => {
+  it('reservar: solo sirven los ids «horario:»; que uno «reprogramar:» va a reprogramar_turno se dice una sola vez, en reprogramar', () => {
     const reserve = section('Reservar:', 'Cancelar:');
+    const reschedule = section('Reprogramar:', 'Cuando no corresponde:');
 
-    expect(reserve).toMatch(/«horario:»/);
-    expect(reserve).toMatch(/«reprogramar:»[^.]*reprogramar_turno/);
+    expect(reserve).toMatch(/Solo sirven los que empiezan con «horario:»/);
+    expect(reserve).not.toContain('«reprogramar:»');
+    expect(reschedule).toMatch(/«reprogramar:» siempre va a reprogramar_turno[^.]*«horario:» a crear_reserva/);
   });
 
   it('reservar: si crear_reserva dice que falta que la clienta elija el horario, se lo ofrece como opción sin darlo por hecho', () => {
@@ -326,6 +342,30 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(buildSystemPrompt({ ...example })).toBe(prompt);
     expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
     expect(prompt).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+});
+
+describe('buildSystemPrompt: cada respuesta es la única de la vuelta (6.4)', () => {
+  const prompt = buildSystemPrompt(example);
+  const rule =
+    'Cada respuesta tuya es la única de esta vuelta: se envía y la vuelta termina. Nunca le digas que vas a buscar, ' +
+    'revisar, consultar o ver algo, ni le pidas que espere un momento: hacelo ahora con las herramientas y ' +
+    'contestá con el resultado.';
+
+  it('prohíbe anunciar una búsqueda y seguir después: lo hace ahora con las herramientas y contesta con el resultado', () => {
+    expect(prompt).toContain(rule);
+  });
+
+  it('está en "Tu respuesta", antes de la explicación del campo «derivar», y una sola vez', () => {
+    const answer = prompt.slice(prompt.indexOf('## Tu respuesta'));
+
+    expect(answer).toContain(rule);
+    expect(prompt.split('la única de esta vuelta').length - 1).toBe(1);
+    expect(answer.indexOf(rule)).toBeLessThan(answer.indexOf('«derivar» es null'));
+  });
+
+  it('el prompt sigue siendo idéntico entre llamadas del mismo negocio', () => {
+    expect(buildSystemPrompt({ ...example })).toBe(prompt);
   });
 });
 
