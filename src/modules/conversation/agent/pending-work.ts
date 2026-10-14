@@ -25,9 +25,12 @@ const ACT_ON_APPOINTMENT = ['cancelar', 'reprogramar', 'mover', 'reservar', 'age
 /** Primera persona del presente de los verbos de consultar («ya te busco»). */
 const LOOK_UP_NOW = ['busco', 'consulto', 'reviso', 'chequeo', 'verifico', 'miro', 'fijo', 'averiguo', 'controlo'];
 
-/** «un momento», «un segundo»… «un segundo turno» es otra cosa, y «hace un momento» mira hacia atrás. */
+/**
+ * «un momento», «un segundo»… «un segundo turno» es otra cosa, «hace un momento» mira hacia atrás y «te
+ * responde en un momento» es el texto de una derivación: corregirlo arriesgaría que el modelo la suelte.
+ */
 const WAIT_FOR_ME = [
-  /(?<!hace )\bun (?:momentito|momento|instante|ratito|minutito|minuto|segundito)\b/,
+  /(?<!hace |en )\bun (?:momentito|momento|instante|ratito|minutito|minuto|segundito)\b/,
   /\bun segundo\b(?! (?:turno|servicio|pago|horario|dia|mensaje|intento|lugar)\b)/,
   /\b(?:esperame|aguantame|aguardame)\b/,
 ];

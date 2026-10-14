@@ -78,6 +78,7 @@ describe('announcesPendingWork: lo que parece un anuncio y no lo es', () => {
     'Para cancelar voy a pedirte que confirmes con un botón.',
     'Si querés un segundo turno, decime qué día te queda bien.',
     'Hace un momento te mostré los horarios del viernes.',
+    'Le paso tu consulta a una persona del equipo, que te va a responder en un momento.',
     'Podés dejarme tu nombre así te anoto.',
     'Ya veo, entonces preferís la tarde.',
     'Te paso con una persona del equipo, que te va a responder mañana a las 9.',
