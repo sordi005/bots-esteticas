@@ -44,6 +44,10 @@ const PENDING_WORK_PATTERNS: RegExp[] = [
   new RegExp(String.raw`\bvoy a ${alternatives([...LOOK_UP, ...ACT_ON_APPOINTMENT, 'intentar'])}\b`),
   // «ya te busco», «ahora consulto», «enseguida me fijo»
   new RegExp(String.raw`\b(?:ya|ahora|enseguida|en seguida|ya mismo) (?:te |me )?${alternatives(LOOK_UP_NOW)}\b`),
+  // «lo reviso y te confirmo», «lo consulto»
+  new RegExp(String.raw`\blo ${alternatives(LOOK_UP_NOW)}\b`),
+  // «voy a pasar tu turno al miércoles»; «te voy a pasar con una persona» es una derivación y no entra
+  /\bvoy a pasar(?:te)? (?:tu|el) turno\b/,
   // «estoy buscando tu turno»
   /\bestoy (?:buscando|consultando|revisando|chequeando|verificando|mirando|averiguando)\b/,
   // «lo intento mover», «intento moverlo», «lo voy a intentar»

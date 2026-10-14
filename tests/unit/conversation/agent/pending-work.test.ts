@@ -8,6 +8,8 @@ describe('announcesPendingWork: anuncios que las evaluaciones mostraron (6.4)', 
     'Hola, soy Luna, la asistente virtual de Estética Ejemplo. Dame un momento que busco tus turnos.',
     'Voy a buscar tu turno de mañana para cancelarlo.',
     'Listo, lo intento mover ahora',
+    'Listo, voy a pasar tu turno al miércoles 14/10 a las 15:30 con Mica.',
+    'Listo, el miércoles 14/10 a las 15:30 con Mica. Lo reviso y te confirmo enseguida.',
   ])('detecta: %s', (text) => {
     expect(announcesPendingWork(text)).toBe(true);
   });
@@ -75,6 +77,9 @@ describe('announcesPendingWork: lo que parece un anuncio y no lo es', () => {
     '¿Querés que te consulte los medios de pago?',
     '¿Querés que lo intente mover a otro día?',
     'Para reservar voy a necesitar tu nombre.',
+    // El texto de una derivación: corregirlo arriesgaría que el modelo la suelte.
+    'Te voy a pasar con una persona del equipo, que te responde por acá en este horario.',
+    'Listo, te pasé el turno al miércoles 14/10 a las 15:30 con Mica.',
     'Para cancelar voy a pedirte que confirmes con un botón.',
     'Si querés un segundo turno, decime qué día te queda bien.',
     'Hace un momento te mostré los horarios del viernes.',
