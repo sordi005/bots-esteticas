@@ -55,7 +55,7 @@ const FRIDAY_15_WITH_MICA: EvalChoice = {
 
 /**
  * El miércoles 14/10 a las 15:30 para mover su turno del martes (id `reprogramar:`, decisión 28): el
- * horario nuevo de las reprogramaciones. Lo ofreció `consultar_disponibilidad` con el `turno_id`, con Mica.
+ * horario nuevo de las reprogramaciones. Lo ofreció `consultar_horarios_para_reprogramar`, con Mica.
  */
 const WEDNESDAY_1530_TO_MOVE_TUESDAY: EvalChoice = {
   tipo: 'reprogramar',
@@ -354,12 +354,12 @@ export const evalCases: EvalCase[] = [
 
   {
     // 5.4: ofrece horarios del miércoles con la misma profesional del turno, con ids para reprogramar
-    // (consultó con el turno_id). Todavía no mueve nada.
+    // (consultó con consultar_horarios_para_reprogramar). Todavía no mueve nada.
     nombre: 'reprogramar_ofrece',
     mensajes: ['puedo pasar mi turno del martes al miércoles?'],
     preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
     espera: {
-      herramientas: ['listar_turnos_de_la_clienta', 'consultar_disponibilidad'],
+      herramientas: ['listar_turnos_de_la_clienta', 'consultar_horarios_para_reprogramar'],
       verifica: (resultado) =>
         combineChecks(
           verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),

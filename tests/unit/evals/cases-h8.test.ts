@@ -413,10 +413,10 @@ describe('reprogramar_ofrece', () => {
     );
   });
 
-  it('consulta la disponibilidad del turno, no del servicio: lista los turnos y consulta', () => {
+  it('consulta los horarios del turno con su herramienta, no con la de reservar: lista los turnos y consulta (decisión 28)', () => {
     expect(byName('reprogramar_ofrece').espera.herramientas).toEqual([
       'listar_turnos_de_la_clienta',
-      'consultar_disponibilidad',
+      'consultar_horarios_para_reprogramar',
     ]);
   });
 
