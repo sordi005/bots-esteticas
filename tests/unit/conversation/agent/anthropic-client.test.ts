@@ -295,6 +295,71 @@ describe('createAnthropicLlmClient: el ciclo de herramientas', () => {
   });
 });
 
+describe('createAnthropicLlmClient: un aviso del sistema dentro de la vuelta (system_note)', () => {
+  it('va como mensaje de la clienta con el rótulo del sistema, para que los roles sigan alternando después del turno del asistente', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: '¿Cuánto sale el semi?' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Llamá a las herramientas.' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string; content: unknown }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'system', 'assistant', 'user']);
+    expect(messages.at(-1)?.content).toBe('Contexto del sistema (no lo escribió la clienta): Llamá a las herramientas.');
+  });
+
+  it('no cuenta como mensaje de la clienta: el contexto de la vuelta sigue yendo después de su último mensaje', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: 'Hola' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Aviso.' },
+          { role: 'assistant', text: 'Respuesta vieja' },
+          { role: 'user', text: 'Chau' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'system']);
+  });
+
+  it('después de la corrección el modelo puede pedir herramientas: la conversación sigue alternando roles', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+    const second = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: '¿Qué medios de pago aceptan?' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'No llamaste a ninguna herramienta.' },
+          { role: 'assistant_turn', turn: second.assistantTurn },
+          { role: 'tool_results', results: [{ toolCallId: 'toolu_1', content: '{}', isError: false }] },
+        ],
+      }),
+    );
+
+    const messages = calls[2]?.body.messages as { role: string }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'system', 'assistant', 'user', 'assistant', 'user']);
+  });
+});
+
 describe('createAnthropicLlmClient: la respuesta final y sus motivos de fin', () => {
   it('une los bloques de texto de la respuesta final', async () => {
     const { fetch } = fakeFetch([
