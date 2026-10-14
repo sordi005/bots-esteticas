@@ -3,6 +3,7 @@ import {
   availabilityInput,
   MAX_AVAILABILITY_RANGE_DAYS,
   periodOfDay,
+  rescheduleAvailabilityInput,
 } from '../../../../src/modules/conversation/tools/availability-input.js';
 
 const SERVICE = '00000000-0000-4000-8000-000000000201';
@@ -83,48 +84,22 @@ describe('availabilityInput: lo que puede pedir el modelo', () => {
   });
 });
 
-describe('availabilityInput: reprogramar un turno con turno_id (decisión 28)', () => {
+describe('availabilityInput: reservar siempre lleva el servicio (decisión 28)', () => {
   const APPOINTMENT = '00000000-0000-4000-8000-000000000301';
-  const rescheduling = (overrides: Record<string, unknown>) =>
-    availabilityInput.safeParse({ desde: '2026-10-05', hasta: '2026-10-05', ...overrides });
 
-  it('con turno_id el servicio no hace falta: sale del turno', () => {
-    const result = rescheduling({ turno_id: APPOINTMENT });
-
-    expect(result.success).toBe(true);
-    expect(result.data).toEqual({ turno_id: APPOINTMENT, desde: '2026-10-05', hasta: '2026-10-05' });
-  });
-
-  it('acepta el turno con el prefijo turno: o el uuid solo, tal cual lo ve el modelo', () => {
-    expect(rescheduling({ turno_id: `turno:${APPOINTMENT}` }).success).toBe(true);
-    expect(rescheduling({ turno_id: APPOINTMENT }).success).toBe(true);
-  });
-
-  it.each([
-    ['un texto cualquiera', 'el del martes'],
-    ['un id de cancelación', `cancelar:${APPOINTMENT}`],
-    ['un horario', `reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`],
-    ['vacío', ''],
-  ])('rechaza un turno_id que es %s, con un mensaje que el modelo puede corregir', (_description, turno_id) => {
-    const result = rescheduling({ turno_id });
+  it('sin servicio_id no hay qué consultar: el esquema lo exige', () => {
+    const result = availabilityInput.safeParse({ desde: '2026-10-05', hasta: '2026-10-05' });
 
     expect(result.success).toBe(false);
-    expect(messagesOf(result)).toEqual(['No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo']);
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['servicio_id']);
   });
 
-  it('sin servicio_id ni turno_id no hay qué consultar: lo dice', () => {
-    const result = rescheduling({});
+  it('un turno_id no cambia lo que hace la herramienta: se descarta y el servicio sigue siendo obligatorio', () => {
+    const withService = parse({ turno_id: APPOINTMENT });
+    const withoutService = availabilityInput.safeParse({ turno_id: APPOINTMENT, desde: '2026-10-05', hasta: '2026-10-05' });
 
-    expect(result.success).toBe(false);
-    expect(messagesOf(result)).toEqual([
-      'Falta el servicio_id (o el turno_id, si es para reprogramar un turno de la clienta)',
-    ]);
-  });
-
-  it('puede traer los dos: es la herramienta la que decide si coinciden con el turno', () => {
-    const result = rescheduling({ turno_id: APPOINTMENT, servicio_id: SERVICE, profesional_id: MICA });
-
-    expect(result.success).toBe(true);
+    expect(withService.data).not.toHaveProperty('turno_id');
+    expect(withoutService.success).toBe(false);
   });
 });
 
@@ -145,5 +120,69 @@ describe('periodOfDay: franjas [S] por hora local de inicio', () => {
   it('noche es desde las 17:00', () => {
     expect(periodOfDay(minutes(17))).toBe('noche');
     expect(periodOfDay(minutes(23, 45))).toBe('noche');
+  });
+});
+
+describe('rescheduleAvailabilityInput: los horarios para mover un turno (decisión 28)', () => {
+  const APPOINTMENT = '00000000-0000-4000-8000-000000000301';
+  const parseReschedule = (overrides: Record<string, unknown>) =>
+    rescheduleAvailabilityInput.safeParse({ turno_id: APPOINTMENT, desde: '2026-10-05', hasta: '2026-10-05', ...overrides });
+  const rescheduleMessages = (result: ReturnType<typeof parseReschedule>) =>
+    result.success ? [] : result.error.issues.map((issue) => issue.message);
+
+  it('acepta lo mínimo: el turno y un rango de fechas, y deja el id del turno sin prefijo', () => {
+    const result = parseReschedule({});
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({ turno_id: APPOINTMENT, desde: '2026-10-05', hasta: '2026-10-05' });
+  });
+
+  it('acepta el turno con el prefijo turno: o el uuid solo, tal cual lo ve el modelo', () => {
+    expect(parseReschedule({ turno_id: `turno:${APPOINTMENT}` }).data?.turno_id).toBe(APPOINTMENT);
+    expect(parseReschedule({ turno_id: APPOINTMENT }).data?.turno_id).toBe(APPOINTMENT);
+  });
+
+  it('el turno es obligatorio', () => {
+    const result = rescheduleAvailabilityInput.safeParse({ desde: '2026-10-05', hasta: '2026-10-05' });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toEqual(['turno_id']);
+  });
+
+  it.each([
+    ['un texto cualquiera', 'el del martes'],
+    ['un id de cancelación', `cancelar:${APPOINTMENT}`],
+    ['un horario', `reprogramar:${APPOINTMENT}:2026-10-09T18:30:00.000Z`],
+    ['vacío', ''],
+  ])('rechaza un turno_id que es %s, con un mensaje que el modelo puede corregir', (_description, turno_id) => {
+    const result = parseReschedule({ turno_id });
+
+    expect(result.success).toBe(false);
+    expect(rescheduleMessages(result)).toEqual([
+      'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
+    ]);
+  });
+
+  it('acepta franja y "después de", y rechaza los que no existen', () => {
+    expect(parseReschedule({ franja: 'tarde', despues_de: '2026-10-05T18:30:00.000Z' }).success).toBe(true);
+    expect(parseReschedule({ franja: 'madrugada' }).success).toBe(false);
+    expect(parseReschedule({ despues_de: 'mañana' }).success).toBe(false);
+  });
+
+  it('no tiene servicio ni profesional: salen del turno, y si el modelo los manda se descartan', () => {
+    const result = parseReschedule({ servicio_id: SERVICE, profesional_id: MICA });
+
+    expect(result.data).not.toHaveProperty('servicio_id');
+    expect(result.data).not.toHaveProperty('profesional_id');
+  });
+
+  it('el rango tiene los mismos límites que al reservar: hasta 7 días y "hasta" no antes que "desde"', () => {
+    expect(parseReschedule({ desde: '2026-10-05', hasta: '2026-10-11' }).success).toBe(true);
+    expect(rescheduleMessages(parseReschedule({ desde: '2026-10-05', hasta: '2026-10-12' }))).toEqual([
+      'El rango no puede superar los 7 días: pedí una semana por vez',
+    ]);
+    expect(rescheduleMessages(parseReschedule({ desde: '2026-10-06', hasta: '2026-10-05' }))).toEqual([
+      '"hasta" no puede ser anterior a "desde"',
+    ]);
   });
 });

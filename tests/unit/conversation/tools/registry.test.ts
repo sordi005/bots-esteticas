@@ -38,20 +38,19 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
   it('los esquemas de entrada se pueden pasar a JSON Schema para el modelo', () => {
     expect(schemaOf('buscar_servicios')).toMatchObject({ type: 'object' });
     expect(Object.keys(schemaOf('consultar_informacion').properties)).toEqual(['tema']);
-    // El servicio o el turno: uno de los dos (lo valida el esquema de Zod, no el JSON Schema).
-    expect(schemaOf('consultar_disponibilidad').required).toEqual(['desde', 'hasta']);
+    expect(schemaOf('consultar_disponibilidad').required).toEqual(['servicio_id', 'desde', 'hasta']);
   });
 
-  it('consultar_disponibilidad acepta turno_id para reprogramar, y le explica al modelo que va sin servicio_id', () => {
-    const { properties } = schemaOf('consultar_disponibilidad');
-
-    expect(Object.keys(properties)).toContain('turno_id');
-    expect(properties.turno_id?.description).toMatch(/REPROGRAMAR/);
-    expect(properties.turno_id?.description).toMatch(/No mandes servicio_id ni profesional_id/);
-    expect(properties.servicio_id?.description).toMatch(/No lo mandes si pasás turno_id/);
+  it('consultar_disponibilidad es solo para reservar: el servicio es obligatorio y no tiene turno_id (decisión 28)', () => {
+    const { properties, required } = schemaOf('consultar_disponibilidad');
     const tool = consultationTools.find((candidate) => candidate.name === 'consultar_disponibilidad');
-    expect(tool?.description).toMatch(/Para REPROGRAMAR un turno[^.]*pasá turno_id/);
-    expect(tool?.description).toMatch(/reprogramar_turno, no para crear_reserva/);
+
+    expect(required).toContain('servicio_id');
+    expect(Object.keys(properties)).toEqual(['servicio_id', 'profesional_id', 'desde', 'hasta', 'franja', 'despues_de']);
+    expect(properties.servicio_id?.description).not.toMatch(/turno/i);
+    expect(tool?.description).not.toMatch(/turno_id/);
+    // Le dice adónde ir para mover un turno, sin mezclar los dos modos en una herramienta.
+    expect(tool?.description).toMatch(/consultar_horarios_para_reprogramar/);
   });
 
   it('ninguna herramienta pide el negocio ni la clienta como parámetro (regla 2)', () => {
@@ -74,6 +73,7 @@ describe('agentTools: las herramientas que usa el agente', () => {
   it('son las de consulta y las de turnos (H8), con los nombres de la especificación (6.4): derivar no es una herramienta', () => {
     expect(agentTools.map((tool) => tool.name)).toEqual([
       ...consultationTools.map((tool) => tool.name),
+      'consultar_horarios_para_reprogramar',
       'crear_reserva',
       'listar_turnos_de_la_clienta',
       'reprogramar_turno',
@@ -88,6 +88,17 @@ describe('agentTools: las herramientas que usa el agente', () => {
         expect(property.description, `${tool.name}.${name}`).toBeTruthy();
       }
     }
+  });
+
+  it('consultar_horarios_para_reprogramar pide el turno y las fechas, y no tiene servicio ni profesional', () => {
+    const schema = agentSchemaOf('consultar_horarios_para_reprogramar');
+    const tool = agentTools.find((candidate) => candidate.name === 'consultar_horarios_para_reprogramar');
+
+    expect(Object.keys(schema.properties)).toEqual(['turno_id', 'desde', 'hasta', 'franja', 'despues_de']);
+    expect(schema.required).toEqual(['turno_id', 'desde', 'hasta']);
+    expect(schema.properties.turno_id?.description).toMatch(/listar_turnos_de_la_clienta/);
+    expect(tool?.description).toMatch(/reprogramar_turno, no para crear_reserva/);
+    expect(tool?.description).toMatch(/consultar_disponibilidad/);
   });
 
   it('crear_reserva pide el id del horario y, opcional, el nombre', () => {

@@ -31,66 +31,81 @@ const localDate = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha va como AAAA-MM-DD')
   .refine(isRealDate, 'Esa fecha no existe');
 
+/** Lo que tienen en común las dos consultas de horarios: el rango, la franja y el cursor de "ver otros horarios". */
+const searchFields = {
+  desde: localDate.describe('Primer día a buscar, fecha local del negocio AAAA-MM-DD.'),
+  hasta: localDate.describe(
+    `Último día a buscar (incluido), AAAA-MM-DD. Hasta ${String(MAX_AVAILABILITY_RANGE_DAYS)} días en total.`,
+  ),
+  franja: z
+    .enum(DAY_PERIODS)
+    .optional()
+    .describe('Si la clienta pidió mañana (antes de las 13), tarde (13 a 17) o noche (desde las 17).'),
+  despues_de: z.iso
+    .datetime()
+    .optional()
+    .describe('Para "ver otros horarios": el inicio (UTC) del último horario ofrecido, tal como vino en la opción.'),
+};
+
+/** El rango: "hasta" no antes que "desde" y de hasta 7 días [S]. */
+function checkRange(value: { desde: string; hasta: string }, ctx: z.RefinementCtx): void {
+  // Si alguna fecha es inválida, ya tiene su propio error: no se compara.
+  if (!isRealDate(value.desde) || !isRealDate(value.hasta)) return;
+  if (value.hasta < value.desde) {
+    ctx.addIssue({ code: 'custom', path: ['hasta'], message: '"hasta" no puede ser anterior a "desde"' });
+  } else if (value.hasta > addDaysToLocalDate(value.desde, MAX_AVAILABILITY_RANGE_DAYS - 1)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['hasta'],
+      message: `El rango no puede superar los ${String(MAX_AVAILABILITY_RANGE_DAYS)} días: pedí una semana por vez`,
+    });
+  }
+}
+
 /**
- * Lo que puede pedir el modelo. El negocio y la clienta NO están acá: salen del contexto.
- * Las fechas son locales del negocio; el código las pasa a instantes.
+ * Lo que puede pedir el modelo para RESERVAR. El negocio y la clienta NO están acá: salen del contexto.
+ * Las fechas son locales del negocio; el código las pasa a instantes. El servicio es obligatorio:
+ * reprogramar un turno tiene su propia herramienta (decisión 28).
  */
 export const availabilityInput = z
   .object({
-    servicio_id: z
-      .uuid()
-      .optional()
-      .describe('Id del servicio (lo devuelve buscar_servicios). No lo mandes si pasás turno_id.'),
-    turno_id: z
-      .string()
-      .optional()
-      .describe(
-        'Solo para REPROGRAMAR un turno de la clienta: el turnoId que devolvió listar_turnos_de_la_clienta (o el ' +
-          'turno_id del contexto). Los horarios son del servicio y de la profesional de ese turno, con ids para ' +
-          'reprogramar_turno. No mandes servicio_id ni profesional_id.',
-      ),
+    servicio_id: z.uuid().describe('Id del servicio (lo devuelve buscar_servicios).'),
     profesional_id: z
       .uuid()
       .optional()
-      .describe('Solo si la clienta pidió una profesional puntual. Si no, no lo mandes. No lo mandes si pasás turno_id.'),
-    desde: localDate.describe('Primer día a buscar, fecha local del negocio AAAA-MM-DD.'),
-    hasta: localDate.describe(
-      `Último día a buscar (incluido), AAAA-MM-DD. Hasta ${String(MAX_AVAILABILITY_RANGE_DAYS)} días en total.`,
-    ),
-    franja: z
-      .enum(DAY_PERIODS)
-      .optional()
-      .describe('Si la clienta pidió mañana (antes de las 13), tarde (13 a 17) o noche (desde las 17).'),
-    despues_de: z.iso
-      .datetime()
-      .optional()
-      .describe('Para "ver otros horarios": el inicio (UTC) del último horario ofrecido, tal como vino en la opción.'),
+      .describe('Solo si la clienta pidió una profesional puntual. Si no, no lo mandes.'),
+    ...searchFields,
   })
-  .superRefine((value, ctx) => {
-    if (value.turno_id !== undefined && parseAppointmentRef(value.turno_id) === null) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['turno_id'],
-        message: 'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
-      });
-    } else if (value.servicio_id === undefined && value.turno_id === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['servicio_id'],
-        message: 'Falta el servicio_id (o el turno_id, si es para reprogramar un turno de la clienta)',
-      });
-    }
-    // Si alguna fecha es inválida, ya tiene su propio error: no se compara.
-    if (!isRealDate(value.desde) || !isRealDate(value.hasta)) return;
-    if (value.hasta < value.desde) {
-      ctx.addIssue({ code: 'custom', path: ['hasta'], message: '"hasta" no puede ser anterior a "desde"' });
-    } else if (value.hasta > addDaysToLocalDate(value.desde, MAX_AVAILABILITY_RANGE_DAYS - 1)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['hasta'],
-        message: `El rango no puede superar los ${String(MAX_AVAILABILITY_RANGE_DAYS)} días: pedí una semana por vez`,
-      });
-    }
-  });
+  .superRefine(checkRange);
 
 export type AvailabilityInput = z.infer<typeof availabilityInput>;
+
+/**
+ * Lo que puede pedir el modelo para REPROGRAMAR un turno: el turno (obligatorio) y las fechas. El
+ * servicio, la profesional, la duración y el margen son los del turno: no hay dónde mandarlos.
+ * El turno se guarda sin el prefijo `turno:`.
+ */
+export const rescheduleAvailabilityInput = z
+  .object({
+    turno_id: z
+      .string()
+      .transform((ref, ctx) => {
+        const appointmentId = parseAppointmentRef(ref);
+        if (appointmentId === null) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
+          });
+          return z.NEVER;
+        }
+        return appointmentId;
+      })
+      .describe(
+        'El turno de la clienta que quiere mover: el turnoId que devolvió listar_turnos_de_la_clienta (o el ' +
+          'turno_id del contexto), tal cual.',
+      ),
+    ...searchFields,
+  })
+  .superRefine(checkRange);
+
+export type RescheduleAvailabilityInput = z.infer<typeof rescheduleAvailabilityInput>;

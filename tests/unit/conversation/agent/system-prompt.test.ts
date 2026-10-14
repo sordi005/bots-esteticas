@@ -237,16 +237,17 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(booking).toMatch(/confirmada=true[^.]*solo cuando la clienta confirmó/is);
   });
 
-  it('reprogramar: consulta la disponibilidad con el turno_id (sin servicio ni profesional) y llama a reprogramar_turno con el horario elegido', () => {
+  it('reprogramar: consulta los horarios con consultar_horarios_para_reprogramar y el turno_id, y llama a reprogramar_turno con el horario elegido', () => {
     const reschedule = section('Reprogramar:', 'Cuando no corresponde:');
 
-    expect(reschedule).toMatch(/consultá la disponibilidad con el turno_id de ese turno/);
-    expect(reschedule).toMatch(/sin servicio_id ni profesional_id/);
+    expect(reschedule).toMatch(/consultar_horarios_para_reprogramar y el turno_id de ese turno/);
+    expect(reschedule).toMatch(/sin servicio ni profesional: son los del turno/);
     expect(reschedule).toMatch(/ofrecele esos horarios/i);
     expect(reschedule).toMatch(/llamá a reprogramar_turno con el horario_id elegido/);
     expect(reschedule).toMatch(/«reprogramar:»/);
     expect(reschedule).toMatch(/elegir el horario ya es la confirmación/i);
-    // El prompt viejo pedía el servicio y la profesional del turno, y el turno_id aparte.
+    // La consulta de reprogramar es una herramienta aparte: consultar_disponibilidad no lleva turno_id (decisión 28).
+    expect(reschedule).not.toContain('consultar_disponibilidad');
     expect(reschedule).not.toMatch(/servicio y la profesional de ese turno/);
     expect(reschedule).not.toMatch(/con el turno_id y el horario_id/);
   });
@@ -318,6 +319,7 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
 
     expect(data).toContain('listar_turnos_de_la_clienta');
     expect(data).toMatch(/crear_reserva/);
+    expect(data).toMatch(/consultar_horarios_para_reprogramar \(horarios libres para mover un turno\)/);
   });
 
   it('sigue siendo idéntico entre llamadas del mismo negocio, sin fechas ni datos de la clienta', () => {
