@@ -3,6 +3,8 @@ import {
   EXCLUSION_VIOLATION,
   findPostgresError,
   isConstraintViolation,
+  DEADLOCK_DETECTED,
+  retryOnDeadlock,
 } from '../../../src/shared/postgres-errors.js';
 
 function driverError(code: string, constraint?: string): Error {
@@ -36,5 +38,44 @@ describe('isConstraintViolation', () => {
   it('no confunde otra restricción ni otro tipo de error', () => {
     expect(isConstraintViolation(overlap, EXCLUSION_VIOLATION, 'otra_restriccion')).toBe(false);
     expect(isConstraintViolation(overlap, '23505', 'appointments_no_overlap')).toBe(false);
+  });
+});
+
+describe('retryOnDeadlock: dos reservas del mismo horario a la vez (6.6)', () => {
+  // Con una restricción de exclusión, dos inserciones simultáneas que chocan pueden esperarse una a
+  // la otra: Postgres aborta una con "deadlock detected" en vez de la violación de la restricción.
+  const deadlock = () => new Error('Failed query', { cause: driverError(DEADLOCK_DETECTED) });
+
+  it('reintenta una vez la transacción que perdió por deadlock', async () => {
+    let calls = 0;
+    const result = await retryOnDeadlock(() => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(deadlock()) : Promise.resolve('ok');
+    });
+
+    expect(result).toBe('ok');
+    expect(calls).toBe(2);
+  });
+
+  it('si vuelve a perder por deadlock, el error sube', async () => {
+    let calls = 0;
+    const run = () => {
+      calls += 1;
+      return Promise.reject(deadlock());
+    };
+
+    await expect(retryOnDeadlock(run)).rejects.toThrow('Failed query');
+    expect(calls).toBe(2);
+  });
+
+  it('cualquier otro error sube sin reintentar', async () => {
+    let calls = 0;
+    const run = () => {
+      calls += 1;
+      return Promise.reject(new Error('Failed query', { cause: driverError(EXCLUSION_VIOLATION, 'appointments_no_overlap') }));
+    };
+
+    await expect(retryOnDeadlock(run)).rejects.toThrow('Failed query');
+    expect(calls).toBe(1);
   });
 });

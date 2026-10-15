@@ -4,7 +4,7 @@ import { customers } from '../customers/schema.js';
 import { depositAmountCents, resolveDepositRule } from '../payments/deposit-policy.js';
 import { deposits } from '../payments/schema.js';
 import type { Queryable } from '../../shared/db.js';
-import { EXCLUSION_VIOLATION, isConstraintViolation } from '../../shared/postgres-errors.js';
+import { EXCLUSION_VIOLATION, isConstraintViolation, retryOnDeadlock } from '../../shared/postgres-errors.js';
 import type { TimestampRange } from '../../shared/timestamp-range.js';
 import {
   canReschedule,
@@ -237,7 +237,9 @@ export async function bookAppointment(
   const timeRange = occupiedRange(start, durationMinutes, service.bufferMinutes);
 
   try {
-    return await db.transaction(async (tx) => {
+    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, { tenantId, professionalId, range: timeRange, now });
 
       const [appointment] = await tx
@@ -278,7 +280,7 @@ export async function bookAppointment(
         status,
         deposit: { id: deposit.id, amountCents: depositCents, expiresAt },
       } as const;
-    });
+    }));
   } catch (error) {
     // Otra clienta ganó el horario entre la verificación y el guardado (sección 6.6).
     if (isConstraintViolation(error, EXCLUSION_VIOLATION, NO_OVERLAP)) {
@@ -373,7 +375,9 @@ export async function rescheduleAppointment(
   const newRange = occupiedRange(newStart, current.durationMinutes, current.bufferMinutes);
 
   try {
-    return await db.transaction(async (tx) => {
+    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, {
         tenantId,
         professionalId: current.professionalId,
@@ -400,7 +404,7 @@ export async function rescheduleAppointment(
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
       return { ok: true } as const;
-    });
+    }));
   } catch (error) {
     if (isConstraintViolation(error, EXCLUSION_VIOLATION, NO_OVERLAP)) {
       return { ok: false, reason: 'slot_taken' };
