@@ -81,31 +81,75 @@ export const availabilityInput = z
 export type AvailabilityInput = z.infer<typeof availabilityInput>;
 
 /**
+ * El turno de la clienta que se quiere mover, tal como lo ve el modelo (`turno:<uuid>` o el uuid solo).
+ * Se guarda sin el prefijo.
+ */
+const appointmentIdField = z
+  .string()
+  .transform((ref, ctx) => {
+    const appointmentId = parseAppointmentRef(ref);
+    if (appointmentId === null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
+      });
+      return z.NEVER;
+    }
+    return appointmentId;
+  })
+  .describe(
+    'El turno de la clienta que quiere mover: el turnoId que devolvió listar_turnos_de_la_clienta (o el ' +
+      'turno_id del contexto), tal cual.',
+  );
+
+/**
  * Lo que puede pedir el modelo para REPROGRAMAR un turno: el turno (obligatorio) y las fechas. El
  * servicio, la profesional, la duración y el margen son los del turno: no hay dónde mandarlos.
  * El turno se guarda sin el prefijo `turno:`.
  */
 export const rescheduleAvailabilityInput = z
   .object({
-    turno_id: z
-      .string()
-      .transform((ref, ctx) => {
-        const appointmentId = parseAppointmentRef(ref);
-        if (appointmentId === null) {
-          ctx.addIssue({
-            code: 'custom',
-            message: 'No es el id de un turno: usá el turnoId de listar_turnos_de_la_clienta, sin cambiarlo',
-          });
-          return z.NEVER;
-        }
-        return appointmentId;
-      })
-      .describe(
-        'El turno de la clienta que quiere mover: el turnoId que devolvió listar_turnos_de_la_clienta (o el ' +
-          'turno_id del contexto), tal cual.',
-      ),
+    turno_id: appointmentIdField,
     ...searchFields,
   })
   .superRefine(checkRange);
 
 export type RescheduleAvailabilityInput = z.infer<typeof rescheduleAvailabilityInput>;
+
+/** Una hora local del negocio, HH:MM en 24 horas. La conversión a un instante la hace el código. */
+const localTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'La hora va como HH:MM (24 horas), por ejemplo 16:30');
+
+/** Lo que tienen en común las dos consultas de una hora puntual: el día y la hora, locales del negocio. */
+const timeFields = {
+  fecha: localDate.describe('El día, fecha local del negocio AAAA-MM-DD.'),
+  hora: localTime.describe(
+    'La hora puntual que pregunta la clienta, hora local del negocio HH:MM en 24 horas (por ejemplo 16:30, 20:00). ' +
+      'No la conviertas: escribí la hora tal cual la dijo.',
+  ),
+};
+
+/**
+ * Lo que puede pedir el modelo para saber si una HORA PUNTUAL está libre para RESERVAR (6.4,
+ * decisión 29). Servicio, fecha y hora son obligatorios; la profesional es un filtro opcional como en
+ * `consultar_disponibilidad` y no cambia lo que hace la herramienta. Mover un turno tiene la suya.
+ */
+export const timeQueryInput = z.object({
+  servicio_id: z.uuid().describe('Id del servicio (lo devuelve buscar_servicios).'),
+  profesional_id: z.uuid().optional().describe('Solo si la clienta pidió una profesional puntual. Si no, no lo mandes.'),
+  ...timeFields,
+});
+
+export type TimeQueryInput = z.infer<typeof timeQueryInput>;
+
+/**
+ * Lo que puede pedir el modelo para saber si una HORA PUNTUAL está libre para MOVER un turno: el turno
+ * (obligatorio), la fecha y la hora. El servicio, la profesional, la duración y el margen son los del turno.
+ */
+export const rescheduleTimeQueryInput = z.object({
+  turno_id: appointmentIdField,
+  ...timeFields,
+});
+
+export type RescheduleTimeQueryInput = z.infer<typeof rescheduleTimeQueryInput>;

@@ -252,8 +252,8 @@ function dayBlocks(
   return { blocks: subtract(merge(blocks), closures), closedForHoliday };
 }
 
-/** Primer inicio en la grilla del reloj local (9:00, 9:15…) a partir de `instant`. */
-function alignToClock(instant: number, granularityMinutes: number, timeZone: string): number {
+/** Primer inicio en la grilla del reloj local (9:00, 9:15…) a partir de `instant` (en ms). */
+export function alignToClock(instant: number, granularityMinutes: number, timeZone: string): number {
   const wholeMinute = Math.ceil(instant / MINUTE_MS) * MINUTE_MS;
   const { minutesOfDay } = instantToLocal(new Date(wholeMinute), timeZone);
   const remainder = minutesOfDay % granularityMinutes;

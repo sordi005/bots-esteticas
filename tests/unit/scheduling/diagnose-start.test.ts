@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alignToClock,
   diagnoseStart,
   findAvailableSlots,
   nearestGridStart,
@@ -252,5 +253,20 @@ describe('nearestGridStart: la hora de la grilla más cercana', () => {
   it('con otra granularidad usa esa grilla', () => {
     expect(nearest('16:20', 30)).toBe('16:30');
     expect(nearest('16:40', 20)).toBe('16:40');
+  });
+});
+
+describe('alignToClock: el primer inicio de la grilla desde un instante', () => {
+  const next = (time: string, granularity = 15) =>
+    instantToLocal(new Date(alignToClock(at('2026-10-05', time).getTime(), granularity, MENDOZA)), MENDOZA).time;
+
+  it('sube a la marca siguiente y no se mueve si ya está en la grilla', () => {
+    expect(next('10:07')).toBe('10:15');
+    expect(next('10:15')).toBe('10:15');
+    expect(next('10:46')).toBe('11:00');
+  });
+
+  it('con otra granularidad usa esa grilla', () => {
+    expect(next('10:07', 30)).toBe('10:30');
   });
 });
