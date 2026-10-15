@@ -5,6 +5,7 @@ import {
   FALLBACK_REPLY_TEXT,
   MAX_TOOL_CALLS_PER_REPLY,
   PENDING_WORK_NOTICE,
+  UNCONFIRMED_CHANGE_NOTICE,
   runAgent,
   type AgentInput,
 } from '../../../../src/modules/conversation/agent/agent.js';
@@ -53,6 +54,23 @@ function fakeTool(name: string, options: OfferableOption[] = []) {
     name,
     description: `Herramienta de prueba ${name}.`,
     input: z.object({ texto: z.string().min(1).optional() }),
+    run,
+  };
+  return { tool: tool as AgentTool<unknown>, run };
+}
+
+/** Una herramienta que cambia turnos: devuelve lo que se le diga, con o sin la marca de cambio confirmado. */
+function changeTool(name: string, content: Record<string, unknown>, changed: boolean) {
+  interface Input {
+    horario_id?: string | undefined;
+  }
+  const run = vi.fn<AgentTool<Input>['run']>(() =>
+    Promise.resolve({ content, options: [], ...(changed ? { changedAppointment: true as const } : {}) }),
+  );
+  const tool: AgentTool<Input> = {
+    name,
+    description: `Herramienta de prueba ${name}.`,
+    input: z.object({ horario_id: z.string().optional() }),
     run,
   };
   return { tool: tool as AgentTool<unknown>, run };
@@ -1005,5 +1023,327 @@ describe('runAgent: cancelación', () => {
     await run({ toolContext: { ...toolContext, signal: controller.signal } });
 
     expect(requests[0]?.signal).toBe(controller.signal);
+  });
+});
+
+describe('runAgent: el asistente nunca confirma un cambio que no pasó (6.4)', () => {
+  const CLAIM = 'Listo, lo paso al miércoles 14/10 a las 15:30 con Mica. Ya te quedó reprogramado.';
+  const REAL_SUMMARY = 'Reclamo por la atención de su última visita';
+  const reschedule = () => changeTool('reprogramar_turno', { reprogramado: true }, true);
+
+  it('el aviso es el que aprobó el equipo', () => {
+    expect(UNCONFIRMED_CHANGE_NOTICE).toBe(
+      'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.',
+    );
+  });
+
+  it('afirma sin cambio: se lo marca, llama a la herramienta y contesta con lo que devuelve', async () => {
+    const tool = reschedule();
+    const claimed = finalAnswer(CLAIM);
+    const script: ScriptStep[] = [
+      claimed,
+      callTools([{ name: 'reprogramar_turno' }]),
+      finalAnswer('Listo, tu turno quedó para el miércoles 14/10 a las 15:30 con Mica.'),
+    ];
+    const { run, requests } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[1]?.messages).toEqual([
+      ...HISTORY,
+      { role: 'assistant_turn', turn: claimed.assistantTurn },
+      { role: 'system_note', text: UNCONFIRMED_CHANGE_NOTICE },
+    ]);
+    expect(requests.every((request) => request.allowTools)).toBe(true);
+    expect(tool.run).toHaveBeenCalledTimes(1);
+    expect(message).toEqual({ type: 'text', body: 'Listo, tu turno quedó para el miércoles 14/10 a las 15:30 con Mica.' });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3, toolCalls: ['reprogramar_turno'] });
+  });
+
+  it('la confirmación falsa nunca le llega a la clienta si después corrige el texto', async () => {
+    const script: ScriptStep[] = [finalAnswer(CLAIM), finalAnswer('Todavía no se movió: tocá el horario que querés.')];
+    const { run, requests } = agent(script);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: 'Todavía no se movió: tocá el horario que querés.' });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2 });
+  });
+
+  it('afirma dos veces sin ningún cambio: texto fijo, sin derivación y con su propio motivo', async () => {
+    const script: ScriptStep[] = [
+      finalAnswer(CLAIM),
+      handoffAnswer('Tu turno quedó reprogramado. Le paso tu consulta a una persona.', {
+        motivo: 'queja',
+        resumen: REAL_SUMMARY,
+      }),
+    ];
+    const { run, requests } = agent(script);
+
+    const { message, handoff, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(handoff).toBeNull();
+    expect(record).toMatchObject({ outcome: 'fallback_unconfirmed_change', llmCalls: 2, toolCalls: [] });
+  });
+
+  it('el log no lleva el texto de la conversación', async () => {
+    const debug = vi.spyOn(logger, 'debug');
+    const { run } = agent([finalAnswer(CLAIM), finalAnswer(CLAIM)]);
+
+    await run();
+
+    expect(JSON.stringify(debug.mock.calls)).not.toMatch(/reprogramado|Mica|miércoles/);
+    debug.mockRestore();
+  });
+
+  it('afirma y en la vuelta una herramienta confirmó el cambio: no se corrige', async () => {
+    const tool = reschedule();
+    const script: ScriptStep[] = [
+      callTools([{ name: 'reprogramar_turno' }]),
+      finalAnswer('Listo, tu turno quedó reprogramado para el miércoles 14/10 a las 15:30.'),
+    ];
+    const { run, requests } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: 'Listo, tu turno quedó reprogramado para el miércoles 14/10 a las 15:30.' });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 2 });
+  });
+
+  it('el cambio confirmado vale para toda la vuelta: otra herramienta después no desmiente el texto', async () => {
+    const book = changeTool('crear_reserva', { reservado: true }, true);
+    const info = fakeTool('consultar_informacion');
+    const script: ScriptStep[] = [
+      callTools([{ name: 'crear_reserva' }]),
+      callTools([{ name: 'consultar_informacion' }]),
+      finalAnswer('Te lo reservé para el viernes. Aceptamos efectivo y transferencia.'),
+    ];
+    const { run, requests } = agent(script, [book.tool, info.tool]);
+
+    const { run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(record.outcome).toBe('replied');
+  });
+
+  it('una herramienta que pidió que la clienta elija no cuenta como cambio: si el texto afirma, se corrige', async () => {
+    const tool = changeTool('reprogramar_turno', { reprogramado: false, motivo: 'falta_que_elija' }, false);
+    const script: ScriptStep[] = [
+      callTools([{ name: 'reprogramar_turno' }]),
+      finalAnswer(CLAIM),
+      finalAnswer('Todavía no lo moví: tocá el horario que querés.'),
+    ];
+    const { run, requests } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.messages.at(-1)).toEqual({ role: 'system_note', text: UNCONFIRMED_CHANGE_NOTICE });
+    expect(message).toEqual({ type: 'text', body: 'Todavía no lo moví: tocá el horario que querés.' });
+    expect(record).toMatchObject({ outcome: 'replied', toolCalls: ['reprogramar_turno'] });
+  });
+
+  it('una herramienta que derivó por la política tampoco cuenta: el texto no puede decir que se canceló', async () => {
+    const tool = changeTool('cancelar_turno', { cancelado: false, derivado: true }, false);
+    const script: ScriptStep[] = [
+      callTools([{ name: 'cancelar_turno' }]),
+      finalAnswer('Cancelé tu turno del viernes.'),
+      finalAnswer('Cancelé tu turno del viernes, quedó cancelado.'),
+    ];
+    const { run } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(record.outcome).toBe('fallback_unconfirmed_change');
+  });
+
+  it('una herramienta que rechazó el cambio cuenta como sin cambio', async () => {
+    const tool = changeTool('crear_reserva', { reservado: false, motivo: 'horario_ocupado' }, false);
+    const script: ScriptStep[] = [
+      callTools([{ name: 'crear_reserva' }]),
+      finalAnswer('Te lo reservé para el viernes a las 16:00.'),
+      finalAnswer('Ese horario se ocupó. ¿Querés que busque otro?'),
+    ];
+    const { run } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(message).toEqual({ type: 'text', body: 'Ese horario se ocupó. ¿Querés que busque otro?' });
+    expect(record.outcome).toBe('replied');
+  });
+
+  it.each([
+    '¿Te lo reservo para el viernes a las 16:00?',
+    'Tenés un turno el viernes 16/10 a las 16:00.',
+    'Todavía no se canceló nada: ¿querés que lo cancele?',
+    'El semi sale $18.000.',
+  ])('una respuesta que no afirma ningún cambio no se corrige: %s', async (text) => {
+    const { run, requests } = agent([finalAnswer(text)]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(1);
+    expect(message).toEqual({ type: 'text', body: text });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 1 });
+  });
+
+  it('ya hubo una corrección por anuncio: no hay una segunda y, si sigue afirmando, va el texto fijo', async () => {
+    const script: ScriptStep[] = [
+      finalAnswer('Dejame consultar el turno.'),
+      finalAnswer(CLAIM),
+      finalAnswer('No debería llegar a pedirse una tercera llamada.'),
+    ];
+    const { run, requests } = agent(script);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'system_note', text: PENDING_WORK_NOTICE });
+    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(record).toMatchObject({ outcome: 'fallback_unconfirmed_change', llmCalls: 2 });
+  });
+
+  it('ya hubo una corrección por afirmar un cambio: si después anuncia una búsqueda, no hay otra corrección', async () => {
+    const script: ScriptStep[] = [finalAnswer(CLAIM), finalAnswer('Dejame consultar los horarios del miércoles.')];
+    const { run, requests } = agent(script);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: 'Dejame consultar los horarios del miércoles.' });
+    expect(record.outcome).toBe('replied');
+  });
+
+  it('afirma y anuncia a la vez: gana el aviso de la búsqueda, que es el primero que corresponde', async () => {
+    const text = 'Voy a pasar tu turno al miércoles. Ya te quedó reprogramado.';
+    const { run, requests } = agent([finalAnswer(text), finalAnswer('Todavía no lo moví.')]);
+
+    await run();
+
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'system_note', text: PENDING_WORK_NOTICE });
+  });
+
+  it('con una afirmación sin cambio, el tope de herramientas se respeta después de la corrección', async () => {
+    const tool = changeTool('cancelar_turno', { cancelado: false, faltaConfirmar: true }, false);
+    const script: ScriptStep[] = [
+      finalAnswer('Cancelé tu turno del viernes.'),
+      ...Array.from({ length: MAX_TOOL_CALLS_PER_REPLY }, () => callTools([{ name: 'cancelar_turno' }])),
+      finalAnswer('Todavía no cancelé nada: ¿querés que lo cancele?'),
+    ];
+    const { run, requests } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(tool.run).toHaveBeenCalledTimes(8);
+    expect(requests).toHaveLength(10);
+    expect(requests.slice(0, 9).every((request) => request.allowTools)).toBe(true);
+    expect(requests[9]?.allowTools).toBe(false);
+    expect(message).toEqual({ type: 'text', body: 'Todavía no cancelé nada: ¿querés que lo cancele?' });
+    expect(record).toMatchObject({ outcome: 'tool_limit', llmCalls: 10 });
+  });
+
+  it('en el tope de herramientas, un texto que afirma un cambio que no pasó tampoco llega a la clienta', async () => {
+    const tool = changeTool('cancelar_turno', { cancelado: false, faltaConfirmar: true }, false);
+    const script: ScriptStep[] = [
+      ...Array.from({ length: MAX_TOOL_CALLS_PER_REPLY }, () => callTools([{ name: 'cancelar_turno' }])),
+      finalAnswer('Cancelé tu turno del viernes.'),
+      finalAnswer('Ya te quedó cancelado.'),
+    ];
+    const { run, requests } = agent(script, [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(10);
+    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(record.outcome).toBe('fallback_unconfirmed_change');
+  });
+
+  it('un turno con herramientas pedidas sin ejecutar que afirma un cambio no se puede corregir: va el texto fijo', async () => {
+    const tool = reschedule();
+    const withPendingTools = callTools([{ name: 'reprogramar_turno' }], {
+      stopReason: 'end',
+      text: JSON.stringify({ texto: CLAIM, opciones: [], derivar: null }),
+    });
+    const { run, requests } = agent([withPendingTools], [tool.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(1);
+    expect(tool.run).not.toHaveBeenCalled();
+    expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+    expect(record.outcome).toBe('fallback_unconfirmed_change');
+  });
+
+  it('la respuesta corregida que deriva respeta la derivación', async () => {
+    const script: ScriptStep[] = [
+      finalAnswer(CLAIM),
+      handoffAnswer('Eso lo ve una persona del equipo, que te responde mañana.', {
+        motivo: 'queja',
+        resumen: REAL_SUMMARY,
+      }),
+    ];
+    const { run } = agent(script);
+
+    const { handoff } = await run();
+
+    expect(handoff).toEqual({ reason: 'complaint', summary: REAL_SUMMARY });
+  });
+
+  describe('un fallback no se corrige', () => {
+    const cases: [string, ScriptStep, string][] = [
+      ['el proveedor se negó', finalAnswer(CLAIM, [], { stopReason: 'refusal' }), 'fallback_refusal'],
+      ['la respuesta se cortó', finalAnswer(CLAIM, [], { stopReason: 'max_tokens' }), 'fallback_max_tokens'],
+      ['la salida no es JSON', rawAnswer(CLAIM), 'fallback_invalid_output'],
+    ];
+
+    it.each(cases)('%s', async (_name, step, outcome) => {
+      const { run, requests } = agent([step]);
+
+      const { message, run: record } = await run();
+
+      expect(requests).toHaveLength(1);
+      expect(message).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+      expect(record.outcome).toBe(outcome);
+    });
+  });
+
+  it('las llamadas de la corrección cuentan en el registro: tokens y herramientas', async () => {
+    const tool = reschedule();
+    const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    const script: ScriptStep[] = [
+      finalAnswer(CLAIM, [], { usage: usage(100) }),
+      callTools([{ name: 'reprogramar_turno' }], { usage: usage(200) }),
+      finalAnswer('Listo, quedó para el miércoles.', [], { usage: usage(300), model: 'modelo-b' }),
+    ];
+    const { run } = agent(script, [tool.tool]);
+
+    const { run: record } = await run();
+
+    expect(record).toMatchObject({
+      model: 'modelo-b',
+      llmCalls: 3,
+      usage: { inputTokens: 600, outputTokens: 30 },
+      toolCalls: ['reprogramar_turno'],
+    });
+  });
+
+  it('si se cancela la tarea después del aviso, no vuelve a llamar al modelo', async () => {
+    const controller = new AbortController();
+    const script: ScriptStep[] = [
+      () => {
+        controller.abort(new Error('tiempo agotado'));
+        return finalAnswer(CLAIM);
+      },
+    ];
+    const { run, requests } = agent(script);
+
+    await expect(run({ toolContext: { ...toolContext, signal: controller.signal } })).rejects.toThrow('tiempo agotado');
+    expect(requests).toHaveLength(1);
   });
 });

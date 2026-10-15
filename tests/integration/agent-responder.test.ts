@@ -753,7 +753,7 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
     expect(await conversationOf(f)).toMatchObject({ assistantStatus: 'active' });
   });
 
-  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output'] as const)(
+  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output', 'fallback_unconfirmed_change'] as const)(
     'si la vuelta anterior terminó en %s y esta también falla, deriva con "no entiende" y la clienta recibe el texto fijo',
     async (previous) => {
       const f = await setup();
@@ -777,6 +777,44 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
       expect((await runsOf(f)).map((run) => run.outcome)).toEqual([previous, 'handoff_not_understood']);
     },
   );
+
+  describe('un cambio de turno que ninguna herramienta confirmó (6.4)', () => {
+    const CLAIM = 'Listo, lo paso al miércoles 14/10 a las 15:30 con Mica. Ya te quedó reprogramado.';
+
+    it('la clienta recibe el texto fijo, nunca la confirmación falsa, y la vuelta queda con su propio motivo', async () => {
+      const f = await setup();
+      const pending = await pendingTexts(f, 'dale, el miércoles');
+
+      const { result } = reply(f, pending, [finalAnswer(CLAIM), finalAnswer(CLAIM)]);
+
+      expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
+      expect((await runsOf(f)).map((run) => run.outcome)).toEqual(['fallback_unconfirmed_change']);
+      expect(await handoffsOf(f)).toEqual([]);
+      expect(await conversationOf(f)).toMatchObject({ assistantStatus: 'active' });
+    });
+
+    it('cuenta como intento fallido: si la vuelta anterior también falló, deriva con "no entiende"', async () => {
+      const f = await setup();
+      await addPreviousRun(f, { outcome: 'fallback_invalid_output', at: minutesAgo(5) });
+      const pending = await pendingTexts(f, 'dale, el miércoles');
+
+      const { result } = reply(f, pending, [finalAnswer(CLAIM), finalAnswer(CLAIM)]);
+
+      expect(await result).toEqual({ type: 'text', body: notUnderstoodHandoffText('lo antes posible') });
+      expect(await handoffsOf(f)).toEqual([expect.objectContaining({ reason: 'not_understood', status: 'open' })]);
+      expect((await runsOf(f)).map((run) => run.outcome)).toEqual(['fallback_invalid_output', 'handoff_not_understood']);
+    });
+
+    it('si el modelo se corrige, la clienta recibe la respuesta corregida y la vuelta queda replied', async () => {
+      const f = await setup();
+      const pending = await pendingTexts(f, 'dale, el miércoles');
+
+      const { result } = reply(f, pending, [finalAnswer(CLAIM), finalAnswer('Todavía no lo moví: tocá el horario que querés.')]);
+
+      expect(await result).toEqual({ type: 'text', body: 'Todavía no lo moví: tocá el horario que querés.' });
+      expect((await runsOf(f)).map((run) => run.outcome)).toEqual(['replied']);
+    });
+  });
 
   it('el texto fijo dice cuándo responde una persona, según el horario del negocio', async () => {
     const f = await setup(null, {

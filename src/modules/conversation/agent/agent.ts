@@ -18,6 +18,7 @@ import {
   type OfferableOption,
   type ToolContext,
 } from '../tools/tool.js';
+import { claimsAppointmentChange } from './claimed-change.js';
 import type { LlmClient, LlmMessage, LlmResponse, LlmToolCall, LlmToolResult, LlmUsage } from './llm-client.js';
 import type { AgentOutcome } from './outcome.js';
 import { announcesPendingWork } from './pending-work.js';
@@ -52,6 +53,13 @@ export function notUnderstoodHandoffText(when: string): string {
  */
 export const PENDING_WORK_NOTICE =
   'En tu respuesta anunciaste que ibas a buscar o consultar algo, pero no llamaste a ninguna herramienta, y la respuesta se envía tal cual: la clienta no recibiría nada más. Llamá ahora a las herramientas que hagan falta y contestá con el resultado. Si no hace falta consultar nada, contestá sin anunciar una búsqueda.';
+
+/**
+ * Lo que se le dice al modelo cuando su respuesta afirma que un turno quedó reservado, cancelado o reprogramado y
+ * en la vuelta ninguna herramienta lo hizo (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export const UNCONFIRMED_CHANGE_NOTICE =
+  'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.';
 
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
@@ -193,24 +201,36 @@ function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   };
 }
 
+/** Lo que devuelve ejecutar una herramienta: el resultado para el modelo y si dejó un turno cambiado. */
+interface ExecutedToolCall {
+  result: LlmToolResult;
+  changedAppointment: boolean;
+}
+
 /** Ejecuta una herramienta pedida por el modelo y arma el resultado que se le devuelve. */
 async function executeToolCall(
   call: LlmToolCall,
   tools: Map<string, AgentTool<unknown>>,
   ctx: ToolContext,
   offered: Map<string, OfferableOption>,
-): Promise<LlmToolResult> {
+): Promise<ExecutedToolCall> {
   const tool = tools.get(call.name);
   if (!tool) {
     return {
-      toolCallId: call.id,
-      content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
-      isError: true,
+      result: {
+        toolCallId: call.id,
+        content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
+        isError: true,
+      },
+      changedAppointment: false,
     };
   }
   const result = await runTool(tool, call.input, ctx);
   for (const option of result.options) offered.set(option.id, option);
-  return { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false };
+  return {
+    result: { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false },
+    changedAppointment: result.changedAppointment === true,
+  };
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
@@ -257,6 +277,11 @@ function parseFinalAnswer(text: string): FinalAnswer | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** El texto afirma que un turno cambió y en la vuelta ninguna herramienta lo confirmó (6.4). */
+function unconfirmedChange(text: string, changedAppointment: boolean): boolean {
+  return !changedAppointment && claimsAppointmentChange(text);
+}
+
 export async function runAgent(deps: AgentDependencies, input: AgentInput): Promise<AgentResult> {
   const { llm, logger, monotonicNow = () => performance.now() } = deps;
   const { toolContext } = input;
@@ -277,7 +302,9 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let llmCalls = 0;
   let hitToolLimit = false;
-  // Solo se le hace notar UNA vez que anunció una búsqueda sin hacerla.
+  // Alguna herramienta dejó un turno reservado, cancelado o reprogramado en esta vuelta.
+  let changedAppointment = false;
+  // Solo se le hace notar UNA vez, por lo que sea: un anuncio de búsqueda sin hacerla o un cambio que no pasó.
   let corrected = false;
   let answer: FinalAnswer | null;
   let response: LlmResponse;
@@ -318,27 +345,45 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
         );
         continue;
       }
+      // Afirma un cambio que ninguna herramienta hizo en la vuelta (6.4): nunca se le confirma a la clienta algo que no
+      // pasó, así que una vez se lo hace notar. Con un cambio confirmado en la vuelta no hay nada que corregir.
+      const claimsUnconfirmedChange = answer !== null && unconfirmedChange(answer.texto, changedAppointment);
+      if (claimsUnconfirmedChange && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: UNCONFIRMED_CHANGE_NOTICE },
+        );
+        continue;
+      }
       // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
       if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');
       break;
     }
 
     const room = MAX_TOOL_CALLS_PER_REPLY - executedTools.length;
-    const results = await Promise.all(
-      response.toolCalls.map((call, index): Promise<LlmToolResult> => {
+    const executed = await Promise.all(
+      response.toolCalls.map((call, index): Promise<ExecutedToolCall> => {
         if (index >= room) {
           return Promise.resolve({
-            toolCallId: call.id,
-            content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
-            isError: true,
+            result: {
+              toolCallId: call.id,
+              content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
+              isError: true,
+            },
+            changedAppointment: false,
           });
         }
         return executeToolCall(call, toolsByName, toolContext, offered);
       }),
     );
     executedTools.push(...response.toolCalls.slice(0, room).map((call) => call.name));
+    changedAppointment ||= executed.some((call) => call.changedAppointment);
 
-    messages.push({ role: 'assistant_turn', turn: response.assistantTurn }, { role: 'tool_results', results });
+    messages.push(
+      { role: 'assistant_turn', turn: response.assistantTurn },
+      { role: 'tool_results', results: executed.map((call) => call.result) },
+    );
   }
 
   const finish = (message: OutgoingMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
@@ -360,6 +405,13 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   if (response.stopReason === 'max_tokens') return fallback('fallback_max_tokens');
 
   if (!answer) return fallback('fallback_invalid_output');
+
+  // Sigue afirmando un cambio que no pasó, o no hubo forma de avisarle (quedaron herramientas pedidas sin ejecutar):
+  // la clienta nunca recibe una confirmación falsa. Sin el texto en el log, que es de la conversación.
+  if (unconfirmedChange(answer.texto, changedAppointment)) {
+    logger.debug('La respuesta afirma un cambio de turno que ninguna herramienta confirmó');
+    return fallback('fallback_unconfirmed_change');
+  }
 
   const requested = new Set(answer.opciones);
   const chosen: OfferableOption[] = [];
