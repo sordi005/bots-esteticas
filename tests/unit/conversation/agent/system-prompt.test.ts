@@ -191,6 +191,39 @@ describe('buildSystemPrompt: derivar a una persona (4.8)', () => {
   });
 });
 
+describe('buildSystemPrompt: una hora puntual se verifica con una herramienta (decisión 29)', () => {
+  const prompt = buildSystemPrompt(example);
+  const data = prompt.slice(prompt.indexOf('## De dónde sale cada dato'), prompt.indexOf('## Elecciones con botones o lista'));
+
+  it('si la clienta pregunta por una hora puntual, la verifica con consultar_hora o consultar_hora_para_reprogramar', () => {
+    expect(data).toContain(
+      'Si la clienta pregunta por una hora puntual, verificala con consultar_hora (o consultar_hora_para_reprogramar si es para mover un turno).',
+    );
+  });
+
+  it('nunca dice que un horario está ocupado, que se ocupó o que no existe si una herramienta no lo dijo', () => {
+    expect(data).toContain(
+      'Nunca digas que un horario está ocupado, que se ocupó o que no existe si una herramienta no lo dijo.',
+    );
+  });
+
+  it('explica por qué: las opciones ofrecidas están separadas, así que una hora que falta no está ocupada por eso', () => {
+    expect(data).toMatch(/que una hora no esté entre las que ofreciste no quiere decir que esté ocupada/);
+  });
+
+  it('nombra las dos herramientas en la lista de dónde sale cada dato', () => {
+    const list = data.slice(data.indexOf('Los precios, los datos del negocio'), data.indexOf('Nunca inventes ni calcules'));
+
+    expect(list).toMatch(/consultar_hora \(/);
+    expect(list).toMatch(/consultar_hora_para_reprogramar \(/);
+  });
+
+  it('sigue sin fechas ni horas en el texto, para que sea idéntico entre llamadas del mismo negocio', () => {
+    expect(prompt).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(buildSystemPrompt({ ...example })).toBe(prompt);
+  });
+});
+
 describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () => {
   const prompt = buildSystemPrompt(example);
   const section = (from: string, to: string) => prompt.slice(prompt.indexOf(from), prompt.indexOf(to));

@@ -21,8 +21,10 @@ export const checkAvailabilityTool: AgentTool<AvailabilityInput> = {
     '15:30"): ofrecelos tal cual, sin cambiar ni inventar horarios. Si hayMas es true podés ofrecer ' +
     '"Ver otros horarios": al elegirlo, volvé a llamar con despues_de. Si el servicio requiere ' +
     'consulta previa no hay horarios: ofrecé que lo vea una persona. Si un día aparece en ' +
-    'diasCerrados, explicale el motivo a la clienta. Es para reservar un turno nuevo: para mover un ' +
-    'turno que la clienta ya tiene usá consultar_horarios_para_reprogramar.',
+    'diasCerrados, explicale el motivo a la clienta. Los horarios ofrecidos están separados entre sí: si la ' +
+    'clienta pregunta por una hora puntual que no está entre ellos, no la des por ocupada, verificala con ' +
+    'consultar_hora. Es para reservar un turno nuevo: para mover un turno que la clienta ya tiene usá ' +
+    'consultar_horarios_para_reprogramar.',
   input: availabilityInput,
   run: (input, ctx) =>
     searchAvailability(

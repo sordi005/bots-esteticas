@@ -74,6 +74,8 @@ describe('agentTools: las herramientas que usa el agente', () => {
     expect(agentTools.map((tool) => tool.name)).toEqual([
       ...consultationTools.map((tool) => tool.name),
       'consultar_horarios_para_reprogramar',
+      'consultar_hora',
+      'consultar_hora_para_reprogramar',
       'crear_reserva',
       'listar_turnos_de_la_clienta',
       'reprogramar_turno',
@@ -99,6 +101,44 @@ describe('agentTools: las herramientas que usa el agente', () => {
     expect(schema.properties.turno_id?.description).toMatch(/listar_turnos_de_la_clienta/);
     expect(tool?.description).toMatch(/reprogramar_turno, no para crear_reserva/);
     expect(tool?.description).toMatch(/consultar_disponibilidad/);
+  });
+
+  it('consultar_hora pide el servicio, la fecha y la hora; la profesional es solo un filtro opcional (decisión 29)', () => {
+    const schema = agentSchemaOf('consultar_hora');
+    const tool = agentTools.find((candidate) => candidate.name === 'consultar_hora');
+
+    expect(Object.keys(schema.properties)).toEqual(['servicio_id', 'profesional_id', 'fecha', 'hora']);
+    expect(schema.required).toEqual(['servicio_id', 'fecha', 'hora']);
+    expect(schema.properties.hora?.description).toMatch(/HH:MM/);
+    expect(schema.properties.hora?.description).toMatch(/No la conviertas/);
+    expect(schema.properties.fecha?.description).toMatch(/AAAA-MM-DD/);
+    // Cuándo usarla, y que sale de lo que dice la herramienta (6.4).
+    expect(tool?.description).toMatch(/hora puntual que no está entre las que ofreciste/);
+    expect(tool?.description).toMatch(/Nunca digas que un horario está ocupado, que se ocupó o que no existe si esta herramienta no lo dijo/);
+    expect(tool?.description).toMatch(/consultar_hora_para_reprogramar/);
+    expect(tool?.description).not.toMatch(/turno_id/);
+  });
+
+  it('consultar_hora_para_reprogramar pide el turno, la fecha y la hora, y no tiene servicio ni profesional (decisión 29)', () => {
+    const schema = agentSchemaOf('consultar_hora_para_reprogramar');
+    const tool = agentTools.find((candidate) => candidate.name === 'consultar_hora_para_reprogramar');
+
+    expect(Object.keys(schema.properties)).toEqual(['turno_id', 'fecha', 'hora']);
+    expect(schema.required).toEqual(['turno_id', 'fecha', 'hora']);
+    expect(schema.properties.turno_id?.description).toMatch(/listar_turnos_de_la_clienta/);
+    expect(tool?.description).toMatch(/hora puntual que no está entre las que ofreciste para mover el turno/);
+    expect(tool?.description).toMatch(/reprogramar_turno, no para crear_reserva/);
+    expect(tool?.description).toMatch(/Nunca digas que un horario está ocupado, que se ocupó o que no existe si esta herramienta no lo dijo/);
+    expect(tool?.description).toMatch(/consultar_hora\./);
+  });
+
+  it('las consultas de horarios mandan a la de hora puntual que les corresponde: reservar a consultar_hora y mover un turno a consultar_hora_para_reprogramar', () => {
+    const reserve = agentTools.find((candidate) => candidate.name === 'consultar_disponibilidad');
+    const move = agentTools.find((candidate) => candidate.name === 'consultar_horarios_para_reprogramar');
+
+    expect(reserve?.description).toMatch(/hora puntual[^.]*consultar_hora(?![a-z_])/);
+    expect(reserve?.description).not.toMatch(/consultar_hora_para_reprogramar[^.]*hora puntual/);
+    expect(move?.description).toMatch(/hora puntual[^.]*consultar_hora_para_reprogramar/);
   });
 
   it('crear_reserva pide el id del horario y, opcional, el nombre', () => {
