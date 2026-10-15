@@ -12,7 +12,7 @@ const failure = (motivo: string, mensaje: string): { failure: ToolResult } => ({
  * El turno que se quiere mover, verificado: tiene que ser de la clienta que escribe (regla 2) y
  * todavía ocupar horario. Si no, el error que se le devuelve al modelo.
  */
-async function loadAppointmentToMove(
+export async function loadAppointmentToMove(
   ctx: ToolContext,
   appointmentId: string,
 ): Promise<{ appointment: CustomerAppointment } | { failure: ToolResult }> {
@@ -47,8 +47,10 @@ export const checkRescheduleAvailabilityTool: AgentTool<RescheduleAvailabilityIn
     'ya elegidos y escritos ("viernes 9/10 15:30"): ofrecelos tal cual, sin cambiar ni inventar horarios. Sus ids ' +
     'sirven para reprogramar_turno, no para crear_reserva. Si hayMas es true podés ofrecer "Ver otros horarios": ' +
     'al elegirlo, volvé a llamar con el mismo turno_id y despues_de. Si un día aparece en diasCerrados, explicale ' +
-    'el motivo a la clienta. Solo consulta turnos de la clienta que escribe. Es únicamente para mover un turno ' +
-    'que ya existe: para reservar uno nuevo usá consultar_disponibilidad.',
+    'el motivo a la clienta. Los horarios ofrecidos están separados entre sí: si la clienta pregunta por una hora ' +
+    'puntual que no está entre ellos, no la des por ocupada, verificala con consultar_hora_para_reprogramar. ' +
+    'Solo consulta turnos de la clienta que escribe. Es únicamente para mover un turno que ya existe: para ' +
+    'reservar uno nuevo usá consultar_disponibilidad.',
   input: rescheduleAvailabilityInput,
   async run(input, ctx) {
     ctx.signal.throwIfAborted();
