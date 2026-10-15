@@ -401,6 +401,54 @@ describe('createAgentResponder: qué opciones eligió la clienta, para las herra
     expect(await chosenSeenByTools(f, pending)).toEqual(new Set([slot]));
   });
 
+  describe('después de una derivación (4.8): una elección de antes no sirve para reservar', () => {
+    const resumeAt = (f: Fixture, when: Date) =>
+      db.update(conversations).set({ resumedAt: when }).where(eq(conversations.id, f.conversationId));
+
+    it('la elegida antes de la reanudación no cuenta, aunque sea de las últimas 24 horas', async () => {
+      const f = await setup();
+      await choiceMessage(f, choiceIds.slot(f.semi, f.mica, tuesday), hoursAgo(5), true);
+      await resumeAt(f, hoursAgo(1));
+      const pending = await pendingTexts(f, 'Caro Pérez');
+
+      expect(await chosenSeenByTools(f, pending)).toEqual(new Set());
+    });
+
+    it('la elegida después de la reanudación sí cuenta, y la anterior sigue sin contar', async () => {
+      const f = await setup();
+      const before = choiceIds.slot(f.semi, f.mica, tuesday);
+      const after = choiceIds.slot(f.semi, f.mica, wednesday);
+      await choiceMessage(f, before, hoursAgo(5), true);
+      await resumeAt(f, hoursAgo(2));
+      await choiceMessage(f, after, hoursAgo(1), true);
+      const pending = await pendingTexts(f, 'Caro Pérez');
+
+      expect(await chosenSeenByTools(f, pending)).toEqual(new Set([after]));
+    });
+
+    it('con una reanudación de hace más de 24 horas, manda la ventana de 24 horas', async () => {
+      const f = await setup();
+      const old = choiceIds.slot(f.semi, f.mica, tuesday);
+      const recent = choiceIds.slot(f.semi, f.mica, wednesday);
+      await choiceMessage(f, old, hoursAgo(25), true);
+      await choiceMessage(f, recent, hoursAgo(23), true);
+      await resumeAt(f, hoursAgo(48));
+      const pending = await pendingTexts(f, 'Caro Pérez');
+
+      expect(await chosenSeenByTools(f, pending)).toEqual(new Set([recent]));
+    });
+
+    it('la elección de esta vuelta cuenta aunque sea anterior a la reanudación', async () => {
+      const f = await setup();
+      const slot = choiceIds.slot(f.semi, f.mica, tuesday);
+      // Llegó unos segundos antes de que el asistente se reanudara para procesarla.
+      const pending = [await choiceMessage(f, slot, minutesAgo(1), false)];
+      await resumeAt(f, new Date(NOW.getTime() - 30_000));
+
+      expect(await chosenSeenByTools(f, pending)).toEqual(new Set([slot]));
+    });
+  });
+
   it('no cuentan los mensajes de texto, ni lo que escribe la clienta aunque parezca un id', async () => {
     const f = await setup();
     const slot = choiceIds.slot(f.semi, f.mica, tuesday);
@@ -1245,5 +1293,131 @@ describe('createAgentResponder: el asistente se reanudó después de una derivac
       expect(after?.system).toBe(before?.system);
       expect(after?.system).not.toMatch(RESUMED_LINE_PATTERN);
     });
+  });
+});
+
+describe('createAgentResponder: el historial arranca en la reanudación (4.8)', () => {
+  const resumedAt = (f: Fixture, when: Date) =>
+    db.update(conversations).set({ resumedAt: when }).where(eq(conversations.id, f.conversationId));
+  const NEW_REQUEST = 'tenés turno para semi el lunes a la tarde?';
+
+  async function sentToTheModel(f: Fixture, ...texts: string[]) {
+    const { result, requests } = reply(f, await pendingTexts(f, ...(texts.length > 0 ? texts : [NEW_REQUEST])), [
+      finalAnswer('Dale'),
+    ]);
+    await result;
+    return requests[0];
+  }
+
+  it('el ciclo de la prueba manual: lo hablado antes de la derivación y durante la pausa no llega al modelo', async () => {
+    const f = await setup();
+    await addInbound(f, { text: 'quiero hablar con una persona', at: hoursAgo(6) });
+    await addOutbound(
+      f,
+      { type: 'text', body: 'Ya le pasé tu pedido a una persona del equipo.' },
+      hoursAgo(6),
+    );
+    // Durante la pausa: se marcaron procesados sin contestar.
+    await addInbound(f, { text: 'Hola', at: hoursAgo(3) });
+    await addInbound(f, { text: 'que paso con la persona', at: hoursAgo(2) });
+    await resumedAt(f, minutesAgo(1));
+
+    const request = await sentToTheModel(f);
+
+    expect(conversationOf(request?.messages ?? [])).toEqual([`user: ${NEW_REQUEST}`]);
+    expect(request?.turnContext).toMatch(/El asistente se reanudó después de una derivación/);
+    // Nada de lo anterior se filtra por otro lado.
+    expect(JSON.stringify(request?.messages)).not.toMatch(/persona/);
+  });
+
+  it('lo que pasó después de reanudarse sí lo ve, en orden', async () => {
+    const f = await setup();
+    await addInbound(f, { text: 'que paso con la persona', at: hoursAgo(2) });
+    await resumedAt(f, minutesAgo(30));
+    await addInbound(f, { text: 'tenés turno para semi?', at: minutesAgo(20) });
+    await addOutbound(f, { type: 'text', body: 'Sí, ¿qué día?' }, minutesAgo(19));
+
+    const request = await sentToTheModel(f, 'el lunes');
+
+    expect(conversationOf(request?.messages ?? [])).toEqual([
+      'user: tenés turno para semi?',
+      'assistant: Sí, ¿qué día?',
+      'user: el lunes',
+    ]);
+  });
+
+  it('sin fecha de reanudación, el historial es el de siempre (las últimas 24 horas)', async () => {
+    const f = await setup();
+    await addInbound(f, { text: 'Hace 25 horas', at: hoursAgo(25) });
+    await addInbound(f, { text: 'Hace 3 horas', at: hoursAgo(3) });
+    await addInbound(f, { text: 'Hace 2 horas', at: hoursAgo(2) });
+
+    const request = await sentToTheModel(f);
+
+    expect(conversationOf(request?.messages ?? [])).toEqual([
+      'user: Hace 3 horas',
+      'user: Hace 2 horas',
+      `user: ${NEW_REQUEST}`,
+    ]);
+  });
+
+  it('con una reanudación de hace más de 24 horas, manda la ventana de 24 horas', async () => {
+    const f = await setup();
+    await addInbound(f, { text: 'Hace 40 horas', at: hoursAgo(40) });
+    await addInbound(f, { text: 'Hace 25 horas', at: hoursAgo(25) });
+    await addInbound(f, { text: 'Hace 23 horas', at: hoursAgo(23) });
+    await resumedAt(f, hoursAgo(48));
+
+    const request = await sentToTheModel(f);
+
+    expect(conversationOf(request?.messages ?? [])).toEqual(['user: Hace 23 horas', `user: ${NEW_REQUEST}`]);
+  });
+
+  it('con una reanudación de hace menos de 24 horas, manda la reanudación', async () => {
+    const f = await setup();
+    await addInbound(f, { text: 'Hace 23 horas', at: hoursAgo(23) });
+    await addInbound(f, { text: 'Hace 9 horas', at: hoursAgo(9) });
+    await resumedAt(f, hoursAgo(10));
+
+    const request = await sentToTheModel(f);
+
+    expect(conversationOf(request?.messages ?? [])).toEqual(['user: Hace 9 horas', `user: ${NEW_REQUEST}`]);
+  });
+
+  it('el tope de 20 mensajes sigue valiendo dentro de lo que ve desde la reanudación', async () => {
+    const f = await setup();
+    await resumedAt(f, hoursAgo(10));
+    for (let index = 0; index < 25; index += 1) {
+      await addInbound(f, { text: `Mensaje ${String(index)}`, at: minutesAgo(500 - index) });
+    }
+
+    const request = await sentToTheModel(f);
+
+    const sent = conversationOf(request?.messages ?? []);
+    expect(sent).toHaveLength(21);
+    expect(sent[0]).toBe('user: Mensaje 5');
+  });
+
+  it('la reanudación de otra conversación no recorta esta', async () => {
+    const f = await setup();
+    const other = await setup();
+    await addInbound(f, { text: 'Hace 3 horas', at: hoursAgo(3) });
+    await resumedAt(other, minutesAgo(1));
+
+    const request = await sentToTheModel(f);
+
+    expect(conversationOf(request?.messages ?? [])).toEqual(['user: Hace 3 horas', `user: ${NEW_REQUEST}`]);
+  });
+
+  it('"conversación nueva" no cambia: sigue contando los salientes de las últimas 24 horas', async () => {
+    const reused = await setup();
+    await addOutbound(reused, { type: 'text', body: 'Una persona te va a responder.' }, hoursAgo(3));
+    await resumedAt(reused, hoursAgo(1));
+    const stale = await setup();
+    await addOutbound(stale, { type: 'text', body: 'Una persona te va a responder.' }, hoursAgo(30));
+    await resumedAt(stale, hoursAgo(1));
+
+    expect((await sentToTheModel(reused))?.turnContext).toMatch(/Conversación nueva: no/);
+    expect((await sentToTheModel(stale))?.turnContext).toMatch(/Conversación nueva: sí/);
   });
 });

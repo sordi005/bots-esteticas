@@ -119,7 +119,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     }
 
     const resumedAt = await loadResumedAt(db, turn);
-    const history = await loadHistory(db, turn, at);
+    const since = historySince(at, resumedAt);
+    const history = await loadHistory(db, turn, since);
     const isNewConversation = !(await sentRecently(db, turn, at));
     // Reanudado y sin haberle escrito todavía a la clienta: el modelo empieza de cero y tiene que saber por qué (4.8).
     const resumedAfterHandoff = resumedAt !== null && !(await assistantWroteSince(db, turn, resumedAt));
@@ -137,8 +138,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
         choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
       }
     }
-    // Y lo que eligió antes, en las últimas 24 horas: crear_reserva y reprogramar_turno solo actúan sobre eso.
-    for (const id of await loadEarlierChoiceIds(db, turn, at)) chosenOptionIds.add(id);
+    // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
+    for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
 
     // Se calcula acá y no en el modelo (4.8): si deriva, escribe este texto tal cual en su respuesta.
     const humanReplyWhen = await describeWhenHumanReplies(db, { tenantId, now: at });
@@ -220,11 +221,22 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
 }
 
 /**
- * Los mensajes anteriores a los pendientes: hasta 20 de las últimas 24 horas, entrantes ya
- * procesados y salientes. Los entrantes sin procesar son los pendientes (o llegaron después y
- * son de la próxima vuelta): nunca van en el historial, así no se repite ninguno.
+ * Desde cuándo ve el modelo la conversación: lo más reciente entre la ventana de 24 horas y la
+ * reanudación del asistente después de una derivación (4.8). Lo anterior a la reanudación ya lo
+ * atendió una persona: si el modelo lo viera, volvería a derivar por un pedido que ya no está
+ * pendiente. Vale para el historial y para las opciones elegidas; el instante exacto queda afuera.
  */
-async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<LlmMessage[]> {
+function historySince(at: Date, resumedAt: Date | null): Date {
+  const windowStart = new Date(at.getTime() - HISTORY_WINDOW_MS);
+  return resumedAt !== null && resumedAt.getTime() > windowStart.getTime() ? resumedAt : windowStart;
+}
+
+/**
+ * Los mensajes anteriores a los pendientes: hasta 20 desde `since`, entrantes ya procesados y
+ * salientes. Los entrantes sin procesar son los pendientes (o llegaron después y son de la
+ * próxima vuelta): nunca van en el historial, así no se repite ninguno.
+ */
+async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, since: Date): Promise<LlmMessage[]> {
   const rows = await db
     .select({ direction: messages.direction, type: messages.type, content: messages.content })
     .from(messages)
@@ -232,7 +244,7 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
       and(
         eq(messages.tenantId, turn.tenantId),
         eq(messages.conversationId, turn.conversationId),
-        gt(messages.occurredAt, new Date(at.getTime() - HISTORY_WINDOW_MS)),
+        gt(messages.occurredAt, since),
         or(
           eq(messages.direction, 'outbound'),
           and(eq(messages.direction, 'inbound'), isNotNull(messages.processedAt)),
@@ -262,11 +274,11 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, at: Date)
 }
 
 /**
- * Los ids de las opciones que la clienta eligió con un botón o una lista en las últimas 24 horas,
- * sin contar esta vuelta. Mismo criterio que el historial (entrantes ya procesados, de esta
- * conversación) pero sin tope de mensajes: la ventana es la que manda, no cuántos ve el modelo.
+ * Los ids de las opciones que la clienta eligió con un botón o una lista desde `since`, sin contar
+ * esta vuelta. Mismo criterio que el historial (entrantes ya procesados, de esta conversación,
+ * mismo corte) pero sin tope de mensajes: la ventana es la que manda, no cuántos ve el modelo.
  */
-async function loadEarlierChoiceIds(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<string[]> {
+async function loadEarlierChoiceIds(db: NodePgDatabase, turn: ConversationTurn, since: Date): Promise<string[]> {
   const rows = await db
     .select({ type: messages.type, content: messages.content })
     .from(messages)
@@ -276,7 +288,7 @@ async function loadEarlierChoiceIds(db: NodePgDatabase, turn: ConversationTurn, 
         eq(messages.conversationId, turn.conversationId),
         eq(messages.direction, 'inbound'),
         isNotNull(messages.processedAt),
-        gt(messages.occurredAt, new Date(at.getTime() - HISTORY_WINDOW_MS)),
+        gt(messages.occurredAt, since),
         notInArray(
           messages.id,
           turn.messages.map((message: ReceivedMessage) => message.id),
