@@ -10,6 +10,8 @@ import type { EvalResult } from './evaluate.js';
  */
 
 interface OfferedSlot {
+  /** Para qué es: reservar (`horario:`) o mover un turno (`reprogramar:`). */
+  kind: 'slot' | 'reschedule';
   start: Date;
   /** La profesional del horario, tal como lo resolvió la base. Null si no se pudo resolver. */
   professional: string | null;
@@ -31,6 +33,7 @@ function offeredSlots(result: EvalResult, timeZone: string): OfferedSlot[] {
     const resolved = option.resuelta;
     const known = resolved?.tipo === 'horario' || resolved?.tipo === 'reprogramar' ? resolved : null;
     slots.push({
+      kind: choice.kind,
       start: choice.start,
       professional: known?.profesionalNombre ?? null,
       local: instantToLocal(choice.start, timeZone),
@@ -101,6 +104,30 @@ export function verifySlotNotOffered(
 }
 
 /**
+ * Ofreció, como opción, justo la hora que preguntó la clienta (inicio local "AAAA-MM-DD HH:MM"), para reservar
+ * (`horario:`) o para mover un turno (`reprogramar:`), con la profesional si se pide, y sigue libre según la base.
+ * Es lo que tiene que pasar cuando `consultar_hora` dice que la hora está libre (decisión 29).
+ */
+export function verifySlotOffered(
+  result: EvalResult,
+  expected: { inicio: string; profesional?: string; para: 'reservar' | 'reprogramar' },
+  timeZone: string,
+): string | null {
+  const wanted = expected.para === 'reservar' ? 'slot' : 'reschedule';
+  const found = offeredSlots(result, timeZone).find(
+    (slot) =>
+      slot.kind === wanted &&
+      formatLocalStart(slot.start, timeZone) === expected.inicio &&
+      (expected.profesional === undefined || slot.professional === expected.profesional),
+  );
+  if (!found) {
+    const withWho = expected.profesional ? ` con ${expected.profesional}` : '';
+    return `No ofreció el horario ${expected.inicio}${withWho} para ${expected.para}`;
+  }
+  return found.stillFree ? null : `El horario ${label(found)} (hora local) no está libre según la base`;
+}
+
+/**
  * Ofreció horarios para MOVER el turno (`reprogramar:`) y ninguno para reservar (`horario:`): la
  * intención va en el id (decisión 28). Cada uno se volvió a resolver contra la base, que solo
  * resuelve turnos de ESTA clienta.
@@ -112,6 +139,7 @@ export function verifyOffersRescheduleSlots(result: EvalResult, timeZone: string
     const choice = parseChoiceId(option.id);
     if (choice?.kind !== 'slot' && choice?.kind !== 'reschedule') continue;
     const slot: OfferedSlot = {
+      kind: choice.kind,
       start: choice.start,
       professional: null,
       local: instantToLocal(choice.start, timeZone),

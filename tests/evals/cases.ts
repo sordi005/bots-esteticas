@@ -6,6 +6,7 @@ import {
   verifyOffersFreeSlots,
   verifyOffersRescheduleSlots,
   verifySlotNotOffered,
+  verifySlotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
   verifySlotsNotRepeatedInText,
@@ -78,6 +79,18 @@ const RESCHEDULE_HISTORY: EvalHistoryEntry[] = [
   {
     asistente: 'Para el miércoles 14/10 Mica tiene estos horarios:',
     botones: ['mié 14/10 10:00', 'mié 14/10 15:30', 'mié 14/10 17:00'],
+  },
+];
+
+/**
+ * Lo que ofreció el asistente cuando la clienta preguntó por el viernes a la tarde (decisión 29): horarios separados por
+ * 90 minutos, así que entre uno y otro hay horas libres que no se ofrecieron (las 17:30 con Mica, por ejemplo).
+ */
+const FRIDAY_AFTERNOON_HISTORY: EvalHistoryEntry[] = [
+  { clienta: 'tenés turno para semi el viernes a la tarde?' },
+  {
+    asistente: 'Para el viernes 9/10 tengo estos horarios:',
+    botones: ['vie 9/10 15:00', 'vie 9/10 16:30', 'vie 9/10 18:00'],
   },
 ];
 
@@ -421,6 +434,79 @@ export const evalCases: EvalCase[] = [
       noLlama: ['crear_reserva'],
       verifica: (resultado) =>
         verifyMovedOrDerived(resultado, { clave: 'martes', movidoA: '2026-10-14 15:30', original: '2026-10-13 17:00' }),
+    },
+  },
+
+  // ─── H8: una hora puntual (decisión 29) ────────────────────────────────────────────────────
+
+  {
+    // La prueba manual con Meta: la clienta preguntó por una hora que no estaba entre las ofrecidas (separadas por 90
+    // minutos) y el asistente contestó «ya no hay lugar: se ocupó» sin verificar. Las 17:30 del viernes con Mica
+    // están libres en el seed: tiene que consultarlas con consultar_hora y ofrecerlas, sin decir que están ocupadas.
+    nombre: 'hora_puntual_libre',
+    mensajes: ['y a las 17:30 no tenés?'],
+    preparar: { historial: FRIDAY_AFTERNOON_HISTORY },
+    espera: {
+      herramientas: ['consultar_hora'],
+      noMenciona: ['ocup'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifySlotOffered(resultado, { inicio: '2026-10-09 17:30', para: 'reservar' }, EVAL_TIME_ZONE),
+          verifyOffersFreeSlots(resultado, EVAL_TIME_ZONE),
+        ),
+    },
+  },
+  {
+    // Lo mismo para mover un turno: tiene el del martes 13/10 con Mica, le ofrecieron el miércoles 10:00, 15:30 y 17:00,
+    // y pregunta por las 11:30, que están libres. Consulta con consultar_hora_para_reprogramar y ofrece un id
+    // reprogramar: (nunca uno para reservar, decisión 28); el turno no se mueve hasta que ella elija.
+    nombre: 'hora_puntual_reprogramar',
+    mensajes: ['y a las 11:30 no hay?'],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT], historial: RESCHEDULE_HISTORY },
+    espera: {
+      herramientas: ['consultar_hora_para_reprogramar'],
+      noLlama: ['crear_reserva'],
+      noMenciona: ['ocup'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifySlotOffered(resultado, { inicio: '2026-10-14 11:30', profesional: 'Mica', para: 'reprogramar' }, EVAL_TIME_ZONE),
+          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
+          verifyAppointment(resultado, 'martes', { estado: 'PENDING_DEPOSIT', inicio: '2026-10-13 17:00' }),
+        ),
+    },
+  },
+  {
+    // La hora que pregunta la ocupa otra clienta (17:30 del viernes con Mica): la herramienta lo dice, el asistente
+    // ofrece alternativas libres, no vuelve a ofrecer la ocupada y no crea ningún turno.
+    nombre: 'hora_puntual_ocupada',
+    mensajes: ['y a las 17:30 no tenés?'],
+    preparar: {
+      historial: [
+        { clienta: 'tenés turno para semi el viernes?' },
+        {
+          asistente: 'Para el viernes 9/10 tengo estos horarios:',
+          botones: ['vie 9/10 9:00', 'vie 9/10 10:30', 'vie 9/10 12:00'],
+        },
+      ],
+      turnos: [
+        {
+          clave: 'maria',
+          servicio: SEMI,
+          profesional: 'Mica',
+          inicio: '2026-10-09 17:30',
+          otraClienta: 'María González',
+        },
+      ],
+    },
+    espera: {
+      herramientas: ['consultar_hora'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointmentsOf(resultado, 'clienta', []),
+          verifyAppointment(resultado, 'maria', { estado: 'PENDING_DEPOSIT', inicio: '2026-10-09 17:30' }),
+          verifyOffersFreeSlots(resultado, EVAL_TIME_ZONE),
+          verifySlotNotOffered(resultado, { profesional: 'Mica', inicio: '2026-10-09 17:30' }, EVAL_TIME_ZONE),
+        ),
     },
   },
 

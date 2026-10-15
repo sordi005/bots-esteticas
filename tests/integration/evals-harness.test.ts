@@ -50,6 +50,13 @@ function lastToolOutputs(request: LlmRequest): Record<string, unknown>[] {
   return last.results.map((result) => JSON.parse(result.content) as Record<string, unknown>);
 }
 
+/** La llamada n al modelo (falla con un mensaje claro si el modelo no se llamó tantas veces). */
+function requestAt(requests: LlmRequest[], index: number): LlmRequest {
+  const found = requests[index];
+  if (!found) throw new Error(`El modelo se llamó ${String(requests.length)} veces y se esperaba la llamada ${String(index + 1)}`);
+  return found;
+}
+
 describe('runEvalCase: precio_semi_simple con un modelo falso', () => {
   const evalCase = byName('precio_semi_simple');
   const script = (): ScriptStep[] => [
@@ -251,6 +258,92 @@ describe('runEvalCase: opciones', () => {
       },
     ]).result;
 
+    expect(evaluateCase(evalCase, evaluated)).toEqual({ ok: true, motivos: [] });
+  });
+});
+
+describe('las horas puntuales de las evaluaciones (decisión 29) con un modelo falso que usa la herramienta', () => {
+  interface TimeAnswer {
+    libre: boolean;
+    motivo?: string;
+    horario?: { opcionId: string };
+    horariosCercanos?: { opcionId: string }[];
+  }
+
+  it('hora_puntual_libre: las 17:30 del viernes 9/10 están libres en el seed, se ofrecen y el caso pasa', async () => {
+    const evalCase = byName('hora_puntual_libre');
+    const { result, requests } = run(evalCase, [
+      callTools([{ name: 'consultar_hora', input: { servicio_id: SEMI, fecha: '2026-10-09', hora: '17:30' } }]),
+      (request) => {
+        const answer = lastToolOutputs(request)[0] as unknown as TimeAnswer;
+        return finalAnswer('Sí, a las 17:30 hay lugar. ¿Te la reservo?', answer.horario ? [answer.horario.opcionId] : []);
+      },
+    ]);
+    const evaluated = await result;
+
+    const answer = lastToolOutputs(requestAt(requests, 1))[0] as unknown as TimeAnswer;
+    expect(answer.libre).toBe(true);
+    expect(evaluated.opciones).toHaveLength(1);
+    expect(evaluated.opciones[0]?.resuelta).toMatchObject({ tipo: 'horario', sigueLibre: true, profesionalNombre: 'Mica' });
+    expect(evaluateCase(evalCase, evaluated)).toEqual({ ok: true, motivos: [] });
+  });
+
+  it('hora_puntual_libre: si el modelo dice que se ocupó sin consultar, el caso no pasa', async () => {
+    const evalCase = byName('hora_puntual_libre');
+    const evaluated = await run(evalCase, [finalAnswer('A las 17:30 ya no hay lugar: se ocupó.')]).result;
+
+    const evaluation = evaluateCase(evalCase, evaluated);
+
+    expect(evaluation.ok).toBe(false);
+    expect(evaluation.motivos).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('No llamó a consultar_hora'),
+        expect.stringContaining('Menciona "ocup"'),
+        expect.stringContaining('No ofreció el horario 2026-10-09 17:30'),
+      ]),
+    );
+  });
+
+  it('hora_puntual_reprogramar: las 11:30 del miércoles 14/10 están libres para mover el turno del martes y el caso pasa', async () => {
+    const evalCase = byName('hora_puntual_reprogramar');
+    const { result, requests } = run(evalCase, [
+      callTools([{ name: 'listar_turnos_de_la_clienta' }]),
+      (request) => {
+        const listed = lastToolOutputs(request)[0] as { turnos: { turnoId: string }[] };
+        return callTools([
+          {
+            name: 'consultar_hora_para_reprogramar',
+            input: { turno_id: listed.turnos[0]?.turnoId, fecha: '2026-10-14', hora: '11:30' },
+          },
+        ]);
+      },
+      (request) => {
+        const answer = lastToolOutputs(request)[0] as unknown as TimeAnswer;
+        return finalAnswer('Sí, a las 11:30 hay lugar. ¿Lo paso a ese horario?', answer.horario ? [answer.horario.opcionId] : []);
+      },
+    ]);
+    const evaluated = await result;
+
+    const answer = lastToolOutputs(requestAt(requests, 2))[0] as unknown as TimeAnswer;
+    expect(answer.libre).toBe(true);
+    expect(evaluated.opciones[0]?.resuelta).toMatchObject({ tipo: 'reprogramar', sigueLibre: true, profesionalNombre: 'Mica' });
+    expect(evaluateCase(evalCase, evaluated)).toEqual({ ok: true, motivos: [] });
+  });
+
+  it('hora_puntual_ocupada: la herramienta dice que las 17:30 están ocupadas y ofrece otras, y el caso pasa sin crear turnos', async () => {
+    const evalCase = byName('hora_puntual_ocupada');
+    const { result, requests } = run(evalCase, [
+      callTools([{ name: 'consultar_hora', input: { servicio_id: SEMI, fecha: '2026-10-09', hora: '17:30' } }]),
+      (request) => {
+        const answer = lastToolOutputs(request)[0] as unknown as TimeAnswer;
+        return finalAnswer('Esa hora ya está tomada. Tengo estas:', (answer.horariosCercanos ?? []).map((entry) => entry.opcionId));
+      },
+    ]);
+    const evaluated = await result;
+
+    const answer = lastToolOutputs(requestAt(requests, 1))[0] as unknown as TimeAnswer;
+    expect(answer).toMatchObject({ libre: false, motivo: 'ocupado' });
+    expect(evaluated.opciones.length).toBeGreaterThan(0);
     expect(evaluateCase(evalCase, evaluated)).toEqual({ ok: true, motivos: [] });
   });
 });

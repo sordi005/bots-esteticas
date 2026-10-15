@@ -9,6 +9,7 @@ import {
   verifyOffersFreeSlots,
   verifyOffersRescheduleSlots,
   verifySlotNotOffered,
+  verifySlotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
   verifySlotsNotRepeatedInText,
@@ -294,6 +295,71 @@ describe('verifySlotNotOffered', () => {
     expect(verifySlotNotOffered(result([slot(at('2026-10-09', '15:00'))]), taken, MENDOZA)).toBe(
       'Ofreció el horario 2026-10-09 15:00 con Mica, que ya estaba ocupado',
     );
+  });
+});
+
+describe('verifySlotOffered: ofreció justo la hora que preguntó la clienta (decisión 29)', () => {
+  const asked = { inicio: '2026-10-09 17:30', para: 'reservar' } as const;
+
+  it('pasa si ofreció ese horario para reservar y sigue libre según la base', () => {
+    expect(verifySlotOffered(result([slot(at('2026-10-09', '17:30'))]), asked, MENDOZA)).toBeNull();
+  });
+
+  it('también cuando hay otros horarios ofrecidos', () => {
+    const offered = [slot(at('2026-10-09', '15:00')), slot(at('2026-10-09', '17:30')), seeMore];
+
+    expect(verifySlotOffered(result(offered), asked, MENDOZA)).toBeNull();
+  });
+
+  it('si se pide la profesional, tiene que ser esa', () => {
+    const start = at('2026-10-09', '17:30');
+    const withSofi = result([slot(start, { resuelta: resolved(start, true, 'Sofi') })]);
+
+    expect(verifySlotOffered(result([slot(start)]), { ...asked, profesional: 'Mica' }, MENDOZA)).toBeNull();
+    expect(verifySlotOffered(withSofi, { ...asked, profesional: 'Mica' }, MENDOZA)).toBe(
+      'No ofreció el horario 2026-10-09 17:30 con Mica para reservar',
+    );
+    expect(verifySlotOffered(withSofi, asked, MENDOZA)).toBeNull();
+  });
+
+  it('falla si no ofreció nada, o si ofreció otra hora', () => {
+    expect(verifySlotOffered(result([]), asked, MENDOZA)).toBe('No ofreció el horario 2026-10-09 17:30 para reservar');
+    expect(verifySlotOffered(result([slot(at('2026-10-09', '17:15'))]), asked, MENDOZA)).toBe(
+      'No ofreció el horario 2026-10-09 17:30 para reservar',
+    );
+    expect(verifySlotOffered(result([slot(at('2026-10-10', '17:30'))]), asked, MENDOZA)).toBe(
+      'No ofreció el horario 2026-10-09 17:30 para reservar',
+    );
+  });
+
+  it('falla si el horario ya no está libre según la base', () => {
+    const start = at('2026-10-09', '17:30');
+    const taken = result([slot(start, { resuelta: resolved(start, false) })]);
+
+    expect(verifySlotOffered(taken, asked, MENDOZA)).toBe(
+      'El horario 2026-10-09 17:30 (hora local) no está libre según la base',
+    );
+  });
+
+  it('para reprogramar tiene que ser un id reprogramar:, no uno para reservar, y al revés', () => {
+    const start = at('2026-10-14', '11:30');
+    const move = { inicio: '2026-10-14 11:30', para: 'reprogramar' } as const;
+
+    expect(verifySlotOffered(result([rescheduleSlot(start)]), move, MENDOZA)).toBeNull();
+    expect(verifySlotOffered(result([slot(start)]), move, MENDOZA)).toBe(
+      'No ofreció el horario 2026-10-14 11:30 para reprogramar',
+    );
+    expect(verifySlotOffered(result([rescheduleSlot(start)]), { ...move, para: 'reservar' }, MENDOZA)).toBe(
+      'No ofreció el horario 2026-10-14 11:30 para reservar',
+    );
+  });
+
+  it('un horario para reprogramar que no se pudo resolver contra el turno de la clienta no cuenta como libre', () => {
+    const start = at('2026-10-14', '11:30');
+
+    expect(
+      verifySlotOffered(result([rescheduleSlot(start, { sigueLibre: false })]), { inicio: '2026-10-14 11:30', para: 'reprogramar' }, MENDOZA),
+    ).toBe('El horario 2026-10-14 11:30 (hora local) no está libre según la base');
   });
 });
 

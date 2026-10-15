@@ -530,6 +530,148 @@ describe('reprogramar_no_reserva: el horario que toca es para mover el turno, nu
   });
 });
 
+describe('hora_puntual_libre: pregunta por una hora libre que no estaba entre las ofrecidas (decisión 29)', () => {
+  const FRIDAY_1730 = at('2026-10-09', '17:30');
+
+  it('la clienta pregunta por las 17:30, que no estaba entre los horarios que ofreció el asistente (15:00, 16:30 y 18:00)', () => {
+    const { preparar, mensajes } = byName('hora_puntual_libre');
+    const offeredButtons = preparar?.historial?.flatMap((entry) => ('botones' in entry ? (entry.botones ?? []) : [])) ?? [];
+
+    expect(mensajes).toEqual([expect.stringContaining('17:30')]);
+    expect(offeredButtons).toEqual(['vie 9/10 15:00', 'vie 9/10 16:30', 'vie 9/10 18:00']);
+    expect(offeredButtons.join(' ')).not.toContain('17:30');
+  });
+
+  it('espera consultar_hora, y que no diga que está ocupada', () => {
+    const { espera } = byName('hora_puntual_libre');
+
+    expect(espera.herramientas).toEqual(['consultar_hora']);
+    expect(espera.noMenciona).toEqual(['ocup']);
+  });
+
+  it('pasa si ofrece las 17:30 con Mica, resuelta contra la base como libre', () => {
+    expect(check('hora_puntual_libre', withState({}, [offered(FRIDAY_1730)]))).toBeNull();
+  });
+
+  it('falla si no ofrece las 17:30 (solo repite una de las ofrecidas, o no ofrece nada)', () => {
+    expect(check('hora_puntual_libre', withState({}, [offered(at('2026-10-09', '16:30'))]))).toBe(
+      'No ofreció el horario 2026-10-09 17:30 para reservar',
+    );
+    expect(check('hora_puntual_libre', withState({}))).toContain('No ofreció el horario 2026-10-09 17:30 para reservar');
+  });
+
+  it('falla si la opción es de otro día, o es para reprogramar en vez de para reservar', () => {
+    expect(check('hora_puntual_libre', withState({}, [offered(at('2026-10-10', '17:30'))]))).toContain('No ofreció');
+    expect(check('hora_puntual_libre', withState({}, [offeredToMove(FRIDAY_1730)]))).toContain('No ofreció');
+  });
+
+  it('falla si la hora ofrecida ya no está libre según la base', () => {
+    const fresh = offered(FRIDAY_1730);
+    const stale = { ...fresh, resuelta: { ...fresh.resuelta, sigueLibre: false } } as EvalOption;
+
+    expect(check('hora_puntual_libre', withState({}, [stale]))).toBe(
+      'El horario 2026-10-09 17:30 (hora local) no está libre según la base',
+    );
+  });
+});
+
+describe('hora_puntual_reprogramar: pregunta por una hora libre para mover su turno (decisión 29)', () => {
+  const MARTES = appointment({ clave: 'martes', inicio: '2026-10-13 17:00' });
+  const WEDNESDAY_1130 = at('2026-10-14', '11:30');
+
+  it('tiene el turno del martes 13/10 con Mica, la oferta del miércoles en el historial y pregunta por las 11:30, que no estaba', () => {
+    const { preparar, mensajes } = byName('hora_puntual_reprogramar');
+    const offeredButtons = preparar?.historial?.flatMap((entry) => ('botones' in entry ? (entry.botones ?? []) : [])) ?? [];
+
+    expect(preparar?.turnos).toEqual([
+      { clave: 'martes', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-13 17:00' },
+    ]);
+    expect(offeredButtons.length).toBeGreaterThan(0);
+    expect(offeredButtons.every((title) => title.startsWith('mié 14/10'))).toBe(true);
+    expect(offeredButtons.join(' ')).not.toContain('11:30');
+    expect(mensajes).toEqual([expect.stringContaining('11:30')]);
+  });
+
+  it('espera consultar_hora_para_reprogramar, que no reserve un turno nuevo y que no diga que está ocupada', () => {
+    const { espera } = byName('hora_puntual_reprogramar');
+
+    expect(espera.herramientas).toEqual(['consultar_hora_para_reprogramar']);
+    expect(espera.noLlama).toEqual(['crear_reserva']);
+    expect(espera.noMenciona).toEqual(['ocup']);
+  });
+
+  it('pasa si ofrece las 11:30 del miércoles para reprogramar y el turno sigue en el martes', () => {
+    expect(check('hora_puntual_reprogramar', withState({ turnos: [MARTES] }, [offeredToMove(WEDNESDAY_1130)]))).toBeNull();
+  });
+
+  it('falla si ofrece las 11:30 para reservar (horario:) en vez de para reprogramar (decisión 28)', () => {
+    const result = withState({ turnos: [MARTES] }, [offered(WEDNESDAY_1130)]);
+
+    expect(check('hora_puntual_reprogramar', result)).toContain('Ofreció un horario para reservar (horario:)');
+  });
+
+  it('falla si no ofrece las 11:30, o si ofrece otra hora', () => {
+    expect(check('hora_puntual_reprogramar', withState({ turnos: [MARTES] }))).toContain('No ofreció');
+    expect(check('hora_puntual_reprogramar', withState({ turnos: [MARTES] }, [offeredToMove(at('2026-10-14', '10:00'))]))).toBe(
+      'No ofreció el horario 2026-10-14 11:30 con Mica para reprogramar',
+    );
+  });
+
+  it('falla si movió el turno sin que ella eligiera', () => {
+    const moved = { ...MARTES, inicio: '2026-10-14 11:30' };
+
+    expect(check('hora_puntual_reprogramar', withState({ turnos: [moved] }, [offeredToMove(WEDNESDAY_1130)]))).toContain(
+      'quedó el 2026-10-14 11:30',
+    );
+  });
+});
+
+describe('hora_puntual_ocupada: la hora que pide la ocupa otra clienta (decisión 29)', () => {
+  const MARIA = appointment({ clave: 'maria', de: 'otra', inicio: '2026-10-09 17:30' });
+
+  it('María González tiene a Mica el viernes 9/10 a las 17:30, y la clienta pregunta por esa hora', () => {
+    const { preparar, mensajes } = byName('hora_puntual_ocupada');
+
+    expect(preparar?.turnos).toEqual([
+      { clave: 'maria', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 17:30', otraClienta: 'María González' },
+    ]);
+    expect(mensajes).toEqual([expect.stringContaining('17:30')]);
+  });
+
+  it('espera consultar_hora', () => {
+    expect(byName('hora_puntual_ocupada').espera.herramientas).toEqual(['consultar_hora']);
+  });
+
+  it('pasa si no le reservó nada, ofrece otros horarios libres y no vuelve a ofrecer el ocupado', () => {
+    const options = [offered(at('2026-10-09', '16:00')), offered(at('2026-10-09', '12:00'))];
+
+    expect(check('hora_puntual_ocupada', withState({ turnos: [MARIA] }, options))).toBeNull();
+  });
+
+  it('falla si le creó un turno a la clienta, sea a esa hora o a otra', () => {
+    const created = appointment({ inicio: '2026-10-09 17:30' });
+
+    expect(check('hora_puntual_ocupada', withState({ turnos: [MARIA, created] }, [offered(at('2026-10-09', '16:00'))]))).toContain(
+      'Los turnos de la clienta no son los esperados',
+    );
+  });
+
+  it('falla si el turno de María cambió', () => {
+    const cancelled = { ...MARIA, estado: 'CANCELLED_BY_CUSTOMER' as const };
+
+    expect(check('hora_puntual_ocupada', withState({ turnos: [cancelled] }, [offered(at('2026-10-09', '16:00'))]))).toContain(
+      'El turno «maria» quedó CANCELLED_BY_CUSTOMER',
+    );
+  });
+
+  it('falla si no ofrece ninguna alternativa, o si vuelve a ofrecer el horario ocupado', () => {
+    expect(check('hora_puntual_ocupada', withState({ turnos: [MARIA] }))).toBe('No ofreció ningún horario');
+    expect(check('hora_puntual_ocupada', withState({ turnos: [MARIA] }, [offered(at('2026-10-09', '17:30'))]))).toContain(
+      'ya estaba ocupado',
+    );
+  });
+});
+
 describe('los casos de derivación', () => {
   it.each([
     ['pide_persona', 'customer_request'],
