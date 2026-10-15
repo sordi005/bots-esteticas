@@ -17,6 +17,12 @@ export const agentOutcomes = [
   'rate_limited',
   /** El modelo falló dos veces seguidas: el código derivó a una persona y se envió la frase fija (4.8, 8.5). */
   'handoff_not_understood',
+  /**
+   * El texto afirmaba que un turno quedó reservado, cancelado o reprogramado y ninguna herramienta lo hizo, ni
+   * siquiera después de avisarle al modelo: se envió la frase fija en vez de una confirmación falsa (6.4).
+   * Cuenta como intento fallido para el segundo intento que deriva (4.8).
+   */
+  'fallback_unconfirmed_change',
 ] as const;
 
 export type AgentOutcome = (typeof agentOutcomes)[number];

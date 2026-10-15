@@ -274,7 +274,13 @@ describe('evaluateCase: varias condiciones y el outcome', () => {
     expect(evaluateCase(caso({}), result()).ok).toBe(true);
   });
 
-  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output', 'rate_limited'] as const)(
+  it.each([
+    'fallback_refusal',
+    'fallback_max_tokens',
+    'fallback_invalid_output',
+    'fallback_unconfirmed_change',
+    'rate_limited',
+  ] as const)(
     'falla si el agente no pudo contestar (%s), aunque lo demás cumpla',
     (outcome) => {
       const evaluation = evaluateCase(caso({ noMenciona: ['$'] }), result({ outcome }));
