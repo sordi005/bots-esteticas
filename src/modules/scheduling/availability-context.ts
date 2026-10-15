@@ -39,6 +39,59 @@ export function overlaps(column: AnyPgColumn, range: TimestampRange): SQL {
   return sql`${column} && ${formatTimestampRange(range)}::tstzrange`;
 }
 
+/**
+ * Un turno que se quiere mover: lo que hace falta de él para calcular los horarios nuevos. Es la
+ * duración y el margen del momento de reservar, no los actuales del servicio.
+ */
+export interface AppointmentToMove {
+  id: string;
+  serviceId: string;
+  professionalId: string;
+  durationMinutes: number;
+  bufferMinutes: number;
+}
+
+/**
+ * El contexto para reprogramar un turno (4.6): el mismo servicio con la misma profesional, sin
+ * contar al propio turno como ocupado y con su duración y su margen guardados. Lo usan
+ * `rescheduleAppointment` y los horarios que se le ofrecen a la clienta, así un horario ofrecido
+ * nunca es rechazado después por usar otras medidas.
+ */
+export async function loadRescheduleContext(
+  db: Queryable,
+  input: {
+    tenantId: string;
+    appointment: AppointmentToMove;
+    window: TimestampRange;
+    now: Date;
+    calendarBusy?: ReadonlyMap<string, TimestampRange[]>;
+  },
+): Promise<AvailabilityContext | null> {
+  const { tenantId, appointment, window, now, calendarBusy } = input;
+  const context = await loadAvailabilityContext(db, {
+    tenantId,
+    serviceId: appointment.serviceId,
+    professionalIds: [appointment.professionalId],
+    excludeAppointmentId: appointment.id,
+    window,
+    now,
+    ...(calendarBusy ? { calendarBusy } : {}),
+  });
+  if (!context) return null;
+  return {
+    ...context,
+    query: {
+      ...context.query,
+      service: { durationMinutes: appointment.durationMinutes, bufferMinutes: appointment.bufferMinutes },
+      // La duración propia de la profesional ya está en la duración guardada del turno.
+      professionals: context.query.professionals.map((professional) => ({
+        ...professional,
+        durationOverrideMinutes: null,
+      })),
+    },
+  };
+}
+
 export async function loadAvailabilityContext(
   db: Queryable,
   input: {

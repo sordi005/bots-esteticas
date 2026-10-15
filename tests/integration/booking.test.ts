@@ -330,7 +330,8 @@ describe('rescheduleAppointment: reprogramar', () => {
       status: 'PENDING_DEPOSIT',
       timeRange: { start: at('2026-10-05', '16:00'), end: at('2026-10-05', '17:10') },
     });
-    expect((await eventsOf(appointmentId)).at(-1)).toMatchObject({
+    // Las reservas y el cambio comparten la hora inyectada: el orden por fecha no desempata, se busca por tipo.
+    expect((await eventsOf(appointmentId)).find((event) => event.kind === 'rescheduled')).toMatchObject({
       kind: 'rescheduled',
       fromStatus: 'PENDING_DEPOSIT',
       toStatus: 'PENDING_DEPOSIT',

@@ -27,6 +27,8 @@ const REQUIRED_IN_PRODUCTION = [
   'CREDENTIALS_ENCRYPTION_KEY',
   'WHATSAPP_APP_SECRET',
   'WHATSAPP_VERIFY_TOKEN',
+  // Desde H8 producción procesa conversaciones (6.7): sin la clave del modelo no tiene sentido arrancar.
+  'ANTHROPIC_API_KEY',
 ] as const;
 
 const envSchema = z
@@ -110,7 +112,7 @@ export interface Config {
   whatsapp: { appSecret: string; verifyToken: string; graphApiVersion: string } | null;
   /** Solo en desarrollo: todo envío de WhatsApp va a este número (sección 8.1). */
   whatsappTestRecipient: string | null;
-  /** Null: sin clave el worker no contesta conversaciones (sección 8.5). */
+  /** Null: sin clave el worker no contesta conversaciones (sección 8.5). En producción es obligatoria. */
   anthropicApiKey: string | null;
   anthropicModel: string;
 }

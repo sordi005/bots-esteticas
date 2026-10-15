@@ -5,6 +5,7 @@ import { runTool } from '../../src/modules/conversation/tools/tool.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createCatalogFixture, toolContext } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -60,6 +61,9 @@ describe('buscar_servicios', () => {
         description: 'Esmaltado semipermanente · $18.000 · 60 min',
       },
     ]);
+    // El `id` del servicio es para las herramientas; la opción para el botón es otra (`servicio:<id>`).
+    expect(content.coincidencias[0]).toMatchObject({ opcionId: `servicio:${fixture.semi}` });
+    expectOptionsShownToModel({ content, options });
   });
 
   it('un servicio con precio "desde" lo aclara en el contenido', async () => {

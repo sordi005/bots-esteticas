@@ -2,6 +2,13 @@ import type { Logger } from 'pino';
 import { z } from 'zod';
 import { outgoingMessageSchema, type OutgoingMessage } from '../../whatsapp/outgoing.js';
 import { truncateText } from '../format.js';
+import type { HandoffReason } from '../handoff.js';
+import {
+  isFillerSummary,
+  MODEL_HANDOFF_REASON_NAMES,
+  MODEL_HANDOFF_REASONS,
+  type ModelHandoffReason,
+} from '../handoff-reasons.js';
 import {
   MAX_LIST_ROWS,
   MAX_OPTION_DESCRIPTION_LENGTH,
@@ -11,8 +18,10 @@ import {
   type OfferableOption,
   type ToolContext,
 } from '../tools/tool.js';
+import { claimsAppointmentChange } from './claimed-change.js';
 import type { LlmClient, LlmMessage, LlmResponse, LlmToolCall, LlmToolResult, LlmUsage } from './llm-client.js';
 import type { AgentOutcome } from './outcome.js';
+import { announcesPendingWork } from './pending-work.js';
 
 /**
  * El ciclo del agente (8.5, decisión 20): llama al modelo, ejecuta las herramientas que pide,
@@ -27,6 +36,31 @@ export const MAX_TOOL_CALLS_PER_REPLY = 8;
 /** Lo que se le envía a la clienta cuando el modelo no dio una respuesta que se pueda usar. */
 export const FALLBACK_REPLY_TEXT = 'Perdón, no te entendí bien. ¿Me lo escribís de otra forma?';
 
+/**
+ * Lo que se le envía a la clienta cuando el modelo falla dos veces seguidas y el código deriva a una
+ * persona (4.8, 8.5). `{cuándo}` se completa con el texto del horario de atención humana.
+ */
+export const NOT_UNDERSTOOD_HANDOFF_TEXT =
+  'Perdón, no te estoy entendiendo. Le paso tu consulta a una persona del equipo, que te va a responder por acá {cuándo}.';
+
+export function notUnderstoodHandoffText(when: string): string {
+  return NOT_UNDERSTOOD_HANDOFF_TEXT.replace('{cuándo}', when);
+}
+
+/**
+ * Lo que se le dice al modelo cuando su respuesta anuncia una búsqueda («dejame consultar…») y en la vuelta
+ * no llamó a ninguna herramienta (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export const PENDING_WORK_NOTICE =
+  'En tu respuesta anunciaste que ibas a buscar o consultar algo, pero no llamaste a ninguna herramienta, y la respuesta se envía tal cual: la clienta no recibiría nada más. Llamá ahora a las herramientas que hagan falta y contestá con el resultado. Si no hace falta consultar nada, contestá sin anunciar una búsqueda.';
+
+/**
+ * Lo que se le dice al modelo cuando su respuesta afirma que un turno quedó reservado, cancelado o reprogramado y
+ * en la vuelta ninguna herramienta lo hizo (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export const UNCONFIRMED_CHANGE_NOTICE =
+  'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.';
+
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -38,11 +72,31 @@ const LIST_BUTTON_LABEL = 'Ver opciones';
  * La respuesta final del modelo. Los nombres van en español porque los ve el modelo (6.4).
  * El esquema JSON es a mano: los proveedores no aceptan mínimos ni máximos, así que el largo
  * del texto se valida acá, del lado nuestro.
+ *
+ * `derivar` es obligatorio: `null`, o el motivo y el resumen (decisión 27). Derivar es parte de la
+ * respuesta y no una herramienta: la promesa («le paso tu consulta a una persona») y la acción salen
+ * juntas. Un resumen de relleno invalida la respuesta entera (4.8); con un tema sensible no se
+ * exige, porque el código guarda un resumen fijo y descarta el del modelo (regla 9).
  */
+const handoffRequestSchema = z
+  .object({
+    motivo: z.enum(MODEL_HANDOFF_REASON_NAMES),
+    resumen: z.string(),
+  })
+  .refine(({ motivo, resumen }) => motivo === 'tema_sensible' || !isFillerSummary(resumen));
+
 const finalAnswerSchema = z.object({
   texto: z.string().trim().min(1),
   opciones: z.array(z.string()),
+  derivar: handoffRequestSchema.nullable(),
 });
+
+type FinalAnswer = z.infer<typeof finalAnswerSchema>;
+
+/** Cada motivo con lo que significa, para la descripción que lee el modelo. */
+const REASON_DESCRIPTIONS = MODEL_HANDOFF_REASON_NAMES.map(
+  (name: ModelHandoffReason) => `${name} (${MODEL_HANDOFF_REASONS[name].description})`,
+).join(', ');
 
 export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -57,8 +111,32 @@ export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
       description:
         'Ids de las opciones que la clienta puede elegir con un botón o una fila de lista. Solo ids que devolvieron las herramientas en esta respuesta. Lista vacía si no hay nada para elegir.',
     },
+    derivar: {
+      anyOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          properties: {
+            motivo: {
+              type: 'string',
+              enum: [...MODEL_HANDOFF_REASON_NAMES],
+              description: `Por qué se deriva: ${REASON_DESCRIPTIONS}.`,
+            },
+            resumen: {
+              type: 'string',
+              description:
+                'Una sola línea para la dueña, de por lo menos 3 palabras y hasta 200 caracteres, con qué necesita la clienta de verdad (nada de relleno ni de pruebas). Solo lo que pide: sin el estado de sus turnos ni de sus pagos, que puede haber cambiado y la persona lo ve en el sistema. Con tema_sensible NO incluyas ningún dato de salud: escribí solo "consulta sensible".',
+            },
+          },
+          required: ['motivo', 'resumen'],
+          additionalProperties: false,
+        },
+      ],
+      description:
+        'null si no derivás. Completalo (motivo y resumen) cuando tu texto le dice a la clienta que una persona del equipo la va a atender, le va a responder o va a ver, revisar o recibir su consulta o su reclamo: la derivación sale con esta respuesta y pausa al asistente en este chat.',
+    },
   },
-  required: ['texto', 'opciones'],
+  required: ['texto', 'opciones', 'derivar'],
   additionalProperties: false,
 };
 
@@ -93,12 +171,26 @@ export interface AgentInput {
   toolContext: ToolContext;
 }
 
+/** La derivación que pidió la respuesta del modelo, con el motivo ya traducido al de la base (4.8). */
+export interface AgentHandoff {
+  reason: HandoffReason;
+  /** Lo que escribió el modelo: con un tema sensible, quien registra la derivación lo descarta (regla 9). */
+  summary: string;
+}
+
 export interface AgentResult {
   message: OutgoingMessage;
+  /** Si la respuesta pidió derivar. El ciclo no conoce la base: quien lo llama registra la derivación. */
+  handoff: AgentHandoff | null;
   run: AgentRun;
 }
 
-type FallbackOutcome = Extract<AgentOutcome, `fallback_${string}`>;
+export type FallbackOutcome = Extract<AgentOutcome, `fallback_${string}`>;
+
+/** ¿La vuelta terminó con la frase fija porque el modelo no dio una respuesta usable? */
+export function isFallbackOutcome(outcome: AgentOutcome): outcome is FallbackOutcome {
+  return outcome.startsWith('fallback_');
+}
 
 function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   return {
@@ -109,24 +201,36 @@ function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
   };
 }
 
+/** Lo que devuelve ejecutar una herramienta: el resultado para el modelo y si dejó un turno cambiado. */
+interface ExecutedToolCall {
+  result: LlmToolResult;
+  changedAppointment: boolean;
+}
+
 /** Ejecuta una herramienta pedida por el modelo y arma el resultado que se le devuelve. */
 async function executeToolCall(
   call: LlmToolCall,
   tools: Map<string, AgentTool<unknown>>,
   ctx: ToolContext,
   offered: Map<string, OfferableOption>,
-): Promise<LlmToolResult> {
+): Promise<ExecutedToolCall> {
   const tool = tools.get(call.name);
   if (!tool) {
     return {
-      toolCallId: call.id,
-      content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
-      isError: true,
+      result: {
+        toolCallId: call.id,
+        content: JSON.stringify({ error: `No existe la herramienta ${call.name}` }),
+        isError: true,
+      },
+      changedAppointment: false,
     };
   }
   const result = await runTool(tool, call.input, ctx);
   for (const option of result.options) offered.set(option.id, option);
-  return { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false };
+  return {
+    result: { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false },
+    changedAppointment: result.changedAppointment === true,
+  };
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
@@ -162,7 +266,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
 }
 
 /** Interpreta la salida final del modelo: null si no tiene la forma pedida. */
-function parseFinalAnswer(text: string): z.infer<typeof finalAnswerSchema> | null {
+function parseFinalAnswer(text: string): FinalAnswer | null {
   let json: unknown;
   try {
     json = JSON.parse(text);
@@ -171,6 +275,11 @@ function parseFinalAnswer(text: string): z.infer<typeof finalAnswerSchema> | nul
   }
   const parsed = finalAnswerSchema.safeParse(json);
   return parsed.success ? parsed.data : null;
+}
+
+/** El texto afirma que un turno cambió y en la vuelta ninguna herramienta lo confirmó (6.4). */
+function unconfirmedChange(text: string, changedAppointment: boolean): boolean {
+  return !changedAppointment && claimsAppointmentChange(text);
 }
 
 export async function runAgent(deps: AgentDependencies, input: AgentInput): Promise<AgentResult> {
@@ -193,6 +302,11 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let llmCalls = 0;
   let hitToolLimit = false;
+  // Alguna herramienta dejó un turno reservado, cancelado o reprogramado en esta vuelta.
+  let changedAppointment = false;
+  // Solo se le hace notar UNA vez, por lo que sea: un anuncio de búsqueda sin hacerla o un cambio que no pasó.
+  let corrected = false;
+  let answer: FinalAnswer | null;
   let response: LlmResponse;
 
   for (;;) {
@@ -212,28 +326,69 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     hitToolLimit ||= !allowTools;
 
     // Una respuesta cortada o rechazada puede traer herramientas a medias: no se ejecutan.
-    if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) break;
+    if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
+      answer =
+        response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
+      // Anuncia una búsqueda y en toda la vuelta no consultó nada (6.4): la respuesta se envía tal cual, así que
+      // una vez se lo hace notar. Un turno que quedó con herramientas pedidas no admite un mensaje de texto a
+      // continuación: la API exige sus resultados.
+      const announcesWithoutTools =
+        answer !== null &&
+        executedTools.length === 0 &&
+        response.toolCalls.length === 0 &&
+        announcesPendingWork(answer.texto);
+      if (announcesWithoutTools && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: PENDING_WORK_NOTICE },
+        );
+        continue;
+      }
+      // Afirma un cambio que ninguna herramienta hizo en la vuelta (6.4): nunca se le confirma a la clienta algo que no
+      // pasó, así que una vez se lo hace notar. Con un cambio confirmado en la vuelta no hay nada que corregir.
+      const claimsUnconfirmedChange = answer !== null && unconfirmedChange(answer.texto, changedAppointment);
+      if (claimsUnconfirmedChange && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: UNCONFIRMED_CHANGE_NOTICE },
+        );
+        continue;
+      }
+      // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
+      if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');
+      break;
+    }
 
     const room = MAX_TOOL_CALLS_PER_REPLY - executedTools.length;
-    const results = await Promise.all(
-      response.toolCalls.map((call, index): Promise<LlmToolResult> => {
+    const executed = await Promise.all(
+      response.toolCalls.map((call, index): Promise<ExecutedToolCall> => {
         if (index >= room) {
           return Promise.resolve({
-            toolCallId: call.id,
-            content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
-            isError: true,
+            result: {
+              toolCallId: call.id,
+              content: JSON.stringify({ error: 'Se llegó al tope de consultas de esta respuesta' }),
+              isError: true,
+            },
+            changedAppointment: false,
           });
         }
         return executeToolCall(call, toolsByName, toolContext, offered);
       }),
     );
     executedTools.push(...response.toolCalls.slice(0, room).map((call) => call.name));
+    changedAppointment ||= executed.some((call) => call.changedAppointment);
 
-    messages.push({ role: 'assistant_turn', turn: response.assistantTurn }, { role: 'tool_results', results });
+    messages.push(
+      { role: 'assistant_turn', turn: response.assistantTurn },
+      { role: 'tool_results', results: executed.map((call) => call.result) },
+    );
   }
 
-  const finish = (message: OutgoingMessage, outcome: AgentOutcome): AgentResult => ({
+  const finish = (message: OutgoingMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
     message,
+    handoff,
     run: {
       model: response.model,
       llmCalls,
@@ -243,13 +398,20 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
       outcome,
     },
   });
-  const fallback = (outcome: FallbackOutcome) => finish({ type: 'text', body: FALLBACK_REPLY_TEXT }, outcome);
+  // Una respuesta que no se puede usar nunca deriva: la clienta recibe la frase fija y nada se pausa.
+  const fallback = (outcome: FallbackOutcome) => finish({ type: 'text', body: FALLBACK_REPLY_TEXT }, outcome, null);
 
   if (response.stopReason === 'refusal') return fallback('fallback_refusal');
   if (response.stopReason === 'max_tokens') return fallback('fallback_max_tokens');
 
-  const answer = parseFinalAnswer(response.text);
   if (!answer) return fallback('fallback_invalid_output');
+
+  // Sigue afirmando un cambio que no pasó, o no hubo forma de avisarle (quedaron herramientas pedidas sin ejecutar):
+  // la clienta nunca recibe una confirmación falsa. Sin el texto en el log, que es de la conversación.
+  if (unconfirmedChange(answer.texto, changedAppointment)) {
+    logger.debug('La respuesta afirma un cambio de turno que ninguna herramienta confirmó');
+    return fallback('fallback_unconfirmed_change');
+  }
 
   const requested = new Set(answer.opciones);
   const chosen: OfferableOption[] = [];
@@ -263,5 +425,8 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     logger.debug({ discarded }, 'Se descartaron opciones que ninguna herramienta ofreció');
   }
 
-  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied');
+  const handoff: AgentHandoff | null = answer.derivar
+    ? { reason: MODEL_HANDOFF_REASONS[answer.derivar.motivo].reason, summary: answer.derivar.resumen }
+    : null;
+  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
 }

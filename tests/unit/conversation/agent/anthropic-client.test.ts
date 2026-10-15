@@ -5,7 +5,9 @@ import {
   createAnthropicLlmClient,
   toStrictSchema,
 } from '../../../../src/modules/conversation/agent/anthropic-client.js';
-import { consultationTools } from '../../../../src/modules/conversation/tools/index.js';
+import { FINAL_ANSWER_JSON_SCHEMA } from '../../../../src/modules/conversation/agent/agent.js';
+import { MODEL_HANDOFF_REASON_NAMES } from '../../../../src/modules/conversation/handoff-reasons.js';
+import { agentTools } from '../../../../src/modules/conversation/tools/index.js';
 import type { LlmRequest } from '../../../../src/modules/conversation/agent/llm-client.js';
 
 const TEST_API_KEY = 'sk-ant-clave-de-prueba';
@@ -121,6 +123,19 @@ describe('createAnthropicLlmClient: el pedido que se manda a la API', () => {
         { role: 'user', content: '¿Cuánto sale el semi?' },
         { role: 'system', content: 'Contexto del sistema (no lo escribió la clienta): hoy es lunes.' },
       ],
+    });
+  });
+
+  it('manda la respuesta final del agente como formato de salida, con derivar null o un objeto', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage()]);
+
+    await client(fetch).complete(request({ responseSchema: FINAL_ANSWER_JSON_SCHEMA }));
+
+    const format = (calls[0]?.body.output_config as { format: { type: string; schema: Record<string, unknown> } }).format;
+    expect(format.type).toBe('json_schema');
+    expect(format.schema).toMatchObject({
+      required: ['texto', 'opciones', 'derivar'],
+      properties: { derivar: { anyOf: [{ type: 'null' }, { type: 'object', additionalProperties: false }] } },
     });
   });
 
@@ -277,6 +292,71 @@ describe('createAnthropicLlmClient: el ciclo de herramientas', () => {
 
     const roles = (calls[1]?.body.messages as { role: string }[]).map((message) => message.role);
     expect(roles).toEqual(['user', 'system', 'assistant', 'user']);
+  });
+});
+
+describe('createAnthropicLlmClient: un aviso del sistema dentro de la vuelta (system_note)', () => {
+  it('va como mensaje de la clienta con el rótulo del sistema, para que los roles sigan alternando después del turno del asistente', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: '¿Cuánto sale el semi?' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Llamá a las herramientas.' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string; content: unknown }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'system', 'assistant', 'user']);
+    expect(messages.at(-1)?.content).toBe('Contexto del sistema (no lo escribió la clienta): Llamá a las herramientas.');
+  });
+
+  it('no cuenta como mensaje de la clienta: el contexto de la vuelta sigue yendo después de su último mensaje', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: 'Hola' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'Aviso.' },
+          { role: 'assistant', text: 'Respuesta vieja' },
+          { role: 'user', text: 'Chau' },
+        ],
+      }),
+    );
+
+    const messages = calls[1]?.body.messages as { role: string }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'system']);
+  });
+
+  it('después de la corrección el modelo puede pedir herramientas: la conversación sigue alternando roles', async () => {
+    const { fetch, calls } = fakeFetch([apiMessage(), apiMessage(), apiMessage()]);
+    const llm = client(fetch);
+    const first = await llm.complete(request());
+    const second = await llm.complete(request());
+
+    await llm.complete(
+      request({
+        messages: [
+          { role: 'user', text: '¿Qué medios de pago aceptan?' },
+          { role: 'assistant_turn', turn: first.assistantTurn },
+          { role: 'system_note', text: 'No llamaste a ninguna herramienta.' },
+          { role: 'assistant_turn', turn: second.assistantTurn },
+          { role: 'tool_results', results: [{ toolCallId: 'toolu_1', content: '{}', isError: false }] },
+        ],
+      }),
+    );
+
+    const messages = calls[2]?.body.messages as { role: string }[];
+    expect(messages.map((message) => message.role)).toEqual(['user', 'system', 'assistant', 'user', 'assistant', 'user']);
   });
 });
 
@@ -479,9 +559,73 @@ describe('toStrictSchema: los esquemas de Zod pasan a lo que aceptan las herrami
     expect(result).toMatchObject({ properties: { tema: { enum: ['direccion', 'horarios'] } } });
   });
 
-  it('los esquemas de las herramientas de H7 quedan aceptables para strict: sin restricciones ni regex complejos y dentro de los límites', () => {
+  it('un objeto que puede ser null (anyOf) se recorre: se cierra el objeto y el null queda como está', () => {
+    const result = toStrictSchema({
+      type: 'object',
+      properties: {
+        derivar: {
+          anyOf: [
+            { type: 'null' },
+            { type: 'object', properties: { resumen: { type: 'string', maxLength: 200 } }, required: ['resumen'] },
+          ],
+          description: 'null si no.',
+        },
+      },
+      required: ['derivar'],
+    });
+
+    expect(result).toEqual({
+      type: 'object',
+      properties: {
+        derivar: {
+          anyOf: [
+            { type: 'null' },
+            {
+              type: 'object',
+              properties: { resumen: { type: 'string' } },
+              required: ['resumen'],
+              additionalProperties: false,
+            },
+          ],
+          description: 'null si no.',
+        },
+      },
+      required: ['derivar'],
+      additionalProperties: false,
+    });
+  });
+
+  it('un nombre de propiedad que coincide con una palabra clave (enum, description) no se confunde con ella', () => {
+    const result = toStrictSchema({
+      type: 'object',
+      properties: { enum: { type: 'string', maxLength: 5 }, description: { type: 'string' } },
+    });
+
+    expect(result).toEqual({
+      type: 'object',
+      properties: { enum: { type: 'string' }, description: { type: 'string' } },
+      additionalProperties: false,
+    });
+  });
+
+  it('la respuesta final del agente (con derivar null o un objeto) queda tal cual la define: ya es estricta', () => {
+    const result = toStrictSchema(FINAL_ANSWER_JSON_SCHEMA);
+
+    expect(result).toEqual(FINAL_ANSWER_JSON_SCHEMA);
+    const derivar = (result.properties as Record<string, { anyOf: Record<string, unknown>[] }>).derivar;
+    expect(derivar?.anyOf[0]).toEqual({ type: 'null' });
+    expect(derivar?.anyOf[1]).toMatchObject({
+      type: 'object',
+      required: ['motivo', 'resumen'],
+      additionalProperties: false,
+      properties: { motivo: { enum: [...MODEL_HANDOFF_REASON_NAMES] } },
+    });
+    expect(JSON.stringify(result)).not.toMatch(/\$schema|minLength|maxLength|"minimum"|"maximum"/);
+  });
+
+  it('los esquemas de las herramientas quedan aceptables para strict: sin restricciones ni regex complejos y dentro de los límites', () => {
     let optional = 0;
-    for (const tool of consultationTools) {
+    for (const tool of agentTools) {
       const schema = toStrictSchema(z.toJSONSchema(tool.input, { io: 'input' }));
       const text = JSON.stringify(schema);
 
@@ -493,6 +637,6 @@ describe('toStrictSchema: los esquemas de Zod pasan a lo que aceptan las herrami
 
     // La API admite hasta 24 parámetros opcionales entre todas las herramientas estrictas.
     expect(optional).toBeLessThanOrEqual(24);
-    expect(consultationTools.length).toBeLessThanOrEqual(20);
+    expect(agentTools.length).toBeLessThanOrEqual(20);
   });
 });

@@ -14,7 +14,7 @@ export interface WorkerDependencies {
   db: NodePgDatabase;
   logger: Logger;
   now?: () => Date;
-  /** Sin esto el worker no procesa conversaciones: en producción, hasta H8 (sin derivación a una persona no se cumple 4.8). */
+  /** Sin esto el worker no procesa conversaciones. En producción el servidor no arranca sin las claves que hacen falta (9.1). */
   conversations?: { client: WhatsAppClient; credentialsKey: Buffer; respond: Responder };
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
@@ -29,7 +29,7 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
   const handlers: Partial<Record<JobKind, JobHandler>> = {};
 
   if (conversations) {
-    handlers.process_conversation = conversationJobHandler({ db, now, ...conversations });
+    handlers.process_conversation = conversationJobHandler({ db, logger, now, ...conversations });
   }
 
   return createJobRunner({ db, logger, now, handlers, ...dependencies.options });

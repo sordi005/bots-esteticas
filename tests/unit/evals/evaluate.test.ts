@@ -15,6 +15,7 @@ function result(overrides: Partial<EvalResult> = {}): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 100, salida: 20, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 500,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
     ...overrides,
   };
 }
@@ -156,6 +157,44 @@ describe('evaluateCase: herramientas', () => {
   });
 });
 
+describe('evaluateCase: noLlama', () => {
+  it('pasa si no se llamó a ninguna de las prohibidas, aunque se hayan llamado otras', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['cancelar_turno'] }),
+      result({ herramientas: ['listar_turnos_de_la_clienta'] }),
+    );
+
+    expect(evaluation).toEqual({ ok: true, motivos: [] });
+  });
+
+  it('pasa si no llamó a ninguna herramienta', () => {
+    expect(evaluateCase(caso({ noLlama: ['crear_reserva'] }), result()).ok).toBe(true);
+  });
+
+  it('falla y nombra la prohibida que se llamó', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['crear_reserva'] }),
+      result({ herramientas: ['buscar_servicios', 'crear_reserva'] }),
+    );
+
+    expect(evaluation.motivos).toEqual([
+      'No debía llamar a crear_reserva y llamó: buscar_servicios, crear_reserva',
+    ]);
+  });
+
+  it('con varias prohibidas, dice cada una de las que se llamaron', () => {
+    const evaluation = evaluateCase(
+      caso({ noLlama: ['cancelar_turno', 'reprogramar_turno', 'crear_reserva'] }),
+      result({ herramientas: ['cancelar_turno', 'crear_reserva'] }),
+    );
+
+    expect(evaluation.motivos).toEqual([
+      'No debía llamar a cancelar_turno y llamó: cancelar_turno, crear_reserva',
+      'No debía llamar a crear_reserva y llamó: cancelar_turno, crear_reserva',
+    ]);
+  });
+});
+
 describe('evaluateCase: sinHerramientas', () => {
   it('pasa si no llamó a ninguna', () => {
     expect(evaluateCase(caso({ sinHerramientas: true }), result()).ok).toBe(true);
@@ -235,7 +274,13 @@ describe('evaluateCase: varias condiciones y el outcome', () => {
     expect(evaluateCase(caso({}), result()).ok).toBe(true);
   });
 
-  it.each(['fallback_refusal', 'fallback_max_tokens', 'fallback_invalid_output', 'rate_limited'] as const)(
+  it.each([
+    'fallback_refusal',
+    'fallback_max_tokens',
+    'fallback_invalid_output',
+    'fallback_unconfirmed_change',
+    'rate_limited',
+  ] as const)(
     'falla si el agente no pudo contestar (%s), aunque lo demás cumpla',
     (outcome) => {
       const evaluation = evaluateCase(caso({ noMenciona: ['$'] }), result({ outcome }));

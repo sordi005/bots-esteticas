@@ -4,7 +4,7 @@ import { customers } from '../customers/schema.js';
 import { depositAmountCents, resolveDepositRule } from '../payments/deposit-policy.js';
 import { deposits } from '../payments/schema.js';
 import type { Queryable } from '../../shared/db.js';
-import { EXCLUSION_VIOLATION, isConstraintViolation } from '../../shared/postgres-errors.js';
+import { EXCLUSION_VIOLATION, isConstraintViolation, retryOnDeadlock } from '../../shared/postgres-errors.js';
 import type { TimestampRange } from '../../shared/timestamp-range.js';
 import {
   canReschedule,
@@ -16,10 +16,11 @@ import {
 } from './appointment-state-machine.js';
 import {
   loadAvailabilityContext,
+  loadRescheduleContext,
   overlaps,
   type AvailabilityContext,
 } from './availability-context.js';
-import { findAvailableSlots, type ProfessionalSchedule } from './availability.js';
+import { diagnoseStart, type ProfessionalSchedule } from './availability.js';
 import { appointmentEvents, appointments } from './schema.js';
 
 /**
@@ -45,16 +46,9 @@ export function checkSlot(
   professional: ProfessionalSchedule,
   start: Date,
 ): SlotCheck {
-  const offers = (busy: ProfessionalSchedule['busy']) =>
-    findAvailableSlots({
-      ...context.query,
-      window: { start, end: new Date(start.getTime() + MINUTE_MS) },
-      professionals: [{ ...professional, busy }],
-    }).some((slot) => slot.start.getTime() === start.getTime());
-
-  if (!offers([])) return 'slot_unavailable';
-  if (!offers(professional.busy)) return 'slot_taken';
-  return 'ok';
+  const { kind } = diagnoseStart(context.query, professional, start);
+  if (kind === 'free') return 'ok';
+  return kind === 'taken' ? 'slot_taken' : 'slot_unavailable';
 }
 
 function occupiedRange(start: Date, durationMinutes: number, bufferMinutes: number): TimestampRange {
@@ -236,7 +230,9 @@ export async function bookAppointment(
   const timeRange = occupiedRange(start, durationMinutes, service.bufferMinutes);
 
   try {
-    return await db.transaction(async (tx) => {
+    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, { tenantId, professionalId, range: timeRange, now });
 
       const [appointment] = await tx
@@ -277,7 +273,7 @@ export async function bookAppointment(
         status,
         deposit: { id: deposit.id, amountCents: depositCents, expiresAt },
       } as const;
-    });
+    }));
   } catch (error) {
     // Otra clienta ganó el horario entre la verificación y el guardado (sección 6.6).
     if (isConstraintViolation(error, EXCLUSION_VIOLATION, NO_OVERLAP)) {
@@ -356,32 +352,25 @@ export async function rescheduleAppointment(
   if (!current) return { ok: false, reason: 'not_found' };
   if (!canReschedule(current.status, actor)) return { ok: false, reason: 'not_reschedulable' };
 
-  const context = await loadAvailabilityContext(db, {
+  // La duración y el margen son los del momento de reservar, no los actuales del servicio.
+  const context = await loadRescheduleContext(db, {
     tenantId,
-    serviceId: current.serviceId,
-    professionalIds: [current.professionalId],
+    appointment: current,
     window: { start: newStart, end: new Date(newStart.getTime() + MINUTE_MS) },
     now,
-    excludeAppointmentId: appointmentId,
   });
   const professional = context?.query.professionals.find((p) => p.id === current.professionalId);
   if (!context || !professional) return { ok: false, reason: 'slot_unavailable' };
 
-  // La duración y el margen son los del momento de reservar, no los actuales del servicio.
-  const snapshot: AvailabilityContext = {
-    ...context,
-    query: {
-      ...context.query,
-      service: { durationMinutes: current.durationMinutes, bufferMinutes: current.bufferMinutes },
-    },
-  };
-  const slot = checkSlot(snapshot, { ...professional, durationOverrideMinutes: null }, newStart);
+  const slot = checkSlot(context, professional, newStart);
   if (slot !== 'ok') return { ok: false, reason: slot };
 
   const newRange = occupiedRange(newStart, current.durationMinutes, current.bufferMinutes);
 
   try {
-    return await db.transaction(async (tx) => {
+    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, {
         tenantId,
         professionalId: current.professionalId,
@@ -408,7 +397,7 @@ export async function rescheduleAppointment(
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
       return { ok: true } as const;
-    });
+    }));
   } catch (error) {
     if (isConstraintViolation(error, EXCLUSION_VIOLATION, NO_OVERLAP)) {
       return { ok: false, reason: 'slot_taken' };

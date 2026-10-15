@@ -109,7 +109,7 @@ export function findAvailableSlots(query: AvailabilityQuery): Slot[] {
     const busy = professional.busy.map(toInterval);
 
     for (let date = firstDate; date <= lastDate; date = addDaysToLocalDate(date, 1)) {
-      for (const block of workingBlocks(professional, date, query)) {
+      for (const block of dayBlocks(professional, date, query).blocks) {
         for (
           let start = alignToClock(block.start, rules.slotGranularityMinutes, timeZone);
           start + durationMs <= block.end;
@@ -133,12 +133,76 @@ export function findAvailableSlots(query: AvailabilityQuery): Slot[] {
   return slots.sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 
-/** Los bloques en que la profesional trabaja ese día local, ya sin los cierres. */
-function workingBlocks(
+/**
+ * Por qué un inicio de turno puntual se puede reservar o no (lo que le dice la herramienta
+ * `consultar_hora` a la clienta, 6.4). `free` y `taken` salen de la misma cuenta que usa la reserva:
+ * un horario es libre exactamente cuando `findAvailableSlots` lo ofrece.
+ *
+ * - `too_soon`: sin la anticipación mínima (también un horario que ya pasó).
+ * - `too_far`: más allá de la anticipación máxima.
+ * - `holiday`: feriado en que el negocio no trabaja. `closed_day`: ese día no hay bloques de trabajo.
+ * - `outside_hours`: el día se trabaja, pero el turno no entra completo en ningún bloque.
+ * - `off_grid`: dentro del horario, pero no es un inicio de la grilla (cada `slotGranularityMinutes`).
+ * - `taken`: sería válido, pero la profesional ya está ocupada (un turno o un evento de su calendario).
+ */
+export type SlotVerdict =
+  | { kind: 'free'; slot: Slot }
+  | { kind: 'taken' | 'too_soon' | 'too_far' | 'holiday' | 'closed_day' | 'outside_hours' | 'off_grid' };
+
+/**
+ * Valida un inicio puntual de una profesional con las mismas reglas que `findAvailableSlots`
+ * (ignora la ventana de la consulta). Si no es libre, dice el motivo; el orden es el de lo que la
+ * clienta puede cambiar menos: anticipación, día, horario, grilla.
+ */
+export function diagnoseStart(
+  query: AvailabilityQuery,
+  professional: ProfessionalSchedule,
+  start: Date,
+): SlotVerdict {
+  const offered = (busy: ProfessionalSchedule['busy']) =>
+    findAvailableSlots({
+      ...query,
+      window: { start, end: new Date(start.getTime() + MINUTE_MS) },
+      professionals: [{ ...professional, busy }],
+    }).find((slot) => slot.start.getTime() === start.getTime());
+
+  const free = offered(professional.busy);
+  if (free) return { kind: 'free', slot: free };
+  if (offered([])) return { kind: 'taken' };
+
+  // Es inválido por sí mismo: se busca cuál de las reglas incumple.
+  const { now, rules, service, timeZone } = query;
+  const startMs = start.getTime();
+  if (startMs < now.getTime() + rules.minBookingNoticeMinutes * MINUTE_MS) return { kind: 'too_soon' };
+  if (startMs > now.getTime() + rules.maxBookingAdvanceDays * DAY_MS) return { kind: 'too_far' };
+
+  const { blocks, closedForHoliday } = dayBlocks(professional, instantToLocal(start, timeZone).date, query);
+  if (blocks.length === 0) return { kind: closedForHoliday ? 'holiday' : 'closed_day' };
+
+  const durationMs = (professional.durationOverrideMinutes ?? service.durationMinutes) * MINUTE_MS;
+  const fitsABlock = blocks.some((block) => startMs >= block.start && startMs + durationMs <= block.end);
+  return { kind: fitsABlock ? 'off_grid' : 'outside_hours' };
+}
+
+/**
+ * El inicio de la grilla del reloj local (9:00, 9:15…) más cercano a `start`; si queda justo en el
+ * medio, el siguiente. `start` va en minutos enteros.
+ */
+export function nearestGridStart(start: Date, granularityMinutes: number, timeZone: string): Date {
+  const remainder = instantToLocal(start, timeZone).minutesOfDay % granularityMinutes;
+  const deltaMinutes = remainder * 2 < granularityMinutes ? -remainder : granularityMinutes - remainder;
+  return new Date(start.getTime() + deltaMinutes * MINUTE_MS);
+}
+
+/**
+ * Los bloques en que la profesional trabaja ese día local, ya sin los cierres. `closedForHoliday`: no
+ * hay bloques porque es un feriado en que el negocio no trabaja y ningún horario especial lo abre.
+ */
+function dayBlocks(
   professional: ProfessionalSchedule,
   date: LocalDate,
   query: AvailabilityQuery,
-): Interval[] {
+): { blocks: Interval[]; closedForHoliday: boolean } {
   const { timeZone, exceptions } = query;
   const day: Interval = {
     start: localDateTimeToInstant(date, '00:00', timeZone).getTime(),
@@ -153,12 +217,13 @@ function workingBlocks(
 
   const ownSpecial = specialHours(professional.id);
   const businessSpecial = specialHours(null);
-  const closedForHoliday = query.holidays.includes(date) && !query.worksOnHolidays;
+  const isClosedHoliday = query.holidays.includes(date) && !query.worksOnHolidays;
+  const closedForHoliday = isClosedHoliday && ownSpecial.length === 0 && businessSpecial.length === 0;
 
   let blocks: Interval[];
   if (ownSpecial.length > 0) {
     blocks = ownSpecial;
-  } else if (closedForHoliday && businessSpecial.length === 0) {
+  } else if (closedForHoliday) {
     blocks = [];
   } else {
     blocks = professional.weeklyHours
@@ -184,11 +249,11 @@ function workingBlocks(
     )
     .map((e) => toInterval(e.range));
 
-  return subtract(merge(blocks), closures);
+  return { blocks: subtract(merge(blocks), closures), closedForHoliday };
 }
 
-/** Primer inicio en la grilla del reloj local (9:00, 9:15…) a partir de `instant`. */
-function alignToClock(instant: number, granularityMinutes: number, timeZone: string): number {
+/** Primer inicio en la grilla del reloj local (9:00, 9:15…) a partir de `instant` (en ms). */
+export function alignToClock(instant: number, granularityMinutes: number, timeZone: string): number {
   const wholeMinute = Math.ceil(instant / MINUTE_MS) * MINUTE_MS;
   const { minutesOfDay } = instantToLocal(new Date(wholeMinute), timeZone);
   const remainder = minutesOfDay % granularityMinutes;
@@ -264,20 +329,27 @@ export interface ExistingAppointment {
 }
 
 /**
- * Qué turnos ocupan el horario: confirmados, con la seña en verificación (no vence sola)
+ * ¿Este turno ocupa el horario ahora? Confirmados, con la seña en verificación (no vence sola)
  * y con la seña pendiente mientras siga vigente (sección 4.3).
  */
+export function holdsSchedule(
+  appointment: Pick<ExistingAppointment, 'status' | 'depositExpiresAt'>,
+  now: Date,
+): boolean {
+  return (
+    occupiesSchedule(appointment.status) &&
+    !(
+      appointment.status === 'PENDING_DEPOSIT' &&
+      appointment.depositExpiresAt !== null &&
+      appointment.depositExpiresAt.getTime() <= now.getTime()
+    )
+  );
+}
+
+/** Los rangos que ocupan los turnos que ocupan el horario. */
 export function occupiedRanges(appointments: ExistingAppointment[], now: Date): TimestampRange[] {
   return appointments
-    .filter(
-      (appointment) =>
-        occupiesSchedule(appointment.status) &&
-        !(
-          appointment.status === 'PENDING_DEPOSIT' &&
-          appointment.depositExpiresAt !== null &&
-          appointment.depositExpiresAt.getTime() <= now.getTime()
-        ),
-    )
+    .filter((appointment) => holdsSchedule(appointment, now))
     .map((appointment) => appointment.timeRange);
 }
 

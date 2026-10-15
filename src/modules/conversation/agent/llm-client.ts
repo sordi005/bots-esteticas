@@ -46,7 +46,12 @@ export type LlmMessage =
   /** El turno del asistente de ESTA vuelta, que pidió herramientas. */
   | { role: 'assistant_turn'; turn: AssistantTurn }
   /** Todos los resultados de las herramientas de un mismo turno, juntos. */
-  | { role: 'tool_results'; results: LlmToolResult[] };
+  | { role: 'tool_results'; results: LlmToolResult[] }
+  /**
+   * Un aviso del sistema al modelo dentro de la vuelta, después de su turno: lo escribe el código,
+   * no la clienta. Cada adaptador decide cómo mandarlo para que los roles sigan alternando.
+   */
+  | { role: 'system_note'; text: string };
 
 export interface LlmRequest {
   /** Estable e idéntico entre llamadas del mismo negocio, para que el proveedor lo reutilice. */

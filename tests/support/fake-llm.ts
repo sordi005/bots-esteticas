@@ -29,9 +29,25 @@ function base(overrides: Partial<LlmResponse>): LlmResponse {
   };
 }
 
-/** La respuesta final del modelo, con la forma de `{ texto, opciones }`. */
+/** La respuesta final del modelo, con la forma de `{ texto, opciones, derivar }`: no deriva. */
 export function finalAnswer(texto: string, opciones: string[] = [], overrides: Partial<LlmResponse> = {}): LlmResponse {
-  return base({ text: JSON.stringify({ texto, opciones }), ...overrides });
+  return base({ text: JSON.stringify({ texto, opciones, derivar: null }), ...overrides });
+}
+
+/** Lo que el modelo completa en `derivar` cuando la respuesta deriva a una persona (6.4). */
+export interface HandoffRequest {
+  motivo: string;
+  resumen: string;
+}
+
+/** La respuesta final de un modelo que deriva a una persona: el campo `derivar` completo. */
+export function handoffAnswer(
+  texto: string,
+  derivar: HandoffRequest,
+  overrides: Partial<LlmResponse> = {},
+  opciones: string[] = [],
+): LlmResponse {
+  return base({ text: JSON.stringify({ texto, opciones, derivar }), ...overrides });
 }
 
 /** El modelo pide herramientas. */

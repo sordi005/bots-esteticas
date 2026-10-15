@@ -38,6 +38,7 @@ function resultWith(...starts: Date[]): EvalResult {
     outcome: 'replied',
     tokens: { entrada: 1, salida: 1, cacheLectura: 0, cacheEscritura: 0 },
     latenciaMs: 1,
+    estado: { turnos: [], derivaciones: [], pausada: false, nombreClienta: null },
   };
 }
 
@@ -55,7 +56,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 10 primeras evaluaciones de H7 más la que sumó la prueba manual, en orden', () => {
+  it('son las 11 de H7 y las 26 de H8 (reservar, cancelar, reprogramar, derivar y consultar una hora puntual), en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -68,14 +69,52 @@ describe('evalCases', () => {
       'feriado',
       'inyeccion_precio',
       'turno_sin_servicio',
+      'reserva_completa',
+      'reserva_pide_nombre',
+      'reserva_nombre_despues',
+      'horario_ocupado',
+      'reserva_con_profesional',
+      'mis_turnos',
+      'sin_turnos',
+      'turno_de_otra',
+      'cancelar_pide_confirmacion',
+      'cancelar_confirmado',
+      'cancelar_fuera_de_plazo',
+      'reprogramar_ofrece',
+      'reprogramar_confirmado',
+      'reprogramar_sin_reprogramaciones',
+      'reprogramar_no_reserva',
+      'hora_puntual_libre',
+      'hora_puntual_reprogramar',
+      'hora_puntual_ocupada',
+      'pide_persona',
+      'derivacion_resumen_sin_estado_viejo',
+      'queja',
+      'salud_embarazo',
+      'alergia',
+      'imagen',
+      'consulta_previa',
+      'derivacion_fuera_de_horario',
     ]);
+  });
+
+  it('el criterio de H8 son 30 evaluaciones o más', () => {
+    expect(evalCases).toHaveLength(37);
+    expect(evalCases.length).toBeGreaterThanOrEqual(30);
   });
 
   it('cada una tiene mensajes de la clienta y al menos una expectativa', () => {
     for (const { nombre, mensajes, espera } of evalCases) {
       expect(mensajes.length, nombre).toBeGreaterThan(0);
-      expect(mensajes.every((mensaje) => mensaje.trim() !== ''), nombre).toBe(true);
+      expect(mensajes.every((mensaje) => typeof mensaje !== 'string' || mensaje.trim() !== ''), nombre).toBe(true);
       expect(Object.keys(espera).length, nombre).toBeGreaterThan(0);
+    }
+  });
+
+  it('ningún caso depende de derivar_a_persona como herramienta: derivar va en la respuesta (decisión 27)', () => {
+    for (const { nombre, espera } of evalCases) {
+      expect(espera.herramientas ?? [], nombre).not.toContain('derivar_a_persona');
+      expect(espera.noLlama ?? [], nombre).not.toContain('derivar_a_persona');
     }
   });
 

@@ -74,6 +74,7 @@ describe('serviceContent: lo que lee el modelo de cada servicio', () => {
   it('trae el id, los precios escritos, la duración y quién lo hace', () => {
     expect(serviceContent(service())).toEqual({
       id: '00000000-0000-4000-8000-000000000201',
+      opcionId: 'servicio:00000000-0000-4000-8000-000000000201',
       nombre: 'Esmaltado semipermanente',
       categoria: 'Manos',
       precio: '$18.000',
@@ -88,6 +89,13 @@ describe('serviceContent: lo que lee el modelo de cada servicio', () => {
         { id: SOFI.id, nombre: 'Sofi', duracionMinutos: 75 },
       ],
     });
+  });
+
+  it('el opcionId es el id del botón del servicio, para que el modelo pueda ofrecerlo', () => {
+    const other = service({ id: '00000000-0000-4000-8000-000000000999', name: 'Uñas esculpidas' });
+
+    expect(serviceContent(other).opcionId).toBe('servicio:00000000-0000-4000-8000-000000000999');
+    expect(serviceContent(other).opcionId).toBe(serviceOption(other).id);
   });
 
   it('un servicio "desde" sin precio en efectivo', () => {

@@ -38,7 +38,7 @@ function dayAndMonth(date: LocalDate): string {
   return `${String(Number(day))}/${String(Number(month))}`;
 }
 
-function clockTime(time: string): string {
+export function formatClockTime(time: string): string {
   const [hour = '', minute = ''] = time.split(':');
   return `${String(Number(hour))}:${minute}`;
 }
@@ -46,20 +46,20 @@ function clockTime(time: string): string {
 /** "viernes 9/10 15:30". */
 export function formatLocalSlot(instant: Date, timeZone: string): string {
   const local = instantToLocal(instant, timeZone);
-  return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)} ${clockTime(local.time)}`;
+  return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)} ${formatClockTime(local.time)}`;
 }
 
 /** "viernes 9/10/2026 15:30": con el año, para decirle al asistente qué día es hoy. */
 export function formatLocalDateTime(instant: Date, timeZone: string): string {
   const local = instantToLocal(instant, timeZone);
   const year = local.date.slice(0, 4);
-  return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)}/${year} ${clockTime(local.time)}`;
+  return `${weekdayName(local.weekday)} ${dayAndMonth(local.date)}/${year} ${formatClockTime(local.time)}`;
 }
 
 /** "vie 9/10 15:30": entra en el título de un botón o de una fila de lista (20 caracteres). */
 export function formatShortSlot(instant: Date, timeZone: string): string {
   const local = instantToLocal(instant, timeZone);
-  return `${shortWeekdayName(local.weekday)} ${dayAndMonth(local.date)} ${clockTime(local.time)}`;
+  return `${shortWeekdayName(local.weekday)} ${dayAndMonth(local.date)} ${formatClockTime(local.time)}`;
 }
 
 /** "lunes 12/10": un día cargado como AAAA-MM-DD. */

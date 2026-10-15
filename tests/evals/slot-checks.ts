@@ -1,5 +1,6 @@
 import { parseChoiceId } from '../../src/modules/conversation/tools/choice-ids.js';
 import { instantToLocal, type LocalDate } from '../../src/shared/time-zone.js';
+import { formatLocalStart } from './local-time.js';
 import type { EvalResult } from './evaluate.js';
 
 /**
@@ -9,23 +10,34 @@ import type { EvalResult } from './evaluate.js';
  */
 
 interface OfferedSlot {
+  /** Para qué es: reservar (`horario:`) o mover un turno (`reprogramar:`). */
+  kind: 'slot' | 'reschedule';
   start: Date;
+  /** La profesional del horario, tal como lo resolvió la base. Null si no se pudo resolver. */
+  professional: string | null;
   /** Fecha y hora locales del negocio, para los mensajes de error. */
   local: { date: LocalDate; time: string; minutesOfDay: number };
   /** Cómo quedó después de volver a resolver la opción contra la base (`resolveChoice`). */
   stillFree: boolean;
 }
 
-/** Las opciones `horario:` del mensaje; "Ver otros horarios" y los servicios no cuentan. */
+/**
+ * Las opciones `horario:` (para reservar) y `reprogramar:` (para mover un turno) del mensaje;
+ * "Ver otros horarios" y los servicios no cuentan.
+ */
 function offeredSlots(result: EvalResult, timeZone: string): OfferedSlot[] {
   const slots: OfferedSlot[] = [];
   for (const option of result.opciones) {
     const choice = parseChoiceId(option.id);
-    if (choice?.kind !== 'slot') continue;
+    if (choice?.kind !== 'slot' && choice?.kind !== 'reschedule') continue;
+    const resolved = option.resuelta;
+    const known = resolved?.tipo === 'horario' || resolved?.tipo === 'reprogramar' ? resolved : null;
     slots.push({
+      kind: choice.kind,
       start: choice.start,
+      professional: known?.profesionalNombre ?? null,
       local: instantToLocal(choice.start, timeZone),
-      stillFree: option.resuelta?.tipo === 'horario' && option.resuelta.sigueLibre,
+      stillFree: known?.sigueLibre ?? false,
     });
   }
   return slots;
@@ -59,4 +71,114 @@ export function verifySlotsOnDayFrom(
 export function verifyNoSlotsOnDay(result: EvalResult, date: LocalDate, timeZone: string): string | null {
   const onDay = offeredSlots(result, timeZone).find((slot) => slot.local.date === date);
   return onDay ? `Ofreció un horario el ${date} (${label(onDay)}, hora local)` : null;
+}
+
+/** Hay al menos un horario y todos siguen libres según la base (de cualquier día y hora). */
+export function verifyOffersFreeSlots(result: EvalResult, timeZone: string): string | null {
+  const slots = offeredSlots(result, timeZone);
+  if (slots.length === 0) return 'No ofreció ningún horario';
+  const taken = slots.find((slot) => !slot.stillFree);
+  return taken ? `El horario ${label(taken)} (hora local) no está libre según la base` : null;
+}
+
+/** Hay al menos un horario y todos son de esa profesional (por nombre, como la resolvió la base). */
+export function verifySlotsOfProfessional(result: EvalResult, professional: string, timeZone: string): string | null {
+  const slots = offeredSlots(result, timeZone);
+  if (slots.length === 0) return 'No ofreció ningún horario';
+  const other = slots.find((slot) => slot.professional !== professional);
+  return other
+    ? `Ofreció un horario con ${other.professional ?? 'una profesional que no se pudo resolver'} (${label(other)}, hora local) y se pedía ${professional}`
+    : null;
+}
+
+/** No ofreció ese horario (inicio local "AAAA-MM-DD HH:MM") con esa profesional. A la misma hora con otra, sí se puede. */
+export function verifySlotNotOffered(
+  result: EvalResult,
+  slot: { profesional: string; inicio: string },
+  timeZone: string,
+): string | null {
+  const offered = offeredSlots(result, timeZone).find(
+    (candidate) => candidate.professional === slot.profesional && formatLocalStart(candidate.start, timeZone) === slot.inicio,
+  );
+  return offered ? `Ofreció el horario ${slot.inicio} con ${slot.profesional}, que ya estaba ocupado` : null;
+}
+
+/**
+ * Ofreció, como opción, justo la hora que preguntó la clienta (inicio local "AAAA-MM-DD HH:MM"), para reservar
+ * (`horario:`) o para mover un turno (`reprogramar:`), con la profesional si se pide, y sigue libre según la base.
+ * Es lo que tiene que pasar cuando `consultar_hora` dice que la hora está libre (decisión 29).
+ */
+export function verifySlotOffered(
+  result: EvalResult,
+  expected: { inicio: string; profesional?: string; para: 'reservar' | 'reprogramar' },
+  timeZone: string,
+): string | null {
+  const wanted = expected.para === 'reservar' ? 'slot' : 'reschedule';
+  const found = offeredSlots(result, timeZone).find(
+    (slot) =>
+      slot.kind === wanted &&
+      formatLocalStart(slot.start, timeZone) === expected.inicio &&
+      (expected.profesional === undefined || slot.professional === expected.profesional),
+  );
+  if (!found) {
+    const withWho = expected.profesional ? ` con ${expected.profesional}` : '';
+    return `No ofreció el horario ${expected.inicio}${withWho} para ${expected.para}`;
+  }
+  return found.stillFree ? null : `El horario ${label(found)} (hora local) no está libre según la base`;
+}
+
+/**
+ * Ofreció horarios para MOVER el turno (`reprogramar:`) y ninguno para reservar (`horario:`): la
+ * intención va en el id (decisión 28). Cada uno se volvió a resolver contra la base, que solo
+ * resuelve turnos de ESTA clienta.
+ */
+export function verifyOffersRescheduleSlots(result: EvalResult, timeZone: string): string | null {
+  const reserve: OfferedSlot[] = [];
+  const reschedule: OfferedSlot[] = [];
+  for (const option of result.opciones) {
+    const choice = parseChoiceId(option.id);
+    if (choice?.kind !== 'slot' && choice?.kind !== 'reschedule') continue;
+    const slot: OfferedSlot = {
+      kind: choice.kind,
+      start: choice.start,
+      professional: null,
+      local: instantToLocal(choice.start, timeZone),
+      stillFree: option.resuelta?.tipo === 'reprogramar',
+    };
+    (choice.kind === 'slot' ? reserve : reschedule).push(slot);
+  }
+
+  const wrong = reserve[0];
+  if (wrong) return `Ofreció un horario para reservar (horario:) en vez de uno para reprogramar: ${label(wrong)} (hora local)`;
+  if (reschedule.length === 0) return 'No ofreció ningún horario';
+  const unresolved = reschedule.find((slot) => !slot.stillFree);
+  return unresolved
+    ? `El horario para reprogramar ${label(unresolved)} (hora local) no es de un turno de la clienta`
+    : null;
+}
+
+/**
+ * Ofreció el botón «Sí, cancelar» (4.6) de un turno de la clienta que sigue activo: el id se
+ * volvió a resolver contra la base, que solo resuelve turnos de ESTA clienta.
+ */
+export function verifyCancelButtonOffered(result: EvalResult): string | null {
+  const button = result.opciones.find((option) => parseChoiceId(option.id)?.kind === 'cancel');
+  if (!button) return 'No ofreció el botón «Sí, cancelar»';
+  if (button.resuelta?.tipo !== 'cancelar') return 'El botón de cancelar no es de un turno de la clienta';
+  return button.resuelta.ocupaHorario ? null : 'El botón de cancelar es de un turno que ya no está activo';
+}
+
+/**
+ * Los horarios ofrecidos van como botones o lista: el texto no los repite (6.4, reglas del prompt).
+ * Nombrar uno solo está bien («el primero libre es a las 13:00»); repetir dos o más, no. La prueba
+ * manual con Meta mostró la lista entera escrita en el texto y además como botones.
+ */
+export function verifySlotsNotRepeatedInText(result: EvalResult, timeZone: string): string | null {
+  // "09:00" se escribe "9:00" en el texto: se compara sin el cero de adelante.
+  const repeated = offeredSlots(result, timeZone)
+    .map((slot) => slot.local.time.replace(/^0/, ''))
+    .filter((time) => new RegExp(String.raw`(?<![\d:])${time}(?!\d)`).test(result.texto));
+  return repeated.length >= 2
+    ? `Repitió en el texto los horarios que ya ofrece como opciones: ${repeated.join(', ')}`
+    : null;
 }

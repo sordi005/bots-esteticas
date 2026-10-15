@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   findAvailableSlots,
+  holdsSchedule,
   occupiedRanges,
   pickFirstAvailable,
   type AvailabilityQuery,
@@ -180,6 +181,7 @@ describe('occupiedRanges: qué turnos ocupan el horario', () => {
     const result = occupiedRanges([{ status, timeRange, depositExpiresAt }], now);
 
     expect(result).toEqual(occupies ? [timeRange] : []);
+    expect(holdsSchedule({ status, depositExpiresAt }, now)).toBe(occupies);
   });
 });
 

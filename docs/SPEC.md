@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.10 · 08/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.11 · 09/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -168,7 +168,7 @@ Reglas:
 
 - **[D]** Si el precio es `desde`, el asistente dice "desde $X" y aclara que el precio final lo confirma la profesional. Nunca calcula un precio que no está cargado.
 - **[D]** Los combos (por ejemplo, "manos + pies") se cargan como un servicio más, con su propia duración y precio. No hay motor de combos en el MVP.
-- **[D]** Si la clienta pide algo que no está en el catálogo, el asistente deriva.
+- **[D]** Si la clienta pide algo que no está en el catálogo, el asistente le dice que no lo tiene y le ofrece que la ayude una persona. Deriva si la clienta acepta o insiste. No deriva de entrada: derivar pausa el asistente (4.8), y una pregunta como "¿hacen masajes?" no justifica dejar de atenderla.
 - **[S]** Retiro de un trabajo anterior: se carga como servicio aparte o como variante ("semipermanente con retiro"). Validar cómo lo cobra cada negocio.
 
 ### 4.2 Profesionales y horarios
@@ -271,7 +271,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 | ¿Se pide seña? | Nunca / siempre / solo clientas nuevas / solo clientas con ausencias previas | Siempre |
 | Monto | Porcentaje del precio o monto fijo | 30 % |
 | Plazo para pagar | Minutos desde que se crea la reserva provisoria | 60 minutos |
-| Medios | Link de Mercado Pago / transferencia al alias / ambos | Ambos |
+| Medio | Link de Mercado Pago / transferencia al alias. **[D]** Uno solo: lo elige el negocio, no la clienta | Transferencia (Mercado Pago llega en H11) |
 | Cancelación con devolución o traspaso | Con al menos X horas de anticipación | 24 horas |
 | Reprogramaciones que conservan la seña | Cantidad | 1 |
 
@@ -298,6 +298,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - **[S]** Cálculo del monto: el porcentaje se aplica sobre el precio de lista (en el ejemplo de 5.4, 30 % de $18.000 = $5.400) y se redondea hacia arriba al peso entero. Un monto fijo nunca supera el precio del servicio. Un servicio sin precio no lleva seña.
 - **[S]** "Clienta nueva" es la que todavía no tiene ningún turno completado en ese negocio.
 - **[?]** ¿La seña se pierde o se traspasa cuando la clienta cancela tarde? Depende de cada negocio: validar.
+- Cancelar un turno con la seña pendiente deja la seña en `pending` (el estado de la seña no tiene "cancelada"). Por eso, antes de aceptar un pago o un comprobante (H9, H11), se verifica que el turno siga pendiente de seña.
 
 ### 4.6 Cancelación y reprogramación por la clienta
 
@@ -305,7 +306,11 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - **[D]** Si está dentro del plazo de la política, el asistente lo resuelve solo: libera el horario y, si reprograma, ofrece nuevos horarios manteniendo la seña.
 - **[D]** Si está fuera de plazo, el asistente informa la política con amabilidad y **deriva a la dueña**. No discute ni decide excepciones.
 - **[S]** "Con al menos X horas de anticipación": justo X horas antes todavía está dentro de plazo. Un turno que ya empezó no lo cancela ni lo reprograma el asistente.
-- **[S]** Si la clienta ya usó las reprogramaciones que conservan la seña, reprogramar de nuevo es una excepción: deriva a la dueña. Sin seña, no hay límite de reprogramaciones.
+- **[S]** El plazo vale para todos los turnos, aunque la seña no esté pagada o el servicio no lleve seña: un turno sin seña cancelado 3 horas antes también se deriva. Validar con dueñas.
+- **[S]** Si la clienta ya usó las reprogramaciones que conservan la seña, reprogramar de nuevo es una excepción: deriva a la dueña. Sin seña, no hay límite de reprogramaciones. "Tiene seña" quiere decir que la pagó o que está en verificación; una seña pendiente todavía no se pagó.
+- **[S]** Reprogramar es cambiar el horario del mismo servicio con la misma profesional. Cambiar de profesional o de servicio es una excepción: deriva.
+- **[S]** Antes de cancelar, el asistente le pide a la clienta que lo confirme, con un botón "Sí, cancelar". Reprogramar no lo necesita: elegir el horario nuevo ya es la confirmación.
+- **[D]** Si no corresponde (fuera de plazo, turno que ya empezó, sin reprogramaciones), la herramienta no toca el turno y deriva ella misma: lo decide el código, no el modelo.
 - **[D]** Toda cancelación o reprogramación le llega como aviso a la dueña y actualiza Google Calendar.
 
 ### 4.7 Recordatorios
@@ -327,20 +332,33 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 - Queja, reclamo o enojo.
 - Temas de salud, alergias, embarazo, contraindicaciones.
 - Fotos de diseños o cualquier imagen que no sea un comprobante.
-- Servicios con consulta previa o fuera del catálogo.
+- Servicios con consulta previa.
 - Cancelaciones fuera de plazo, pedidos de devolución, excepciones.
-- El asistente no entiende después de dos intentos.
+- El asistente no entiende después de dos intentos (8.5).
+
+Un servicio fuera del catálogo o un dato que no está cargado no se derivan de entrada: el asistente ofrece una persona y deriva si la clienta acepta o insiste (4.1, 5.1).
 
 **Qué pasa cuando deriva [D]:**
 
 1. Le dice a la clienta que una persona le va a responder. Si es fuera del horario de atención, le dice cuándo.
 2. **Pausa el asistente en esa conversación.** No vuelve a responder hasta que se reanude.
-3. Le avisa a la dueña con el nombre de la clienta, el motivo y un resumen de una línea. **[D]** Si el motivo es de salud, alergias, embarazo o contraindicaciones, se registra como "tema sensible" y el resumen no incluye el detalle: no se extraen datos de salud a ningún campo (sección 4.9).
+3. Le avisa a la dueña con el nombre de la clienta, el motivo y un resumen de una línea. **[D]** Si el motivo es de salud, alergias, embarazo o contraindicaciones, se registra como "tema sensible" y el resumen no incluye el detalle: no se extraen datos de salud a ningún campo (sección 4.9). El aviso sale por el número de avisos del servicio, que llega en H9; en H8 la derivación queda registrada en `handoffs`.
+
+Detalle de la derivación (H8):
+
+- **[D]** El registro de la derivación y la pausa se guardan juntos, en una transacción.
+- **[D]** Con motivo "tema sensible", el código guarda un resumen fijo ("Tema sensible: ver la conversación") y descarta el que escribió el modelo. No depende de que el modelo obedezca el prompt.
+- **[S]** El resumen es de una línea, hasta 200 caracteres.
+- **[S]** "Cuándo le responde una persona" sale del horario de atención humana del negocio (`tenant_settings`): si ahora está dentro, "en este horario"; si no, el próximo inicio ("el viernes 9/10 a las 9:00"). Si el negocio no trabaja feriados, un feriado no tiene atención. Sin horario cargado, "lo antes posible", sin prometer una hora.
 
 **Cómo se reanuda:**
 
 - **[D]** Si la dueña responde desde su app de WhatsApp Business, el sistema lo detecta (mensajes "eco" de la coexistencia, sección 8.1) y **mantiene pausado** el asistente mientras ella esté conversando.
-- **[S]** El asistente se reanuda solo después de 12 horas sin mensajes de la dueña en esa conversación.
+- **[S]** El asistente se reanuda solo después de 12 horas sin mensajes de la dueña en esa conversación. Hasta que lleguen los ecos (H13), las 12 horas se cuentan desde la derivación (`paused_until`); en H13 cada eco las corre.
+- **[D]** La pausa vence sola por fecha: no hace falta una tarea programada. Al procesar una conversación con la pausa vencida, el asistente vuelve a estar activo y contesta normalmente.
+- **[D]** Mientras el asistente está pausado, los mensajes de la clienta se marcan como procesados sin llamar al modelo ni contestar. Así no se acumulan para cuando se reanude: los atiende la persona.
+- **[D]** Que venza la pausa no resuelve la derivación: queda abierta hasta que la resuelva una persona (H9, H15).
+- **[D]** Al reanudarse, el asistente no ve lo que se habló antes: eso ya lo atendió (o lo está atendiendo) una persona. Se guarda cuándo se reanudó (`resumed_at`), el historial que ve el modelo arranca ahí (también las opciones elegidas que habilitan reservar o reprogramar: una elección de antes de la derivación ya no cuenta) y el contexto de la vuelta le avisa que se reanudó después de una derivación, para que atienda solo el pedido nuevo. Sin esto, la prueba manual con Meta mostró un ciclo: al vencer la pausa, el modelo veía en el historial a la clienta pidiendo una persona sin respuesta ("¿qué pasó con la persona?") y volvía a derivar, sin atender el turno que pedía. Los mensajes que la dueña manda desde su app (ecos, H13) no entran en ese historial, así que el ciclo no se cortaría solo.
 - **[D]** Regla de oro: **si la dueña escribió en una conversación, el asistente se calla.** Es preferible que el asistente no conteste a que se pise con ella.
 
 **Aviso diario a la dueña [S]:** a las 8 de la mañana, un resumen con los turnos del día, los turnos sin confirmar y las derivaciones pendientes. A las 21, un mensaje con los turnos del día para marcar ausentes con un botón.
@@ -401,7 +419,7 @@ Si no hay lugar, el asistente ofrece anotarla para un día y franja. Cuando se l
 
 1. **[D] Se presenta como asistente virtual** en el primer mensaje de cada conversación nueva. Nunca finge ser una persona. **[S]** Una conversación es nueva si el asistente no le escribió a la clienta en las últimas 24 horas.
 2. **[D] Siempre se puede pedir una persona.** El asistente lo menciona cuando corresponde.
-3. **[D] Nunca inventa.** Si un dato no está cargado, dice que no lo tiene y deriva.
+3. **[D] Nunca inventa.** Si un dato no está cargado, dice que no lo tiene y ofrece que la ayude una persona. Deriva si la clienta acepta o insiste (4.8).
 4. **[D] Un mensaje por respuesta.** Cada mensaje enviado tiene costo, y cuatro mensajes cortos cuestan cuatro veces uno largo.
 5. **[D] Elecciones con botones o listas.** Horarios, servicios y confirmaciones se eligen con los mensajes interactivos de WhatsApp, no escribiendo. Menos errores y menos idas y vueltas.
 6. **[S] Tono configurable por negocio:** voseo por defecto, uso de emojis (poco, medio, nada) y nombre del asistente.
@@ -434,18 +452,52 @@ Clienta:   [15:30]
 Asistente: ¡Genial! ¿A nombre de quién lo anoto?
 Clienta:   Caro Pérez
 Asistente: Listo Caro, te guardo el viernes 3 a las 15:30 con Mica.
-           Para confirmarlo hay que dejar una seña de $5.400 en la
-           próxima hora. ¿Cómo preferís pagarla?
-           [Mercado Pago] [Transferencia]
-Clienta:   [Mercado Pago]
-Asistente: Acá tenés el link: https://mpago.la/…
+           Para confirmarlo hay que dejar una seña de $5.400 antes de
+           las 11:00. Acá tenés el link para pagarla: https://mpago.la/…
            Apenas se acredite te confirmo por acá.
    (webhook de Mercado Pago: pago aprobado)
 Asistente: ¡Seña recibida! Tu turno quedó confirmado:
            viernes 3 a las 15:30 con Mica. Te recuerdo el día anterior.
 ```
 
-Los flujos de consulta de precio, reprogramación, cancelación, fuera de horario y derivación se agregan a esta sección, con el mismo formato, a medida que se implementan. Cada flujo escrito acá se convierte también en una evaluación (sección 11.4).
+El medio de la seña lo eligió el negocio (4.5): en este ejemplo, Mercado Pago. Con transferencia, el asistente manda el alias y el monto, y espera el comprobante. Hasta H9 el asistente dice el monto y el plazo, y que una persona del equipo le pasa los datos para pagarla.
+
+**Cancelación (H8):**
+
+```
+Clienta:   hola, tengo que cancelar el turno del martes
+Asistente: Tenés el martes 13/10 a las 17:00, esmaltado semipermanente
+           con Mica. ¿Lo cancelo?
+           [Sí, cancelar]
+Clienta:   [Sí, cancelar]
+Asistente: Listo, quedó cancelado. Cuando quieras sacar otro turno,
+           escribime por acá.
+```
+
+Si faltan menos de 24 horas (4.5, 4.6), la herramienta no cancela y deriva: "Como faltan menos de 24 horas, la cancelación la ve una persona del equipo, que te responde por acá en este horario."
+
+**Reprogramación (H8):**
+
+```
+Clienta:   puedo pasar mi turno del martes al miércoles?
+Asistente: Para el miércoles 14/10 Mica tiene estos horarios:
+           [10:00] [15:30] [17:00]
+Clienta:   [15:30]
+Asistente: Listo, te pasé el turno al miércoles 14/10 a las 15:30
+           con Mica. Tu seña sigue valiendo.
+```
+
+**Derivación (H8):**
+
+```
+Clienta:   estoy embarazada, puedo hacerme el lifting?
+Asistente: Eso lo tiene que ver una persona del equipo. Ya le pasé
+           tu consulta y te responde por acá en este horario.
+```
+
+El asistente no pregunta ni repite detalles de salud, y la derivación se registra como "tema sensible" sin el detalle (4.8). Desde ahí se calla en esa conversación hasta que se reanude.
+
+Los flujos de consulta de precio y fuera de horario se agregan a esta sección, con el mismo formato, a medida que se implementan. Cada flujo escrito acá se convierte también en una evaluación (sección 11.4).
 
 ---
 
@@ -526,13 +578,17 @@ Herramientas del agente en el MVP:
 |---|---|
 | `buscar_servicios(texto)` | Devuelve servicios del catálogo que coinciden, con precio y duración |
 | `consultar_informacion(tema)` | Devuelve datos del negocio: dirección, medios de pago, promociones, políticas |
-| `consultar_disponibilidad(servicio, profesional?, desde, hasta)` | Devuelve horarios libres |
-| `crear_reserva(servicio, profesional?, inicio, nombre)` | Crea el turno o la reserva provisoria, aplicando las reglas de seña |
-| `generar_pago_seña(turno, medio)` | Genera el link de Mercado Pago o devuelve el alias |
+| `consultar_disponibilidad(servicio, profesional?, desde, hasta)` | Devuelve horarios libres para reservar |
+| `consultar_horarios_para_reprogramar(turno, desde, hasta)` | Devuelve horarios libres para mover ese turno, con su servicio y su profesional |
+| `consultar_hora(servicio, fecha, hora, profesional?)` | Dice si una hora puntual está libre para reservar; si lo está, la ofrece |
+| `consultar_hora_para_reprogramar(turno, fecha, hora)` | Lo mismo, para mover ese turno |
+| `crear_reserva(horario, nombre?)` | Crea el turno o la reserva provisoria, aplicando las reglas de seña |
+| `generar_pago_seña(turno)` | Genera el link de Mercado Pago o devuelve el alias, según el medio que eligió el negocio (4.5) |
 | `listar_turnos_de_la_clienta()` | Turnos futuros de quien escribe |
-| `reprogramar_turno(turno, nuevo_inicio)` | Aplica la política |
-| `cancelar_turno(turno)` | Aplica la política |
-| `derivar_a_persona(motivo, resumen)` | Pausa el asistente y avisa a la dueña |
+| `reprogramar_turno(horario)` | Aplica la política. El horario es uno de los que devolvió `consultar_horarios_para_reprogramar` |
+| `cancelar_turno(turno, confirmada)` | Aplica la política |
+
+**[D]** Derivar a una persona no es una herramienta: es parte de la respuesta del modelo (campo `derivar`, más abajo). El código registra la derivación, pausa el asistente y avisa a la dueña.
 
 **[D]** Las herramientas reciben el negocio y la clienta desde el contexto del servidor, nunca como parámetro elegido por el modelo. El modelo no puede consultar datos de otra clienta ni de otro negocio.
 
@@ -544,6 +600,26 @@ Detalle de las herramientas de consulta (H7):
 - `consultar_informacion(tema)` acepta los temas de `business_info` más `horarios`, que el código arma con el horario semanal de las profesionales activas. Un tema sin texto cargado se informa como "no cargado".
 - `consultar_disponibilidad(servicio, profesional?, desde, hasta, franja?, despues_de?)` recibe fechas locales y una franja opcional (mañana, tarde, noche). `despues_de` es el inicio del último horario ofrecido: con él, "Ver otros horarios" trae los siguientes en vez de repetir los mismos. **[S]** El rango es de hasta 7 días. Un servicio que no es visible o requiere consulta previa no devuelve horarios: devuelve el motivo. Si no hay lugar en el rango, ofrece el próximo horario libre.
 - **[D]** La respuesta del modelo es un texto más, opcionalmente, opciones para elegir. Las opciones solo pueden ser ids que devolvió una herramienta en esa misma vuelta: el código lo verifica y arma los botones o la lista (8.1). Un id que no salió de una herramienta se descarta.
+
+Detalle de las herramientas de turnos y derivación (H8):
+
+- **[D]** `crear_reserva` y `reprogramar_turno` reciben el **id del horario** que devolvió `consultar_disponibilidad` (o el de la elección de la clienta). El modelo copia un id; no arma combinaciones ni convierte horarios. El código lo vuelve a validar todo con `booking.ts` (6.6).
+- **[D]** La intención va en el id. Un horario para reservar (`horario:<servicio>:<profesional>:<inicio>`) y uno para reprogramar (`reprogramar:<turno>:<inicio>`) son ids distintos: `crear_reserva` solo acepta los primeros y `reprogramar_turno` solo los segundos. `consultar_horarios_para_reprogramar` devuelve los horarios para mover un turno, con su servicio y su profesional (4.6), y valida que sea de la clienta que escribe. Las evaluaciones mostraron que, después de pedir una reprogramación, la clienta tocaba el horario y el modelo llamaba a `crear_reserva`: quedaba con dos turnos.
+- **[D]** Las opciones que se ofrecen van separadas por 90 minutos (4.3), así que entre una y otra puede haber horarios libres que no se ofrecieron. Si la clienta pregunta por una hora puntual ("¿y a las 16:30?", "a las 20 hs"), el asistente la verifica con `consultar_hora` o `consultar_hora_para_reprogramar`, que reciben la fecha y la hora locales (las convierte el código) y responden si está libre, con la opción para elegirla; si no lo está, el motivo real (fuera de horario, ocupada, sin la anticipación mínima) y los horarios más cercanos. El asistente nunca dice que un horario está ocupado o no existe si una herramienta no lo dijo. La prueba manual con Meta mostró «A las 16:30 ya no hay lugar: se ocupó» con las 16:30 libres: no se habían ofrecido por la separación, y el modelo no tenía cómo verificarlas.
+- **[D]** El asistente nunca confirma un cambio que no pasó. Si el texto dice que un turno quedó reservado, cancelado o reprogramado y en esa vuelta ninguna herramienta lo confirmó, el ciclo del agente se lo hace notar al modelo **una vez**; si lo vuelve a decir, la clienta recibe el texto fijo «Perdón, no te entendí bien…» (8.5), que cuenta como intento fallido. Lo verifica el código porque las evaluaciones mostraron «Ya te quedó reprogramado» sin haber llamado a `reprogramar_turno`: es preferible no contestar bien a confirmar algo falso.
+- **[D]** Reservar y reprogramar consultan horarios con herramientas distintas, y cada una tiene sus parámetros obligatorios. Un parámetro opcional que cambia lo que hace la herramienta se omite: con `turno` opcional en `consultar_disponibilidad`, el modelo dejaba de mandar el servicio también al consultar para reservar.
+- **[D]** Cada respuesta es la única de la vuelta: el asistente no puede anunciar que va a buscar algo ("dame un momento que busco tus turnos") y seguir después. Consulta con las herramientas y contesta con el resultado. Lo verifica el código: si en la vuelta no se llamó a ninguna herramienta y el texto anuncia una búsqueda ("dejame consultar", "voy a buscar", "un momento", "lo intento"), el ciclo del agente se lo hace notar al modelo **una vez** para que consulte y conteste con el resultado. Una detección equivocada cuesta una llamada más y el modelo vuelve a contestar lo mismo. Las evaluaciones mostraron que la regla del prompt sola no alcanzaba: "Dejame consultar los medios de pago para responderte" y la vuelta terminaba ahí.
+- **[D]** `crear_reserva` y `reprogramar_turno` solo actúan sobre un horario que **la clienta eligió** con un botón o una lista, en esa vuelta o en las últimas 24 horas. Si el modelo pasa un horario que ella no tocó (por ejemplo, porque lo escribió o porque el modelo lo eligió por su cuenta), la herramienta no cambia nada y devuelve ese horario como opción, para que lo confirme con un botón. Elegir es la confirmación (principio 5), y lo garantiza el código: las evaluaciones mostraron al modelo reprogramando un turno a un horario que la clienta nunca eligió.
+- **[D]** El historial que ve el modelo muestra, de cada elección vieja, el id de la opción elegida además de su título. Así, si después de elegir el horario hay que pedir el nombre, el modelo todavía tiene el id para reservar.
+- `crear_reserva(horario, nombre?)`: el nombre es obligatorio si la clienta todavía no tiene uno cargado (4.9) y se guarda en su ficha. Devuelve el estado del turno y, si lleva seña, el monto y hasta cuándo pagarla, escritos por el código. **[D]** Es idempotente: si la clienta ya tiene ese mismo turno, lo devuelve en vez de responder que el horario se ocupó (un reintento puede volver a pedirlo).
+- `listar_turnos_de_la_clienta()`: **[S]** hasta 10 turnos futuros que ocupan horario (4.3), del más cercano al más lejano, con su estado, su seña y hasta cuándo se pueden cancelar o reprogramar sin costo. Ofrece cada turno como opción para elegir cuál. Al resolver esa elección se verifica que el turno sea de la clienta que escribe, no solo del negocio.
+- `cancelar_turno(turno, confirmada)`: con `confirmada` en falso valida el turno y la política y ofrece el botón "Sí, cancelar" (4.6); con verdadero, cancela. Un turno que ya estaba cancelado responde que ya lo está.
+- `reprogramar_turno(horario)`: el id `reprogramar:` ya trae el turno; el servicio y la profesional son los del turno (4.6).
+- **[D]** Si cancelar o reprogramar no corresponde, la herramienta deriva sola con motivo "excepción" y le devuelve al modelo la política para explicarla.
+- **[D]** La respuesta del modelo lleva, además del texto y las opciones, un campo obligatorio `derivar`: vacío, o el motivo y un resumen de una línea. El motivo es una lista cerrada (pedido de la clienta, queja, tema sensible, imagen, consulta previa, fuera de catálogo, excepción, no entiende). Si viene completo, el código deriva al enviar la respuesta (4.8); si el resumen es relleno, no deriva y la clienta recibe el texto fijo «Perdón, no te entendí bien…» (8.5), que cuenta como intento fallido. La promesa ("le paso tu consulta a una persona") y la acción salen juntas, en el mismo bloque de la respuesta.
+- **[D]** Cuándo le va a responder una persona lo calcula el código (4.8) y va en el contexto de cada vuelta, para que el modelo lo escriba si deriva.
+- Por qué derivar no es una herramienta: las evaluaciones (con Haiku 5.5 y con Sonnet 5.5) mostraron al modelo llamando a `derivar_a_persona` sin haberlo decidido, justo al cerrar una respuesta con opciones, con resúmenes como «No, nada. Esta respuesta no deriva.». Una sola llamada suelta pausaba la conversación 12 horas, y ni los filtros de texto ni las reglas del prompt lo frenaban del todo. Una herramienta sirve para consultar o actuar en medio del razonamiento; la derivación es el resultado de la respuesta.
+- **[D]** Hasta H9, el prompt tiene una regla temporal para la seña: el asistente dice el monto y el plazo, y que una persona del equipo le pasa los datos para pagarla. Se reemplaza al sumar `generar_pago_seña`.
 
 ### 6.5 Recepción de mensajes
 
@@ -596,7 +672,7 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 **[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
 
-Tipos de tarea: procesar conversación, recordatorio, vencimiento de reserva provisoria, resumen diario, cierre del día (marcar completados), reanudar asistente, reporte mensual, sincronizar calendario.
+Tipos de tarea: procesar conversación, recordatorio, vencimiento de reserva provisoria, resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
 
 **[D]** Una fila por tarea y clave. Cada tarea tiene una clave (la de procesar conversación es el id de la conversación), y la base no permite dos filas con el mismo negocio, tipo y clave. Programar una tarea que ya existe la actualiza:
 
@@ -617,7 +693,14 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[S]** Hasta 3 intentos (la alerta de 10.3 salta con el tercero). Los reintentos esperan 30 segundos y 2 minutos. Después del tercer fallo la tarea queda fallida con su último error, que nunca incluye tokens ni el contenido de los mensajes (10.1).
 - **[S]** Plazo de ejecución: 2 minutos. Cada tarea tiene 60 segundos para terminar; si no, cuenta como un fallo. Hasta 5 tareas a la vez.
 
-**[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la envía y los marca como procesados. Si el envío sale pero falla la marca, el reintento puede repetir la respuesta: es preferible contestar dos veces a no contestar. Desde H7 la respuesta la arma el agente (8.5). En producción no se procesan conversaciones hasta H8: sin derivación a una persona no se pueden cumplir las reglas de 4.8.
+**[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la guarda, los marca como procesados y la envía. Desde H7 la respuesta la arma el agente (8.5).
+
+- **[D]** La respuesta se guarda en la conversación (`pending_reply`) en la misma transacción que marca los mensajes como procesados, y recién después se envía. Si el envío falla, el reintento **solo reenvía la respuesta guardada**: no vuelve a llamar al modelo. Desde H8 las herramientas cambian cosas (reservan, cancelan, derivan), y volver a correr el agente daría otra respuesta: después de cancelar un turno, el segundo intento ya no lo encuentra y contestaría "no tenés turnos".
+- **[S]** Una respuesta guardada que no se pudo enviar en 5 minutos se descarta, con un aviso en el log: los reintentos son a los 30 segundos y a los 2 minutos, y más tarde ya no tiene sentido.
+- Si el envío sale pero falla borrar la respuesta guardada, el reintento puede repetirla: es preferible contestar dos veces a no contestar.
+- **[D]** Si el asistente está pausado por una derivación (4.8), los mensajes se marcan como procesados sin llamar al modelo.
+- **[S]** Solo contestan los negocios activos. Los mensajes de un negocio pausado o dado de baja se marcan como procesados sin respuesta, con un aviso en el log.
+- **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 
 **[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado).
 
@@ -664,7 +747,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | Tabla | Campos principales |
 |---|---|
 | `tenants` | id, nombre, slug, zona horaria, estado (activo, pausado, baja), paquete, configuración de tono (nombre del asistente, emojis, voseo), `phone_number_id` de WhatsApp (sección 6.5), teléfono de la dueña para avisos (sección 8.2) |
-| `tenant_settings` | reglas de seña (a quién, porcentaje o monto fijo, plazo, medios), alias, CBU y titular para transferencias, política de cancelación, parámetros de disponibilidad, si trabaja feriados, horario de atención humana, horario de envío de recordatorios, recordatorio corto |
+| `tenant_settings` | reglas de seña (a quién, porcentaje o monto fijo, plazo, medio: uno solo, 4.5), alias, CBU y titular para transferencias, política de cancelación, parámetros de disponibilidad, si trabaja feriados, horario de atención humana, horario de envío de recordatorios, recordatorio corto |
 | `tenant_credentials` | tipo (whatsapp, mercadopago, google), datos cifrados (texto cifrado, vector de inicialización y etiqueta de AES-256-GCM), fecha de vencimiento |
 | `business_info` | tema (dirección, estacionamiento, medios de pago, promociones, políticas, cuidados), texto. Un texto por tema |
 | `professionals` | nombre, id de Google Calendar, activa |
@@ -677,7 +760,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), duración y margen al momento de reservar, estado, precio, precio en efectivo y tipo de precio al momento de reservar, id del evento de calendario, origen |
 | `appointment_events` | turno, tipo (cambio de estado o reprogramación), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
 | `deposits` | turno (una seña por turno), monto, medio, estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
-| `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje |
+| `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje, respuesta guardada sin enviar y desde cuándo (6.7, H8), cuándo se reanudó el asistente después de una derivación (4.8) |
 | `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp, fecha en que se procesó (solo entrantes, sección 6.7) |
 | `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
 | `agent_runs` | conversación, modelo, tokens de entrada, de salida y de caché, nombres de las herramientas llamadas (sin sus argumentos), latencia, motivo de fin, fecha. Una fila por respuesta del agente (8.5). Se crea en H7 |
@@ -751,7 +834,7 @@ La dueña responde a esos avisos con botones ("Recibida", "No llegó", "Ausente"
 - **[D]** Se registra por respuesta, en `agent_runs`: modelo, tokens usados, herramientas llamadas y latencia.
 - **[S]** Modelo: `claude-haiku-5-5` (US$ 0,10 / 0,50 por millón de tokens al 06/10/2026), configurable con `ANTHROPIC_MODEL`. La clave va en `ANTHROPIC_API_KEY`. Comparado el 08/10/2026 con OpenAI, Google y DeepSeek: en la gama barata todos cuestan menos de US$ 1,50 cada 1.000 respuestas, así que el precio no decide; decide pasar las evaluaciones (11.4). DeepSeek se descarta porque procesa los datos en China (9.2).
 - **[S]** Esfuerzo de razonamiento bajo (`low`): es una charla y la latencia importa. El modelo ve hasta los últimos 20 mensajes de las últimas 24 horas. Cada llamada a la API tiene 20 segundos y un reintento, para entrar en los 60 segundos de la tarea (6.7), y hasta 4.096 tokens de respuesta.
-- **[S]** Si el modelo se niega a responder, se corta por largo o devuelve una respuesta que no cumple el formato, la clienta recibe un texto fijo: "Perdón, no te entendí bien. ¿Me lo escribís de otra forma?". Desde H8, el segundo intento fallido deriva a una persona (4.8).
+- **[S]** Si el modelo se niega a responder, se corta por largo o devuelve una respuesta que no cumple el formato, la clienta recibe un texto fijo: "Perdón, no te entendí bien. ¿Me lo escribís de otra forma?". Desde H8, el segundo intento fallido deriva a una persona (4.8): **[S]** si la respuesta anterior del agente en esa conversación también terminó en el texto fijo, el código deriva con motivo "no entiende" y la clienta recibe otro texto fijo: "Perdón, no te estoy entendiendo. Le paso tu consulta a una persona del equipo, que te va a responder por acá {cuándo}." El modelo también puede derivar con ese motivo si, después de dos intentos, no entiende qué le piden.
 - Revisar precios y modelos vigentes antes de cambiar de modelo.
 
 ---
@@ -849,7 +932,7 @@ Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100) en `tests
 {
   nombre: 'salud_deriva',
   mensajes: ['estoy embarazada, puedo hacerme lifting?'],
-  espera: { herramientas: ['derivar_a_persona'] },
+  espera: { verifica: (resultado) => verifyHandoff(resultado, 'sensitive_topic') },
 },
 ```
 
@@ -943,7 +1026,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H5 | `whatsapp`: webhook con firma, idempotencia, guardado, envío de texto e interactivos. El eco se prueba con `pnpm whatsapp:echo`, una herramienta de desarrollo que reemplaza el worker en H6. Las respuestas al número de avisos (6.5, paso 2) entran en H9 | Tests de contrato pasando; eco de mensajes con el número de prueba |
 | H6 | `jobs`: tabla, worker, agrupado de mensajes, una ejecución por conversación. `/health` suma el chequeo del worker. El eco de H5 pasa a ser la respuesta del worker en desarrollo hasta H7, y `pnpm whatsapp:echo` se borra | Tests de integración |
 | H7 | `conversation`: agente con herramientas de consulta (servicios, información, disponibilidad), que reemplaza al eco en desarrollo. Registro de uso en `agent_runs` | Primeras 10 evaluaciones pasando |
-| H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa. Desde acá, producción procesa conversaciones | 30 evaluaciones pasando |
+| H8 | Herramientas de reserva, reprogramación, cancelación y derivación con pausa. El worker respeta la pausa, guarda la respuesta antes de enviarla y deriva al segundo intento fallido. Desde acá, producción procesa conversaciones. Los avisos a la dueña y el cobro de la seña quedan para H9 y H11 | 30 evaluaciones pasando |
 | H9 | Seña por transferencia + número de avisos a la dueña con botones | Flujo completo en el número de prueba |
 | H10 | Recordatorios con plantillas y vencimiento de reservas | Tests de jobs + prueba manual |
 | **Demo** | Grabar el video de 60 segundos | — |
@@ -983,6 +1066,13 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 20 | Ciclo del agente propio detrás de `LlmClient` | El ejecutor de herramientas del SDK del proveedor | Topes, cancelación y registro bajo nuestro control, tests sin red y proveedor intercambiable (8.5) |
 | 21 | Claude Haiku 5.5 como modelo inicial | Modelos más grandes u otros proveedores | Cumple "modelo chico, costo bajo"; las evaluaciones deciden si hace falta subir |
 | 22 | Evaluaciones en TypeScript | YAML | Las verifica el compilador y no suman una dependencia |
+| 23 | El negocio elige un solo medio para la seña | Que la clienta elija entre Mercado Pago y transferencia | Un paso menos para la clienta y una decisión menos para el modelo; cada negocio cobra como prefiere |
+| 24 | Guardar la respuesta antes de enviarla y reintentar solo el envío | Volver a correr el agente en cada reintento | Las herramientas cambian datos: un segundo intento contestaría distinto (por ejemplo, "no tenés turnos" después de cancelar). Además no se paga dos veces al modelo |
+| 25 | Ofrecer una persona ante un servicio fuera del catálogo o un dato no cargado | Derivar de entrada | Derivar pausa el asistente; una pregunta suelta no justifica dejar de atender a la clienta |
+| 26 | Las herramientas de turnos reciben el id del horario | Servicio, profesional e inicio por separado | El modelo copia un id que el código valida; no puede armar una combinación que no se ofreció |
+| 27 | Derivar va en la respuesta del modelo (campo `derivar`) | Una herramienta `derivar_a_persona` | El modelo llamaba a la herramienta sin decidirlo, y cada llamada suelta pausaba la conversación 12 horas. En la respuesta, la promesa y la acción salen juntas |
+| 28 | Ids distintos para reservar y para reprogramar | Un solo id de horario para los dos | La intención queda en lo que tocó la clienta: el modelo no puede reservar un turno nuevo cuando ella pidió mover el que tenía |
+| 29 | Herramientas propias para consultar una hora puntual | Un parámetro opcional `hora` en las consultas de horarios, o mandar todos los horarios libres | Un parámetro opcional que cambia lo que hace la herramienta, el modelo lo omite (lo mostró `turno` en H8); mandar todos los libres agranda cada respuesta y el modelo igual necesitaría el id para ofrecerlos |
 
 ---
 

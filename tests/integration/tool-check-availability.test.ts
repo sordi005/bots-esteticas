@@ -9,6 +9,7 @@ import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
+import { expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -110,6 +111,18 @@ describe('consultar_disponibilidad: horarios libres', () => {
       title: 'Ver otros horarios',
     });
     expect(specific.options.at(-1)?.id).toBe(`mas:${fixture.semi}:${fixture.mica}:2026-10-05T15:00:00.000Z`);
+  });
+
+  it('el modelo ve el id de cada botón, también el de "Ver otros horarios", o no puede ofrecerlo', async () => {
+    const fixture = await createCatalogFixture(db);
+
+    const withMore = await check(fixture, {});
+    const withoutMore = await check(fixture, { desde: '2026-10-10', hasta: '2026-10-10', profesional_id: fixture.mica });
+
+    expectOptionsShownToModel(withMore);
+    expect(withMore.content).toMatchObject({ verMas: { opcionId: withMore.options.at(-1)?.id, texto: 'Ver otros horarios' } });
+    expectOptionsShownToModel(withoutMore);
+    expect(withoutMore.content).not.toHaveProperty('verMas');
   });
 
   it('sin "ver otros" cuando no queda nada después del último horario ofrecido', async () => {
@@ -232,6 +245,7 @@ describe('consultar_disponibilidad: franjas y rangos', () => {
     // Lo próximo con lugar de noche: el lunes 12 es feriado, así que el martes 13 a las 17:00.
     expect(content.proximoHorario?.texto).toBe('martes 13/10 17:00');
     expect(options).toHaveLength(1);
+    expectOptionsShownToModel({ content, options });
   });
 
   it('busca en varios días y ofrece los primeros libres del rango', async () => {
@@ -477,5 +491,47 @@ describe('consultar_disponibilidad: las opciones se pueden ofrecer en WhatsApp',
     const ids: OfferableOption[] = options;
     expect(ids.length).toBeLessThanOrEqual(10);
     expect(ids.at(-1)?.title).toBe('Ver otros horarios');
+  });
+});
+
+describe('consultar_disponibilidad es solo para reservar (decisión 28)', () => {
+  it('un turno_id no la pasa a modo reprogramación: ofrece ids horario:, nunca reprogramar:', async () => {
+    const fixture = await createCatalogFixture(db);
+    const booked = await bookAppointment(db, {
+      tenantId: fixture.tenantId,
+      customerId: fixture.customerId,
+      serviceId: fixture.semi,
+      professionalId: fixture.mica,
+      start: at('2026-10-06', '10:00'),
+      actor: 'assistant',
+      now: SUNDAY_MORNING,
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+
+    const { options, content } = await check(fixture, {
+      desde: '2026-10-06',
+      hasta: '2026-10-06',
+      turno_id: booked.appointmentId,
+    });
+
+    expect(content).not.toHaveProperty('turno');
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(option.id.startsWith('horario:') || option.id.startsWith('mas:')).toBe(true);
+    }
+  });
+
+  it('sin servicio_id no hay consulta: el esquema lo rechaza antes de tocar la base', async () => {
+    const fixture = await createCatalogFixture(db);
+
+    const result = await runTool(
+      checkAvailabilityTool,
+      { desde: '2026-10-05', hasta: '2026-10-05' },
+      toolContext(db, fixture),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('servicio_id');
+    expect(result.options).toEqual([]);
   });
 });

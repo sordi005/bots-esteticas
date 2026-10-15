@@ -11,7 +11,10 @@ const base = {
   timeZone: MENDOZA,
   isNewConversation: false,
   customerName: null,
+  bookingName: null,
   preferredProfessionalName: null,
+  humanReplyWhen: 'en este horario',
+  resumedAfterHandoff: false,
   choices: [] as ResolvedChoice[],
 };
 
@@ -50,6 +53,54 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(context).not.toMatch(/Profesional preferida/);
   });
 
+  it('si no tiene nombre para el turno cargado, le dice al modelo que lo pida antes de reservar', () => {
+    // El nombre de perfil de WhatsApp solo sirve de saludo: crear_reserva exige el nombre para el turno.
+    const context = buildTurnContext({ ...base, customerName: 'Caro (perfil)', bookingName: null });
+
+    expect(context).toMatch(/Nombre para el turno: no está cargado.*pedíselo antes de reservar/);
+  });
+
+  it('con el nombre para el turno cargado, lo dice y no hace falta pedirlo', () => {
+    const context = buildTurnContext({ ...base, customerName: 'Caro Pérez', bookingName: 'Caro Pérez' });
+
+    expect(context).toMatch(/Nombre para el turno: Caro Pérez \(ya está cargado: no lo pidas\)/);
+    expect(context).not.toMatch(/pedíselo/);
+  });
+
+  it.each(['en este horario', 'el viernes 9/10 a las 9:00', 'lo antes posible'])(
+    'dice cuándo le responde una persona si deriva (%s), calculado por el código, para que el modelo lo escriba',
+    (when) => {
+      const context = buildTurnContext({ ...base, humanReplyWhen: when });
+
+      expect(context).toContain(`- Si derivás a una persona, le responde ${when}: escribilo tal cual en tu mensaje`);
+    },
+  );
+
+  describe('el asistente se reanudó después de una derivación (4.8)', () => {
+    const RESUMED_LINE =
+      '- El asistente se reanudó después de una derivación a una persona: lo que se habló antes ya lo atendió el equipo. Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.';
+
+    it('se lo dice al modelo, como una línea más del contexto', () => {
+      const lines = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+
+      expect(lines).toContain(RESUMED_LINE);
+    });
+
+    it('si no se reanudó, no hay ninguna línea sobre derivaciones anteriores', () => {
+      const context = buildTurnContext({ ...base, resumedAfterHandoff: false });
+
+      expect(context).not.toContain('se reanudó');
+      expect(context).not.toContain('lo que se habló antes');
+    });
+
+    it('no cambia el resto del contexto: solo suma esa línea', () => {
+      const without = buildTurnContext({ ...base, resumedAfterHandoff: false }).split('\n');
+      const withLine = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+
+      expect(withLine.filter((line) => line !== RESUMED_LINE)).toEqual(without);
+    });
+  });
+
   it('empieza marcando que no lo escribió la clienta', () => {
     expect(buildTurnContext(base)).toMatch(/^Contexto del sistema \(no lo escribió la clienta\)/);
   });
@@ -69,6 +120,21 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(buildTurnContext(base)).not.toMatch(/Elecciones/);
   });
 });
+
+const APPOINTMENT = '00000000-0000-4000-8000-000000000301';
+
+const appointment = (tipo: 'turno' | 'cancelar') =>
+  ({
+    tipo,
+    turnoId: APPOINTMENT,
+    servicioId: 'srv-1',
+    profesionalId: 'pro-1',
+    servicioNombre: 'Esmaltado semipermanente',
+    profesionalNombre: 'Mica',
+    texto: 'martes 13/10 17:00',
+    estado: 'confirmado',
+    ocupaHorario: true,
+  }) as const satisfies ResolvedChoice;
 
 describe('describeChoice: la elección resuelta como texto, nunca el título del botón (5.3)', () => {
   const slot = {
@@ -119,11 +185,12 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     expect(text).toMatch(/requiere consulta previa/i);
   });
 
-  it('un horario que sigue libre', () => {
+  it('un horario que sigue libre, con su id para reservarlo', () => {
     const text = describeChoice(slot, MENDOZA);
 
     expect(text).toBe(
-      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min); sigue libre.',
+      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min), ' +
+        'horario_id=horario:srv-1:pro-1:2026-10-05T12:00:00.000Z; sigue libre.',
     );
   });
 
@@ -131,7 +198,8 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     const text = describeChoice({ ...slot, sigueLibre: false }, MENDOZA);
 
     expect(text).toBe(
-      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min); ya no está libre.',
+      'Eligió el horario lunes 5/10 9:00 con Mica para Esmaltado semipermanente (60 min), ' +
+        'horario_id=horario:srv-1:pro-1:2026-10-05T12:00:00.000Z; ya no está libre.',
     );
   });
 
@@ -155,6 +223,111 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     );
 
     expect(text).not.toContain('profesional_id');
+  });
+
+  it('un turno elegido: sus datos y su id para cancelarlo o reprogramarlo (con el turno_id, sin servicio ni profesional)', () => {
+    const text = describeChoice(appointment('turno'), MENDOZA);
+
+    expect(text).toBe(
+      'Eligió su turno del martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), ' +
+        `turno_id=turno:${APPOINTMENT}: ` +
+        'seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá los ' +
+        'horarios con consultar_horarios_para_reprogramar y ese turno_id).',
+    );
+  });
+
+  it('"Sí, cancelar": confirmó cancelar ese turno, así que se cancela con confirmada=true', () => {
+    const text = describeChoice(appointment('cancelar'), MENDOZA);
+
+    expect(text).toBe(
+      'Confirmó que quiere cancelar el turno del martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), ' +
+        `turno_id=turno:${APPOINTMENT}: llamá a cancelar_turno con confirmada=true.`,
+    );
+  });
+
+  it('"Sí, cancelar" sobre un turno que ya no ocupa horario lo avisa y deja que la herramienta responda', () => {
+    const text = describeChoice({ ...appointment('cancelar'), estado: 'cancelado', ocupaHorario: false }, MENDOZA);
+
+    expect(text).toContain('ese turno ya no está activo (cancelado)');
+    expect(text).toContain(`turno_id=turno:${APPOINTMENT}`);
+    expect(text).toContain('cancelar_turno');
+  });
+
+  it('un turno elegido que ya no ocupa horario lo avisa', () => {
+    const text = describeChoice({ ...appointment('turno'), estado: 'vencido por falta de seña', ocupaHorario: false }, MENDOZA);
+
+    expect(text).toContain('ese turno ya no está activo (vencido por falta de seña)');
+  });
+
+  describe('un horario para reprogramar un turno (decisión 28)', () => {
+    const reschedule = {
+      tipo: 'reprogramar',
+      turnoId: APPOINTMENT,
+      servicioId: 'srv-1',
+      profesionalId: 'pro-1',
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      turnoTexto: 'martes 13/10 17:00',
+      estado: 'confirmado',
+      ocupaHorario: true,
+      inicio: '2026-10-14T18:30:00.000Z',
+      texto: 'miércoles 14/10 15:30',
+      duracionMinutos: 60,
+      sigueLibre: true,
+    } as const satisfies ResolvedChoice;
+    const slotId = `reprogramar:${APPOINTMENT}:2026-10-14T18:30:00.000Z`;
+
+    it('si sigue libre: el turno que se mueve, el horario nuevo, su horario_id y que elegirlo ya es la confirmación', () => {
+      expect(describeChoice(reschedule, MENDOZA)).toBe(
+        'Eligió el horario miércoles 14/10 15:30 para pasar su turno del martes 13/10 17:00 ' +
+          `(Esmaltado semipermanente con Mica), horario_id=${slotId}; sigue libre. ` +
+          'Elegirlo ya es la confirmación: llamá a reprogramar_turno con ese horario_id.',
+      );
+    });
+
+    it('si ya no está libre: no reprograma, vuelve a consultar con el turno_id', () => {
+      const text = describeChoice({ ...reschedule, sigueLibre: false }, MENDOZA);
+
+      expect(text).toContain(`horario_id=${slotId}; ya no está libre`);
+      expect(text).toContain(
+        `volvé a consultar los horarios con consultar_horarios_para_reprogramar y turno_id=turno:${APPOINTMENT}`,
+      );
+      expect(text).not.toContain('consultar_disponibilidad');
+      expect(text).not.toContain('llamá a reprogramar_turno');
+    });
+
+    it('si el turno ya no ocupa horario, lo avisa', () => {
+      const text = describeChoice({ ...reschedule, estado: 'cancelado', ocupaHorario: false, sigueLibre: false }, MENDOZA);
+
+      expect(text).toContain('Ojo: ese turno ya no está activo (cancelado)');
+    });
+
+    it('nunca dice horario_id=horario:… ni sugiere crear_reserva: es para reprogramar', () => {
+      const text = describeChoice(reschedule, MENDOZA);
+
+      expect(text).not.toContain('horario:');
+      expect(text).not.toContain('crear_reserva');
+    });
+  });
+
+  it('"ver más horarios" de una reprogramación: sigue con el turno_id, no con el servicio', () => {
+    const text = describeChoice(
+      {
+        tipo: 'ver_mas_reprogramar',
+        turnoId: APPOINTMENT,
+        turnoTexto: 'martes 13/10 17:00',
+        ocupaHorario: true,
+        despuesDe: '2026-10-05T18:00:00.000Z',
+      },
+      MENDOZA,
+    );
+
+    expect(text).toBe(
+      'Pidió ver otros horarios para pasar su turno del martes 13/10 17:00, después de lunes 5/10 15:00: ' +
+        `consultá los horarios con consultar_horarios_para_reprogramar, turno_id=turno:${APPOINTMENT} y despues_de=2026-10-05T18:00:00.000Z.`,
+    );
+    expect(text).not.toContain('servicio_id');
+    expect(text).not.toContain('consultar_disponibilidad');
   });
 
   it('una opción que ya no es válida', () => {

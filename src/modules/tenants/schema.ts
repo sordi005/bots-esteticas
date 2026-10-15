@@ -28,11 +28,8 @@ export const depositRequirement = pgEnum('deposit_requirement', [
   'customers_with_no_shows',
 ]);
 
-export const depositPaymentOptions = pgEnum('deposit_payment_options', [
-  'mercadopago',
-  'transfer',
-  'both',
-]);
+/** El medio de la seña lo elige el negocio, uno solo (4.5, decisión 23). */
+export const depositPaymentOptions = pgEnum('deposit_payment_options', ['mercadopago', 'transfer']);
 
 export const credentialKind = pgEnum('credential_kind', ['whatsapp', 'mercadopago', 'google']);
 
@@ -93,7 +90,7 @@ export const tenantSettings = pgTable(
     depositPercentage: integer('deposit_percentage').default(30),
     depositFixedAmountCents: integer('deposit_fixed_amount_cents'),
     depositPaymentWindowMinutes: integer('deposit_payment_window_minutes').notNull().default(60),
-    depositPaymentOptions: depositPaymentOptions('deposit_payment_options').notNull().default('both'),
+    depositPaymentOptions: depositPaymentOptions('deposit_payment_options').notNull().default('transfer'),
     transferAlias: text('transfer_alias'),
     transferCbu: text('transfer_cbu'),
     transferAccountHolder: text('transfer_account_holder'),

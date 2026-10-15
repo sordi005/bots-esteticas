@@ -47,7 +47,8 @@ pnpm db:up                # Postgres en Docker (puerto 5434), espera a que esté
 pnpm db:migrate           # aplica las migraciones pendientes
 pnpm db:seed              # carga o restaura "Estética Ejemplo"
 pnpm dev                  # servidor + worker con recarga en http://localhost:$PORT
-                          # en desarrollo, el worker contesta con el agente si hay ANTHROPIC_API_KEY en .env
+                          # el worker contesta con el agente si hay ANTHROPIC_API_KEY en .env
+                          # (en producción es obligatoria: sin ella el servidor no arranca)
 pnpm check                # lint + tipos + todos los tests (lo mismo que CI)
 pnpm test:unit            # solo unitarios (no necesitan base)
 pnpm test:integration     # contra Postgres real (necesita db:up)
@@ -69,7 +70,7 @@ Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una ter
 ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
 ```
 
-Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`?
+Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
 
 El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
 

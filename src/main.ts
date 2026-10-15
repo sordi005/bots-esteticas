@@ -42,15 +42,12 @@ if (!whatsappWebhook) {
 }
 
 // Worker de tareas programadas, en el mismo proceso (sección 6.7). Las conversaciones las contesta
-// el agente (8.5), solo en desarrollo y con las claves puestas: en producción, hasta H8 no.
+// el agente (8.5), también en producción desde H8; en desarrollo, solo con las claves puestas.
 let conversations: WorkerDependencies['conversations'];
 const conversationMode = chooseConversationMode(config);
 switch (conversationMode.kind) {
   case 'disabled':
     switch (conversationMode.reason) {
-      case 'production':
-        logger.warn('Las conversaciones no se procesan hasta H8: falta la derivación a una persona');
-        break;
       case 'missing_credentials_key':
         logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY el worker no puede contestar conversaciones');
         break;

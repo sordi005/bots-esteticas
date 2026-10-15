@@ -13,10 +13,18 @@ export interface ToolContext {
   db: NodePgDatabase;
   tenantId: string;
   customerId: string;
+  /** La conversación de esta vuelta: también del servidor (la usan las herramientas que derivan por la política). */
+  conversationId: string;
   /** La hora actual, inyectada (regla 5). */
   now: Date;
   /** Zona horaria del negocio: se usa solo para escribir fechas y horas. */
   timeZone: string;
+  /**
+   * Los ids de las opciones que la clienta eligió con un botón o una lista: los de los mensajes de
+   * esta vuelta y los de sus mensajes de las últimas 24 horas. Lo arma el servidor; `crear_reserva`
+   * y `reprogramar_turno` solo actúan sobre un horario que está acá (6.4).
+   */
+  chosenOptionIds: ReadonlySet<string>;
   /** Se cancela si el ciclo del agente se corta (por ejemplo, por tiempo). */
   signal: AbortSignal;
 }
@@ -47,6 +55,14 @@ export interface ToolResult {
   options: OfferableOption[];
   /** El modelo pidió algo inválido (no encontrado, fuera de rango…): que lo corrija o lo explique. */
   isError?: boolean;
+  /**
+   * La herramienta dejó un turno reservado, cancelado o reprogramado, o confirmó que ya estaba así
+   * (un reintento). Solo lo ponen las herramientas que cambian turnos, y solo cuando el cambio pasó:
+   * ni con la elección o la confirmación pendientes, ni al derivar por la política, ni ante un
+   * rechazo. El ciclo del agente lo usa para no dejar pasar un texto que afirma un cambio que ninguna
+   * herramienta hizo (6.4).
+   */
+  changedAppointment?: true;
 }
 
 export interface AgentTool<Input> {
