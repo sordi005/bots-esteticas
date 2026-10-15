@@ -20,7 +20,7 @@ import {
   overlaps,
   type AvailabilityContext,
 } from './availability-context.js';
-import { findAvailableSlots, type ProfessionalSchedule } from './availability.js';
+import { diagnoseStart, type ProfessionalSchedule } from './availability.js';
 import { appointmentEvents, appointments } from './schema.js';
 
 /**
@@ -46,16 +46,9 @@ export function checkSlot(
   professional: ProfessionalSchedule,
   start: Date,
 ): SlotCheck {
-  const offers = (busy: ProfessionalSchedule['busy']) =>
-    findAvailableSlots({
-      ...context.query,
-      window: { start, end: new Date(start.getTime() + MINUTE_MS) },
-      professionals: [{ ...professional, busy }],
-    }).some((slot) => slot.start.getTime() === start.getTime());
-
-  if (!offers([])) return 'slot_unavailable';
-  if (!offers(professional.busy)) return 'slot_taken';
-  return 'ok';
+  const { kind } = diagnoseStart(context.query, professional, start);
+  if (kind === 'free') return 'ok';
+  return kind === 'taken' ? 'slot_taken' : 'slot_unavailable';
 }
 
 function occupiedRange(start: Date, durationMinutes: number, bufferMinutes: number): TimestampRange {
