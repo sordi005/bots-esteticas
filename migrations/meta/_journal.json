@@ -85,6 +85,13 @@
       "when": 1792036825545,
       "tag": "0011_respuesta_sin_cambio_confirmado",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792038263568,
+      "tag": "0012_conversacion_reanudada",
+      "breakpoints": true
     }
   ]
 }

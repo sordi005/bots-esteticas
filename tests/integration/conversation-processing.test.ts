@@ -342,6 +342,86 @@ describe('asistente pausado por una derivación (4.8)', () => {
     ]);
   });
 
+  describe('cuándo se reanudó (resumed_at, 4.8)', () => {
+    const resumedAtOf = async (conversationId: string) =>
+      single(await db.select({ resumedAt: conversations.resumedAt }).from(conversations).where(eq(conversations.id, conversationId)))
+        .resumedAt;
+
+    it('la conversación que nunca estuvo pausada no tiene fecha de reanudación', async () => {
+      const tenant = await readyTenant();
+      const { client } = fakeWhatsApp();
+      const { respond } = recordingResponder();
+      await receive(tenant.phoneNumberId, 'hola', at(0));
+
+      const { process } = directly({ client, respond, now: () => at(4) });
+      await process(tenant.tenantId, tenant.conversationId);
+
+      expect(await resumedAtOf(tenant.conversationId)).toBeNull();
+    });
+
+    it('con la pausa vencida, guarda la hora en que se reanudó', async () => {
+      const tenant = await readyTenant();
+      const { client } = fakeWhatsApp();
+      const { respond } = recordingResponder();
+      await pauseConversation(tenant.conversationId, at(3));
+      await receive(tenant.phoneNumberId, 'hola', at(0));
+
+      const { process } = directly({ client, respond, now: () => at(4) });
+      await process(tenant.tenantId, tenant.conversationId);
+
+      expect(await resumedAtOf(tenant.conversationId)).toEqual(at(4));
+    });
+
+    it('la hora de reanudación se guarda antes de llamar al respondedor: el agente la lee en su vuelta', async () => {
+      const tenant = await readyTenant();
+      const { client } = fakeWhatsApp();
+      await pauseConversation(tenant.conversationId, at(3));
+      await receive(tenant.phoneNumberId, 'hola', at(0));
+      let seenByResponder: Date | null | undefined;
+      const respond: Responder = async (turn) => {
+        seenByResponder = await resumedAtOf(turn.conversationId);
+        return { type: 'text', body: 'hola' };
+      };
+
+      const { process } = directly({ client, respond, now: () => at(4) });
+      await process(tenant.tenantId, tenant.conversationId);
+
+      expect(seenByResponder).toEqual(at(4));
+    });
+
+    it('con la pausa vigente no la toca, ni sin fecha ni con fecha', async () => {
+      for (const pausedUntil of [at(3_600), null]) {
+        const tenant = await readyTenant();
+        const { client } = fakeWhatsApp();
+        const { respond } = recordingResponder();
+        await pauseConversation(tenant.conversationId, pausedUntil);
+        await receive(tenant.phoneNumberId, 'hola', at(0));
+
+        const { process } = directly({ client, respond, now: () => at(4) });
+        await process(tenant.tenantId, tenant.conversationId);
+
+        expect(await resumedAtOf(tenant.conversationId)).toBeNull();
+      }
+    });
+
+    it('una segunda pausa que vence pisa la fecha anterior con la nueva', async () => {
+      const tenant = await readyTenant();
+      const { client } = fakeWhatsApp();
+      const { respond } = recordingResponder();
+      await pauseConversation(tenant.conversationId, at(3));
+      await receive(tenant.phoneNumberId, 'hola', at(0));
+      const first = directly({ client, respond, now: () => at(4) });
+      await first.process(tenant.tenantId, tenant.conversationId);
+
+      await pauseConversation(tenant.conversationId, at(100));
+      await receive(tenant.phoneNumberId, 'otra vez', at(200));
+      const second = directly({ client, respond, now: () => at(300) });
+      await second.process(tenant.tenantId, tenant.conversationId);
+
+      expect(await resumedAtOf(tenant.conversationId)).toEqual(at(300));
+    });
+  });
+
   it('la pausa que vence justo ahora ya no pausa', async () => {
     const tenant = await readyTenant();
     const { client } = fakeWhatsApp();

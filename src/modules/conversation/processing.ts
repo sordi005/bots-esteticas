@@ -258,9 +258,10 @@ export async function processConversation(
       await markProcessed(db);
       return 'paused';
     }
+    // `resumedAt` marca el corte del historial: lo anterior ya lo atendió una persona (4.8).
     await db
       .update(conversations)
-      .set({ assistantStatus: 'active', pausedUntil: null })
+      .set({ assistantStatus: 'active', pausedUntil: null, resumedAt: deps.now() })
       .where(
         and(
           eq(conversations.tenantId, tenantId),

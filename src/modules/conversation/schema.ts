@@ -54,6 +54,11 @@ export const conversations = pgTable(
     assistantStatus: assistantStatus('assistant_status').notNull().default('active'),
     /** Hasta cuándo sigue pausado. Null en pausa = hasta que se reanude a mano. */
     pausedUntil: instant('paused_until'),
+    /**
+     * Cuándo se reanudó el asistente después de una derivación (4.8). El historial que ve el modelo
+     * arranca ahí: lo anterior ya lo atendió una persona. Null si nunca estuvo pausada.
+     */
+    resumedAt: instant('resumed_at'),
     lastMessageAt: instant('last_message_at'),
     /**
      * La respuesta ya armada que todavía no se envió (6.7). Se guarda junto con la marca de los

@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "resumed_at" timestamp with time zone;
