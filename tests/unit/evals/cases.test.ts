@@ -56,7 +56,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 11 de H7 y las 22 de H8 (reservar, cancelar, reprogramar y derivar), en orden', () => {
+  it('son las 11 de H7 y las 23 de H8 (reservar, cancelar, reprogramar y derivar), en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -85,6 +85,7 @@ describe('evalCases', () => {
       'reprogramar_sin_reprogramaciones',
       'reprogramar_no_reserva',
       'pide_persona',
+      'derivacion_resumen_sin_estado_viejo',
       'queja',
       'salud_embarazo',
       'alergia',

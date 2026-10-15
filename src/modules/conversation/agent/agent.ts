@@ -117,7 +117,7 @@ export const FINAL_ANSWER_JSON_SCHEMA: Record<string, unknown> = {
             resumen: {
               type: 'string',
               description:
-                'Una sola línea para la dueña, de por lo menos 3 palabras y hasta 200 caracteres, con qué necesita la clienta de verdad (nada de relleno ni de pruebas). Con tema_sensible NO incluyas ningún dato de salud: escribí solo "consulta sensible".',
+                'Una sola línea para la dueña, de por lo menos 3 palabras y hasta 200 caracteres, con qué necesita la clienta de verdad (nada de relleno ni de pruebas). Solo lo que pide: sin el estado de sus turnos ni de sus pagos, que puede haber cambiado y la persona lo ve en el sistema. Con tema_sensible NO incluyas ningún dato de salud: escribí solo "consulta sensible".',
             },
           },
           required: ['motivo', 'resumen'],

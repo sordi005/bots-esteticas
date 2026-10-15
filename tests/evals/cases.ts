@@ -435,6 +435,33 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
+    // Lo encontró la prueba manual con Meta: después de cancelar, el resumen decía «tiene turno
+    // pendiente de seña». El resumen dice solo lo que pide la clienta, sin el estado de sus turnos
+    // ni de sus pagos: lo saca del historial y puede estar viejo.
+    nombre: 'derivacion_resumen_sin_estado_viejo',
+    mensajes: ['quiero hablar con una persona'],
+    preparar: {
+      nombre: CLIENT_NAME,
+      historial: [
+        { clienta: 'qué turnos tengo?' },
+        {
+          asistente:
+            'Tenés un turno: Esmaltado semipermanente con Mica el sábado 10/10 a las 10:30, pendiente de seña de $5.400.',
+        },
+        { clienta: 'quiero cancelar mi turno' },
+        { asistente: 'Listo, Caro. Cancelé tu Esmaltado semipermanente con Mica del sábado 10/10 a las 10:30.' },
+      ],
+    },
+    espera: {
+      verifica: (resultado) =>
+        combineChecks(
+          verifyHandoff(resultado, 'customer_request'),
+          verifyHandoffSummaryWithout(resultado, 'seña'),
+          verifyHandoffSummaryWithout(resultado, 'pendiente'),
+        ),
+    },
+  },
+  {
     nombre: 'queja',
     mensajes: ['estoy muy disconforme, la última vez me atendieron mal y quiero hacer un reclamo'],
     espera: {
