@@ -7,7 +7,7 @@ import { tenants } from '../../tenants/schema.js';
 import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
-import { agentRuns, messages } from '../schema.js';
+import { agentRuns, conversations, messages } from '../schema.js';
 import { parseChoiceId } from '../tools/choice-ids.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
 import { agentTools } from '../tools/index.js';
@@ -118,8 +118,11 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       preferredProfessionalName = professional?.name ?? null;
     }
 
+    const resumedAt = await loadResumedAt(db, turn);
     const history = await loadHistory(db, turn, at);
     const isNewConversation = !(await sentRecently(db, turn, at));
+    // Reanudado y sin haberle escrito todavía a la clienta: el modelo empieza de cero y tiene que saber por qué (4.8).
+    const resumedAfterHandoff = resumedAt !== null && !(await assistantWroteSince(db, turn, resumedAt));
 
     // Lo que la clienta tocó en botones o listas se resuelve y se vuelve a validar acá: el modelo
     // recibe la elección ya resuelta y nunca interpreta el título del botón (5.3).
@@ -152,6 +155,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           bookingName: customer.name,
           preferredProfessionalName,
           humanReplyWhen,
+          resumedAfterHandoff,
           choices,
         }),
         history: [...history, ...pendingMessages],
@@ -315,9 +319,18 @@ async function previousRunFailed(db: NodePgDatabase, turn: ConversationTurn, at:
   return previous !== undefined && isFallbackOutcome(previous.outcome);
 }
 
-/** ¿El asistente le escribió a la clienta en las últimas 24 horas? (5.1) */
-async function sentRecently(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<boolean> {
-  const [recent] = await db
+/** Cuándo se reanudó el asistente después de una derivación, o null si esta conversación nunca estuvo pausada (4.8). */
+async function loadResumedAt(db: NodePgDatabase, turn: ConversationTurn): Promise<Date | null> {
+  const [conversation] = await db
+    .select({ resumedAt: conversations.resumedAt })
+    .from(conversations)
+    .where(and(eq(conversations.tenantId, turn.tenantId), eq(conversations.id, turn.conversationId)));
+  return conversation?.resumedAt ?? null;
+}
+
+/** ¿El asistente le escribió a la clienta después de `since`? */
+async function assistantWroteSince(db: NodePgDatabase, turn: ConversationTurn, since: Date): Promise<boolean> {
+  const [written] = await db
     .select({ id: messages.id })
     .from(messages)
     .where(
@@ -325,11 +338,16 @@ async function sentRecently(db: NodePgDatabase, turn: ConversationTurn, at: Date
         eq(messages.tenantId, turn.tenantId),
         eq(messages.conversationId, turn.conversationId),
         eq(messages.direction, 'outbound'),
-        gt(messages.occurredAt, new Date(at.getTime() - NEW_CONVERSATION_AFTER_MS)),
+        gt(messages.occurredAt, since),
       ),
     )
     .limit(1);
-  return recent !== undefined;
+  return written !== undefined;
+}
+
+/** ¿El asistente le escribió a la clienta en las últimas 24 horas? (5.1) */
+function sentRecently(db: NodePgDatabase, turn: ConversationTurn, at: Date): Promise<boolean> {
+  return assistantWroteSince(db, turn, new Date(at.getTime() - NEW_CONVERSATION_AFTER_MS));
 }
 
 async function saveRun(

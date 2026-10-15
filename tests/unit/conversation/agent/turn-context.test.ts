@@ -14,6 +14,7 @@ const base = {
   bookingName: null,
   preferredProfessionalName: null,
   humanReplyWhen: 'en este horario',
+  resumedAfterHandoff: false,
   choices: [] as ResolvedChoice[],
 };
 
@@ -74,6 +75,31 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
       expect(context).toContain(`- Si derivás a una persona, le responde ${when}: escribilo tal cual en tu mensaje`);
     },
   );
+
+  describe('el asistente se reanudó después de una derivación (4.8)', () => {
+    const RESUMED_LINE =
+      '- El asistente se reanudó después de una derivación a una persona: lo que se habló antes ya lo atendió el equipo. Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.';
+
+    it('se lo dice al modelo, como una línea más del contexto', () => {
+      const lines = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+
+      expect(lines).toContain(RESUMED_LINE);
+    });
+
+    it('si no se reanudó, no hay ninguna línea sobre derivaciones anteriores', () => {
+      const context = buildTurnContext({ ...base, resumedAfterHandoff: false });
+
+      expect(context).not.toContain('se reanudó');
+      expect(context).not.toContain('lo que se habló antes');
+    });
+
+    it('no cambia el resto del contexto: solo suma esa línea', () => {
+      const without = buildTurnContext({ ...base, resumedAfterHandoff: false }).split('\n');
+      const withLine = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+
+      expect(withLine.filter((line) => line !== RESUMED_LINE)).toEqual(without);
+    });
+  });
 
   it('empieza marcando que no lo escribió la clienta', () => {
     expect(buildTurnContext(base)).toMatch(/^Contexto del sistema \(no lo escribió la clienta\)/);

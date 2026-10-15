@@ -23,6 +23,12 @@ export interface TurnContextInput {
    * que tiene que ser idéntico entre vueltas.
    */
   humanReplyWhen: string;
+  /**
+   * El asistente se reanudó después de una derivación y todavía no le escribió a la clienta desde
+   * entonces (4.8). El historial ya no incluye lo anterior; esta línea le avisa al modelo por qué
+   * empieza de cero, para que no vuelva a derivar por un pedido que ya atendió una persona.
+   */
+  resumedAfterHandoff: boolean;
   /** Lo que la clienta tocó en botones o listas, ya resuelto y vuelto a validar (5.3). */
   choices: ResolvedChoice[];
 }
@@ -88,6 +94,11 @@ export function buildTurnContext(input: TurnContextInput): string {
   ];
   if (input.preferredProfessionalName) {
     lines.push(`- Profesional preferida: ${input.preferredProfessionalName}.`);
+  }
+  if (input.resumedAfterHandoff) {
+    lines.push(
+      '- El asistente se reanudó después de una derivación a una persona: lo que se habló antes ya lo atendió el equipo. Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.',
+    );
   }
   lines.push(
     `- Si derivás a una persona, le responde ${input.humanReplyWhen}: escribilo tal cual en tu mensaje («te va a responder por acá ${input.humanReplyWhen}»), sin prometer otra hora.`,

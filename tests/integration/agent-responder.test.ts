@@ -1165,3 +1165,85 @@ describe('createAgentResponder: la respuesta que deriva a una persona (4.8, deci
     });
   });
 });
+
+describe('createAgentResponder: el asistente se reanudó después de una derivación (4.8)', () => {
+  const RESUMED_LINE_PATTERN = /El asistente se reanudó después de una derivación/;
+  const resumedAt = (f: Fixture, when: Date) =>
+    db.update(conversations).set({ resumedAt: when }).where(eq(conversations.id, f.conversationId));
+
+  /** Corre una vuelta con un mensaje pendiente y devuelve lo que vio el modelo. */
+  async function firstRequest(f: Fixture) {
+    const { result, requests } = reply(f, await pendingTexts(f, 'tenés turno para semi el lunes a la tarde?'), [
+      finalAnswer('Dale'),
+    ]);
+    await result;
+    return requests[0];
+  }
+
+  describe('la línea del contexto de la vuelta', () => {
+    it('si se reanudó y el asistente todavía no le escribió desde entonces, el contexto se lo dice al modelo', async () => {
+      const f = await setup();
+      await addOutbound(f, { type: 'text', body: 'Una persona te va a responder.' }, hoursAgo(3));
+      await resumedAt(f, hoursAgo(1));
+
+      const request = await firstRequest(f);
+
+      expect(request?.turnContext).toMatch(RESUMED_LINE_PATTERN);
+      expect(request?.turnContext).toContain('Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.');
+    });
+
+    it('en una conversación que nunca se pausó no hay línea', async () => {
+      const f = await setup();
+      await addOutbound(f, { type: 'text', body: 'Hola, soy Luna.' }, hoursAgo(3));
+
+      const request = await firstRequest(f);
+
+      expect(request?.turnContext).not.toMatch(RESUMED_LINE_PATTERN);
+    });
+
+    it('cuando el asistente ya le escribió después de reanudarse, la línea deja de aparecer', async () => {
+      const f = await setup();
+      await addOutbound(f, { type: 'text', body: 'Una persona te va a responder.' }, hoursAgo(3));
+      await resumedAt(f, hoursAgo(1));
+      await addInbound(f, { text: 'tenés turno para semi?', at: minutesAgo(50) });
+      await addOutbound(f, { type: 'text', body: 'Sí, ¿qué día?' }, minutesAgo(49));
+
+      const request = await firstRequest(f);
+
+      expect(request?.turnContext).not.toMatch(RESUMED_LINE_PATTERN);
+    });
+
+    it('el aviso de la derivación, anterior a la reanudación, no cuenta como "ya le escribió"', async () => {
+      const f = await setup();
+      await addOutbound(f, { type: 'text', body: 'Una persona te va a responder.' }, minutesAgo(61));
+      await resumedAt(f, minutesAgo(60));
+
+      const request = await firstRequest(f);
+
+      expect(request?.turnContext).toMatch(RESUMED_LINE_PATTERN);
+    });
+
+    it('lo que escribió otra conversación no cuenta: la línea sigue en esta', async () => {
+      const f = await setup();
+      const other = await setup();
+      await resumedAt(f, hoursAgo(1));
+      await addOutbound(other, { type: 'text', body: 'Hola' }, minutesAgo(30));
+
+      const request = await firstRequest(f);
+
+      expect(request?.turnContext).toMatch(RESUMED_LINE_PATTERN);
+    });
+
+    it('el prompt del sistema es idéntico con o sin la línea: lo que cambia va en el contexto de la vuelta', async () => {
+      const f = await setup();
+      const before = await firstRequest(f);
+      await resumedAt(f, hoursAgo(1));
+      const after = await firstRequest(f);
+
+      expect(before?.turnContext).not.toMatch(RESUMED_LINE_PATTERN);
+      expect(after?.turnContext).toMatch(RESUMED_LINE_PATTERN);
+      expect(after?.system).toBe(before?.system);
+      expect(after?.system).not.toMatch(RESUMED_LINE_PATTERN);
+    });
+  });
+});
