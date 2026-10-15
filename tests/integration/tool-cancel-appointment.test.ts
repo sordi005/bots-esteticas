@@ -11,7 +11,7 @@ import { appointmentEvents, appointments } from '../../src/modules/scheduling/sc
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
-import { expectOptionsShownToModel } from './support/tool-options.js';
+import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
 import { single } from './support/fixtures.js';
 
 const database = createDatabase(testDatabaseUrl());
@@ -56,8 +56,12 @@ async function book(f: Fixture, start = TUESDAY_10, customerId = f.customerId) {
   return result.appointmentId;
 }
 
-const cancel = (f: Fixture, input: unknown, now = at('2026-10-04', '09:30')) =>
-  runTool(cancelAppointmentTool, input, toolContext(db, f, { conversationId: f.conversationId, now }));
+const cancel = async (f: Fixture, input: unknown, now = at('2026-10-04', '09:30')) => {
+  const result = await runTool(cancelAppointmentTool, input, toolContext(db, f, { conversationId: f.conversationId, now }));
+  // En todos los casos de este archivo: la marca de cambio confirmado va solo con cancelado=true.
+  expectChangeMarkOnlyOnSuccess(result, 'cancelado');
+  return result;
+};
 
 const statusOf = async (appointmentId: string) =>
   single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
@@ -374,5 +378,61 @@ describe('cancelar_turno: solo los turnos de esta clienta (regla 2)', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ error: 'Entrada inválida' });
     expect(await statusOf(id)).toBe('PENDING_DEPOSIT');
+  });
+});
+
+describe('cancelar_turno: la marca de cambio confirmado (6.4)', () => {
+  it('cancelar con la confirmación de la clienta lleva la marca', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await cancel(f, { turno_id: id, confirmada: true });
+
+    expect(result.content).toMatchObject({ cancelado: true });
+    expect(result.changedAppointment).toBe(true);
+  });
+
+  it('un turno que ya estaba cancelado también la lleva: la clienta ya no lo tiene', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await cancel(f, { turno_id: id, confirmada: true });
+
+    const again = await cancel(f, { turno_id: id, confirmada: true });
+
+    expect(again.content).toMatchObject({ cancelado: true, yaEstabaCancelado: true });
+    expect(again.changedAppointment).toBe(true);
+  });
+
+  it('pedir la confirmación (confirmada=false) no la lleva: no se canceló nada', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await cancel(f, { turno_id: id, confirmada: false });
+
+    expect(result.content).toMatchObject({ cancelado: false, faltaConfirmar: true });
+    expect(result.changedAppointment).toBeUndefined();
+  });
+
+  it('derivar por la política (fuera de plazo) no la lleva', async () => {
+    const f = await setup({ settings: { depositRequirement: 'never' } });
+    const id = await book(f);
+
+    const result = await cancel(f, { turno_id: id, confirmada: true }, at('2026-10-05', '11:00'));
+
+    expect(result.content).toMatchObject({ cancelado: false });
+    expect(result.changedAppointment).toBeUndefined();
+    expect(await statusOf(id)).not.toBe('CANCELLED_BY_CUSTOMER');
+  });
+
+  it('un rechazo (id inválido, turno que no existe) no la lleva', async () => {
+    const f = await setup();
+
+    const invalidId = await cancel(f, { turno_id: 'cualquier cosa', confirmada: true });
+    const unknown = await cancel(f, { turno_id: 'turno:00000000-0000-4000-8000-0000000000aa', confirmada: true });
+
+    expect(invalidId.content).toMatchObject({ cancelado: false, motivo: 'id_de_turno_invalido' });
+    expect(unknown.content).toMatchObject({ cancelado: false, motivo: 'turno_no_encontrado' });
+    expect(invalidId.changedAppointment).toBeUndefined();
+    expect(unknown.changedAppointment).toBeUndefined();
   });
 });

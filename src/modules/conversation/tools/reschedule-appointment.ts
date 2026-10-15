@@ -73,6 +73,7 @@ function rescheduledResult(
           : 'El turno quedó reprogramado.',
     },
     options: [],
+    changedAppointment: true,
   };
 }
 

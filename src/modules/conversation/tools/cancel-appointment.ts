@@ -63,6 +63,7 @@ function cancelledResult(
         : {}),
     },
     options: [],
+    changedAppointment: true,
   };
 }
 

@@ -12,7 +12,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
-import { expectOptionsShownToModel } from './support/tool-options.js';
+import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -80,9 +80,9 @@ const slotId = (appointmentId: string, start: Date) => choiceIds.reschedule(appo
  * Por defecto la clienta eligió el horario que se pide (el caso normal: tocó el botón). `chosen`
  * cambia lo que eligió: nada, o un horario distinto del que pide el modelo.
  */
-const reschedule = (f: Fixture, input: unknown, now = at('2026-10-04', '09:30'), chosen?: string[]) => {
+const reschedule = async (f: Fixture, input: unknown, now = at('2026-10-04', '09:30'), chosen?: string[]) => {
   const requested = (input as { horario_id?: unknown }).horario_id;
-  return runTool(
+  const result = await runTool(
     rescheduleAppointmentTool,
     input,
     toolContext(db, f, {
@@ -91,6 +91,9 @@ const reschedule = (f: Fixture, input: unknown, now = at('2026-10-04', '09:30'),
       chosenOptionIds: new Set(chosen ?? (typeof requested === 'string' ? [requested] : [])),
     }),
   );
+  // En todos los casos de este archivo: la marca de cambio confirmado va solo con reprogramado=true.
+  expectChangeMarkOnlyOnSuccess(result, 'reprogramado');
+  return result;
 };
 
 const rowOf = async (appointmentId: string) =>
@@ -537,5 +540,74 @@ describe('reprogramar_turno: solo los turnos de esta clienta (regla 2)', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toMatchObject({ reprogramado: false, motivo: 'id_de_horario_invalido' });
     expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
+  });
+});
+
+describe('reprogramar_turno: la marca de cambio confirmado (6.4)', () => {
+  it('mover el turno a un horario que la clienta eligió lleva la marca', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    expect(result.content).toMatchObject({ reprogramado: true });
+    expect(result.changedAppointment).toBe(true);
+  });
+
+  it('un turno que ya estaba en ese horario también la lleva: la clienta tiene el turno donde pidió', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    const again = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    expect(again.content).toMatchObject({ reprogramado: true, yaEstaba: true });
+    expect(again.changedAppointment).toBe(true);
+  });
+
+  it('cuando falta que la clienta elija el horario no la lleva: el turno sigue en su horario', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-04', '09:30'), []);
+
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'falta_que_elija' });
+    expect(result.changedAppointment).toBeUndefined();
+    expect((await rowOf(id)).timeRange.start).toEqual(TUESDAY_10);
+  });
+
+  it('derivar por la política no la lleva', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await payDeposit(f, id);
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    const result = await reschedule(f, { horario_id: slotId(id, THURSDAY_10) });
+
+    expect(result.content).toMatchObject({ reprogramado: false });
+    expect(result.changedAppointment).toBeUndefined();
+  });
+
+  it('un horario que se ocupó no la lleva', async () => {
+    const f = await setup();
+    const id = await book(f);
+    const other = single(
+      await db.insert(customers).values({ tenantId: f.tenantId, phone: '+5492614222223', name: 'Otra' }).returning({ id: customers.id }),
+    ).id;
+    await book(f, WEDNESDAY_10, other);
+
+    const result = await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'horario_ocupado' });
+    expect(result.changedAppointment).toBeUndefined();
+  });
+
+  it('un id que no es de un horario para reprogramar no la lleva', async () => {
+    const f = await setup();
+
+    const result = await reschedule(f, { horario_id: 'cualquier cosa' });
+
+    expect(result.content).toMatchObject({ reprogramado: false, motivo: 'id_de_horario_invalido' });
+    expect(result.changedAppointment).toBeUndefined();
   });
 });

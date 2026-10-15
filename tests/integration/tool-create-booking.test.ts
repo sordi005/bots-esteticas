@@ -11,7 +11,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
-import { expectOptionsShownToModel } from './support/tool-options.js';
+import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -28,14 +28,17 @@ const slot = (f: CatalogFixture, start = MONDAY_9, serviceId = f.semi, professio
  * Por defecto la clienta eligió el horario que se pide (el caso normal: tocó el botón). `chosen`
  * cambia lo que eligió: nada, o un horario distinto del que pide el modelo.
  */
-const book = (f: CatalogFixture, input: unknown, options: { now?: Date; chosen?: string[] } = {}) => {
+const book = async (f: CatalogFixture, input: unknown, options: { now?: Date; chosen?: string[] } = {}) => {
   const requested = (input as { horario_id?: unknown }).horario_id;
   const chosen = options.chosen ?? (typeof requested === 'string' ? [requested] : []);
-  return runTool(
+  const result = await runTool(
     createBookingTool,
     input,
     toolContext(db, f, { ...(options.now ? { now: options.now } : {}), chosenOptionIds: new Set(chosen) }),
   );
+  // En todos los casos de este archivo: la marca de cambio confirmado va solo con reservado=true.
+  expectChangeMarkOnlyOnSuccess(result, 'reservado');
+  return result;
 };
 
 const setName = (f: CatalogFixture, name: string | null) =>
@@ -509,5 +512,78 @@ describe('crear_reserva: rechazos traducidos para el modelo', () => {
 
     expect(await appointmentsOf(f)).toHaveLength(1);
     expect(await appointmentsOf(other)).toEqual([]);
+  });
+});
+
+describe('crear_reserva: la marca de cambio confirmado (6.4)', () => {
+  it('una reserva nueva lleva la marca', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    expect(result.content).toMatchObject({ reservado: true });
+    expect(result.changedAppointment).toBe(true);
+  });
+
+  it('un reintento que devuelve el turno que ya estaba también la lleva: la clienta tiene ese turno', async () => {
+    const f = await createCatalogFixture(db);
+    await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    const retry = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(retry.content).toMatchObject({ reservado: true, yaEstabaReservado: true });
+    expect(retry.changedAppointment).toBe(true);
+  });
+
+  it('cuando falta que la clienta elija el horario no la lleva: no se reservó nada', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' }, { chosen: [] });
+
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'falta_que_elija' });
+    expect(result.changedAppointment).toBeUndefined();
+  });
+
+  it('un rechazo (falta el nombre, el id no es de un horario) no la lleva', async () => {
+    const f = await createCatalogFixture(db);
+
+    const withoutName = await book(f, { horario_id: slot(f) });
+    const invalidId = await book(f, { horario_id: 'cualquier cosa', nombre: 'Caro Pérez' });
+
+    expect(withoutName.content).toMatchObject({ reservado: false, motivo: 'falta_nombre' });
+    expect(invalidId.content).toMatchObject({ reservado: false, motivo: 'id_de_horario_invalido' });
+    expect(withoutName.changedAppointment).toBeUndefined();
+    expect(invalidId.changedAppointment).toBeUndefined();
+  });
+
+  it('un horario que otra clienta ocupó no la lleva', async () => {
+    const f = await createCatalogFixture(db);
+    const [other] = await db
+      .insert(customers)
+      .values({ tenantId: f.tenantId, phone: '+5492614666667', name: 'Otra' })
+      .returning({ id: customers.id });
+    await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: other?.id ?? '',
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: MONDAY_9,
+      actor: 'assistant',
+      now: at('2026-10-04', '09:00'),
+    });
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    expect(result.content).toMatchObject({ reservado: false, motivo: 'horario_ocupado' });
+    expect(result.changedAppointment).toBeUndefined();
+  });
+
+  it('la entrada inválida (sin horario_id) tampoco', async () => {
+    const f = await createCatalogFixture(db);
+
+    const result = await book(f, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.changedAppointment).toBeUndefined();
   });
 });

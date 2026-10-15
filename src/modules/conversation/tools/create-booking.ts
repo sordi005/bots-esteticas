@@ -106,6 +106,7 @@ function reservedResult(
       mensaje: alreadyBooked ? `Esa reserva ya estaba hecha. ${state}` : state,
     },
     options: [],
+    changedAppointment: true,
   };
 }
 

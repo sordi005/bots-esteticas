@@ -55,6 +55,14 @@ export interface ToolResult {
   options: OfferableOption[];
   /** El modelo pidió algo inválido (no encontrado, fuera de rango…): que lo corrija o lo explique. */
   isError?: boolean;
+  /**
+   * La herramienta dejó un turno reservado, cancelado o reprogramado, o confirmó que ya estaba así
+   * (un reintento). Solo lo ponen las herramientas que cambian turnos, y solo cuando el cambio pasó:
+   * ni con la elección o la confirmación pendientes, ni al derivar por la política, ni ante un
+   * rechazo. El ciclo del agente lo usa para no dejar pasar un texto que afirma un cambio que ninguna
+   * herramienta hizo (6.4).
+   */
+  changedAppointment?: true;
 }
 
 export interface AgentTool<Input> {

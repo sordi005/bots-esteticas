@@ -24,3 +24,16 @@ export function expectOptionsShownToModel(result: Pick<ToolResult, 'content' | '
   expect(result.options.length).toBeGreaterThan(0);
   expect(shown.slice().sort()).toEqual(result.options.map((option) => option.id).sort());
 }
+
+/**
+ * La marca de «cambio confirmado» (`changedAppointment`) aparece exactamente cuando el resultado dice que el
+ * cambio pasó: `successField` es el campo con que lo dice cada herramienta (`reservado`, `cancelado`,
+ * `reprogramado`). Ni una elección que falta, ni una derivación, ni un rechazo la llevan.
+ */
+export function expectChangeMarkOnlyOnSuccess(
+  result: Pick<ToolResult, 'content' | 'changedAppointment'>,
+  successField: 'reservado' | 'cancelado' | 'reprogramado',
+): void {
+  if (result.content[successField] === true) expect(result.changedAppointment).toBe(true);
+  else expect(result.changedAppointment).toBeUndefined();
+}
