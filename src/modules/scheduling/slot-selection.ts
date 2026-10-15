@@ -45,3 +45,37 @@ export function pickSpreadSlots<T extends { start: Date }>(
   const hasMore = last !== undefined && slots.some((slot) => slot.start.getTime() > last.start.getTime());
   return { chosen, hasMore };
 }
+
+/**
+ * Las alternativas a una hora puntual que no se pudo dar (6.4, `consultar_hora`): los horarios libres
+ * más cercanos a `target`, con la misma separación entre opciones que el resto (4.3), para no ofrecer
+ * 16:45, 17:00 y 17:15. A igual distancia, el más temprano. Devuelve hasta `count`, ordenados por inicio.
+ * Función pura.
+ */
+export function pickNearestSlots<T extends { start: Date }>(
+  slots: readonly T[],
+  options: { target: Date; count: number; minGapMinutes: number },
+): T[] {
+  const { target, count, minGapMinutes } = options;
+  if (!Number.isInteger(count) || count < 1) {
+    throw new RangeError(`Cantidad de opciones inválida: ${String(count)}`);
+  }
+  if (minGapMinutes < 0) {
+    throw new RangeError(`Separación mínima inválida: ${String(minGapMinutes)} minutos`);
+  }
+
+  const distance = (slot: T) => Math.abs(slot.start.getTime() - target.getTime());
+  const byCloseness = [...slots].sort(
+    (a, b) => distance(a) - distance(b) || a.start.getTime() - b.start.getTime(),
+  );
+
+  const chosen: T[] = [];
+  for (const slot of byCloseness) {
+    if (chosen.length === count) break;
+    const farEnough = chosen.every(
+      (other) => Math.abs(slot.start.getTime() - other.start.getTime()) >= minGapMinutes * MINUTE_MS,
+    );
+    if (farEnough) chosen.push(slot);
+  }
+  return chosen.sort((a, b) => a.start.getTime() - b.start.getTime());
+}

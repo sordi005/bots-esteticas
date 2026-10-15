@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Slot } from '../../../src/modules/scheduling/availability.js';
 import {
   MIN_GAP_BETWEEN_OFFERED_SLOTS_MINUTES,
+  pickNearestSlots,
   pickSpreadSlots,
 } from '../../../src/modules/scheduling/slot-selection.js';
 import { instantToLocal, localDateTimeToInstant } from '../../../src/shared/time-zone.js';
@@ -140,5 +141,67 @@ describe('pickSpreadSlots: las opciones las elige el código (4.3)', () => {
     expect(() => pickSpreadSlots([], { count: 0, minGapMinutes: 90 })).toThrow(RangeError);
     expect(() => pickSpreadSlots([], { count: 2.5, minGapMinutes: 90 })).toThrow(RangeError);
     expect(() => pickSpreadSlots([], { count: 3, minGapMinutes: -1 })).toThrow(RangeError);
+  });
+});
+
+describe('pickNearestSlots: las alternativas más cercanas a la hora que pidió la clienta', () => {
+  const target = localDateTimeToInstant('2026-10-05', '16:30', MENDOZA);
+  const slotsAt = (...times: string[]) => times.map((time) => slotAt(time));
+  const nearest = (slots: Slot[], options: { count?: number; minGapMinutes?: number } = {}) =>
+    localTimes(pickNearestSlots(slots, { target, count: 3, minGapMinutes: 90, ...options }));
+
+  it('elige primero el más cercano y después los que siguen más cerca, separados por 90 minutos', () => {
+    // 16:45 es el más cercano; 17:00 queda a 15 minutos de él y no se ofrece; 15:15 está a 90 minutos.
+    expect(nearest(slotsAt('15:00', '15:15', '16:45', '17:00', '18:30', '19:00'))).toEqual(['15:15', '16:45', '18:30']);
+  });
+
+  it('devuelve los horarios ordenados por inicio, no por cercanía', () => {
+    expect(nearest(slotsAt('18:30', '16:45', '15:15'))).toEqual(['15:15', '16:45', '18:30']);
+  });
+
+  it('a igual distancia, el más temprano', () => {
+    // 16:00 y 17:00 están a 30 minutos de las 16:30: con una sola opción, el de antes.
+    expect(nearest(slotsAt('17:00', '16:00'), { count: 1 })).toEqual(['16:00']);
+  });
+
+  it('con horarios cada 15 minutos alrededor, una opción a cada lado y no tres seguidas', () => {
+    const everyQuarter = everyQuarterHour('14:00', '19:00').filter((slot) => localTimes([slot])[0] !== '16:30');
+
+    // 16:15 y 16:45 están igual de cerca: queda el de antes; de ahí, 90 minutos para cada lado.
+    expect(nearest(everyQuarter)).toEqual(['14:45', '16:15', '17:45']);
+  });
+
+  it('con separación cero son simplemente los más cercanos', () => {
+    expect(nearest(slotsAt('16:00', '16:15', '16:45', '17:00'), { minGapMinutes: 0, count: 3 })).toEqual([
+      '16:00',
+      '16:15',
+      '16:45',
+    ]);
+  });
+
+  it('no inventa horarios: devuelve menos si no hay tantos, y nada si no hay ninguno', () => {
+    expect(nearest(slotsAt('16:45', '17:00'))).toEqual(['16:45']);
+    expect(nearest([])).toEqual([]);
+  });
+
+  it('respeta la cantidad pedida', () => {
+    expect(nearest(slotsAt('09:00', '11:00', '13:00', '15:00', '18:30'), { count: 2 })).toEqual(['15:00', '18:30']);
+  });
+
+  it('devuelve los mismos horarios que recibió, con su profesional, y no modifica la lista', () => {
+    const sofi = slotAt('16:45', 'sofi');
+    const mica = slotAt('15:00', 'mica');
+    const input = [sofi, mica];
+
+    const chosen = pickNearestSlots(input, { target, count: 2, minGapMinutes: 90 });
+
+    expect(chosen[0]).toBe(mica);
+    expect(chosen[1]).toBe(sofi);
+    expect(input).toEqual([sofi, mica]);
+  });
+
+  it('rechaza una cantidad o una separación que no tienen sentido', () => {
+    expect(() => pickNearestSlots([], { target, count: 0, minGapMinutes: 90 })).toThrow(RangeError);
+    expect(() => pickNearestSlots([], { target, count: 3, minGapMinutes: -1 })).toThrow(RangeError);
   });
 });
