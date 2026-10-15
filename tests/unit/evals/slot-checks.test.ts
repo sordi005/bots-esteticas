@@ -11,6 +11,7 @@ import {
   verifySlotNotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
+  verifySlotsNotRepeatedInText,
 } from '../../evals/slot-checks.js';
 
 const MENDOZA = 'America/Argentina/Mendoza';
@@ -335,5 +336,29 @@ describe('verifyCancelButtonOffered', () => {
     if (inactive.resuelta?.tipo === 'cancelar') inactive.resuelta = { ...inactive.resuelta, ocupaHorario: false };
 
     expect(verifyCancelButtonOffered(result([inactive]))).toBe('El botón de cancelar es de un turno que ya no está activo');
+  });
+});
+
+describe('verifySlotsNotRepeatedInText: los horarios van en los botones, no repetidos en el texto (6.4)', () => {
+  const offered = [slot(at('2026-10-09', '13:00')), slot(at('2026-10-09', '14:30')), slot(at('2026-10-09', '16:00'))];
+  const withText = (texto: string): EvalResult => ({ ...result(offered), texto });
+
+  it('falla si el texto repite los horarios ofrecidos (lo encontró la prueba manual con Meta)', () => {
+    const repeated = withText(
+      'Para el viernes a la tarde tenemos estos horarios: viernes 13:00 con Sofi, viernes 14:30 con Sofi y viernes 16:00 con Mica. ¿Cuál te queda mejor?',
+    );
+    expect(verifySlotsNotRepeatedInText(repeated, MENDOZA)).toMatch(/13:00.*14:30.*16:00/);
+  });
+
+  it('pasa si el texto invita a elegir sin repetirlos', () => {
+    expect(verifySlotsNotRepeatedInText(withText('Para el viernes a la tarde tengo estos horarios. ¿Cuál te queda mejor?'), MENDOZA)).toBeNull();
+  });
+
+  it('pasa si nombra un solo horario (por ejemplo, el primero libre)', () => {
+    expect(verifySlotsNotRepeatedInText(withText('El primero libre es a las 13:00. Elegí el que te quede mejor.'), MENDOZA)).toBeNull();
+  });
+
+  it('pasa si no ofreció horarios', () => {
+    expect(verifySlotsNotRepeatedInText({ ...result([]), texto: 'viernes 13:00 y 14:30' }, MENDOZA)).toBeNull();
   });
 });

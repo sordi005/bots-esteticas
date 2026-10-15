@@ -139,3 +139,18 @@ export function verifyCancelButtonOffered(result: EvalResult): string | null {
   if (button.resuelta?.tipo !== 'cancelar') return 'El botón de cancelar no es de un turno de la clienta';
   return button.resuelta.ocupaHorario ? null : 'El botón de cancelar es de un turno que ya no está activo';
 }
+
+/**
+ * Los horarios ofrecidos van como botones o lista: el texto no los repite (6.4, reglas del prompt).
+ * Nombrar uno solo está bien («el primero libre es a las 13:00»); repetir dos o más, no. La prueba
+ * manual con Meta mostró la lista entera escrita en el texto y además como botones.
+ */
+export function verifySlotsNotRepeatedInText(result: EvalResult, timeZone: string): string | null {
+  // "09:00" se escribe "9:00" en el texto: se compara sin el cero de adelante.
+  const repeated = offeredSlots(result, timeZone)
+    .map((slot) => slot.local.time.replace(/^0/, ''))
+    .filter((time) => new RegExp(String.raw`(?<![\d:])${time}(?!\d)`).test(result.texto));
+  return repeated.length >= 2
+    ? `Repitió en el texto los horarios que ya ofrece como opciones: ${repeated.join(', ')}`
+    : null;
+}

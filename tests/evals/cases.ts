@@ -8,6 +8,7 @@ import {
   verifySlotNotOffered,
   verifySlotsOfProfessional,
   verifySlotsOnDayFrom,
+  verifySlotsNotRepeatedInText,
 } from './slot-checks.js';
 import {
   combineChecks,
@@ -132,8 +133,12 @@ export const evalCases: EvalCase[] = [
     mensajes: ['tenés turno para semi el viernes a la tarde?'],
     espera: {
       herramientas: ['buscar_servicios', 'consultar_disponibilidad'],
+      // La prueba manual con Meta mostró los horarios como botones y además escritos en el texto.
       verifica: (resultado) =>
-        verifySlotsOnDayFrom(resultado, { date: '2026-10-09', fromMinutes: 13 * 60 }, EVAL_TIME_ZONE),
+        combineChecks(
+          verifySlotsOnDayFrom(resultado, { date: '2026-10-09', fromMinutes: 13 * 60 }, EVAL_TIME_ZONE),
+          verifySlotsNotRepeatedInText(resultado, EVAL_TIME_ZONE),
+        ),
     },
   },
   {
