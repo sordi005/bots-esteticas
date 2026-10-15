@@ -358,6 +358,7 @@ Detalle de la derivación (H8):
 - **[D]** La pausa vence sola por fecha: no hace falta una tarea programada. Al procesar una conversación con la pausa vencida, el asistente vuelve a estar activo y contesta normalmente.
 - **[D]** Mientras el asistente está pausado, los mensajes de la clienta se marcan como procesados sin llamar al modelo ni contestar. Así no se acumulan para cuando se reanude: los atiende la persona.
 - **[D]** Que venza la pausa no resuelve la derivación: queda abierta hasta que la resuelva una persona (H9, H15).
+- **[D]** Al reanudarse, el asistente no ve lo que se habló antes: eso ya lo atendió (o lo está atendiendo) una persona. Se guarda cuándo se reanudó (`resumed_at`), el historial que ve el modelo arranca ahí y el contexto de la vuelta le avisa que se reanudó después de una derivación, para que atienda solo el pedido nuevo. Sin esto, la prueba manual con Meta mostró un ciclo: al vencer la pausa, el modelo veía en el historial a la clienta pidiendo una persona sin respuesta ("¿qué pasó con la persona?") y volvía a derivar, sin atender el turno que pedía. Los mensajes que la dueña manda desde su app (ecos, H13) no entran en ese historial, así que el ciclo no se cortaría solo.
 - **[D]** Regla de oro: **si la dueña escribió en una conversación, el asistente se calla.** Es preferible que el asistente no conteste a que se pise con ella.
 
 **Aviso diario a la dueña [S]:** a las 8 de la mañana, un resumen con los turnos del día, los turnos sin confirmar y las derivaciones pendientes. A las 21, un mensaje con los turnos del día para marcar ausentes con un botón.
@@ -756,7 +757,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), duración y margen al momento de reservar, estado, precio, precio en efectivo y tipo de precio al momento de reservar, id del evento de calendario, origen |
 | `appointment_events` | turno, tipo (cambio de estado o reprogramación), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
 | `deposits` | turno (una seña por turno), monto, medio, estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
-| `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje, respuesta guardada sin enviar y desde cuándo (6.7, H8) |
+| `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje, respuesta guardada sin enviar y desde cuándo (6.7, H8), cuándo se reanudó el asistente después de una derivación (4.8) |
 | `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp, fecha en que se procesó (solo entrantes, sección 6.7) |
 | `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
 | `agent_runs` | conversación, modelo, tokens de entrada, de salida y de caché, nombres de las herramientas llamadas (sin sus argumentos), latencia, motivo de fin, fecha. Una fila por respuesta del agente (8.5). Se crea en H7 |
