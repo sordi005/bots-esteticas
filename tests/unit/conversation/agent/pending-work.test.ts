@@ -10,6 +10,7 @@ describe('announcesPendingWork: anuncios que las evaluaciones mostraron (6.4)', 
     'Listo, lo intento mover ahora',
     'Listo, voy a pasar tu turno al miércoles 14/10 a las 15:30 con Mica.',
     'Listo, el miércoles 14/10 a las 15:30 con Mica. Lo reviso y te confirmo enseguida.',
+    '¡Hola! Soy Luna, la asistente virtual de Estética Ejemplo. Te paso la dirección ahora mismo.',
   ])('detecta: %s', (text) => {
     expect(announcesPendingWork(text)).toBe(true);
   });
@@ -92,6 +93,36 @@ describe('announcesPendingWork: lo que parece un anuncio y no lo es', () => {
     'Lo que pasó es que no encontré ese horario.',
     'No lo pude mover: ese horario ya no está libre.',
     '',
+  ])('no detecta: %s', (text) => {
+    expect(announcesPendingWork(text)).toBe(false);
+  });
+});
+
+describe('announcesPendingWork: «te paso / te mando» + algo + «ahora» (6.4)', () => {
+  it.each([
+    'Te paso la dirección ahora mismo.',
+    'Te mando los precios enseguida.',
+    'Te paso el link de pago ya mismo.',
+    'Te envío la dirección y los horarios ahora.',
+    'Ya te paso la dirección.',
+    'Ahora te mando los precios.',
+    'Enseguida te paso los horarios del viernes.',
+  ])('detecta: %s', (text) => {
+    expect(announcesPendingWork(text)).toBe(true);
+  });
+
+  it.each([
+    // Ya cubiertos: una oferta, una promesa condicionada y una derivación no son anuncios.
+    'Si querés, te paso con una persona del equipo.',
+    'Decime qué día te queda mejor y te paso los horarios.',
+    'Te paso con una persona del equipo ahora mismo.',
+    'Ahora te paso con una persona del equipo, que te responde mañana.',
+    // «ahora mismo» describe cómo está el negocio, no anuncia nada.
+    'Ahora mismo no tengo masajes cargados.',
+    'Ahora mismo no hay horarios libres el viernes.',
+    'Ahora no tenemos lugar, pero te aviso si se libera.',
+    // «te pasé» es pasado: lo dice el detector de cambios, no este.
+    'Listo, te pasé el turno al miércoles 14/10 a las 15:30 con Mica.',
   ])('no detecta: %s', (text) => {
     expect(announcesPendingWork(text)).toBe(false);
   });

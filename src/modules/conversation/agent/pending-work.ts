@@ -37,6 +37,11 @@ const WAIT_FOR_ME = [
 
 const alternatives = (words: string[]): string => `(?:${words.join('|')})`;
 
+/** Primera persona del presente de entregar algo («te paso la dirección»). */
+const HAND_OVER = ['paso', 'mando', 'envio', 'comparto'];
+/** «ahora mismo» al final de «te paso…»; «ahora mismo no tengo…» no tiene «te paso» y no entra. */
+const RIGHT_NOW = ['ahora mismo', 'ahora', 'enseguida', 'en seguida', 'ya mismo'];
+
 const PENDING_WORK_PATTERNS: RegExp[] = [
   // «dejame consultar», «déjame ver», «dejame que me fije»
   new RegExp(String.raw`\bdejame (?:que )?(?:me )?${alternatives(LOOK_UP)}\b`),
@@ -48,6 +53,10 @@ const PENDING_WORK_PATTERNS: RegExp[] = [
   new RegExp(String.raw`\blo ${alternatives(LOOK_UP_NOW)}\b`),
   // «voy a pasar tu turno al miércoles»; «te voy a pasar con una persona» es una derivación y no entra
   /\bvoy a pasar(?:te)? (?:tu|el) turno\b/,
+  // «te paso la dirección ahora mismo», «te mando los precios enseguida»; «te paso con una persona» es una derivación
+  new RegExp(String.raw`\bte ${alternatives(HAND_OVER)} (?!con\b)(?:\S+ ){0,6}?${alternatives(RIGHT_NOW)}\b`),
+  // «ya te paso la dirección», «ahora te mando los precios»
+  new RegExp(String.raw`\b(?:ya|${alternatives(RIGHT_NOW)}) te ${alternatives(HAND_OVER)} (?!con\b)`),
   // «estoy buscando tu turno»
   /\bestoy (?:buscando|consultando|revisando|chequeando|verificando|mirando|averiguando)\b/,
   // «lo intento mover», «intento moverlo», «lo voy a intentar»
