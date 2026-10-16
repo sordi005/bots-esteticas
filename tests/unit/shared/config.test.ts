@@ -35,6 +35,7 @@ describe('loadConfig', () => {
       credentialsKey: null,
       whatsapp: null,
       whatsappTestRecipient: null,
+      notificationsNumber: null,
       anthropicApiKey: null,
       anthropicModel: 'claude-haiku-5-5',
     });
@@ -52,6 +53,7 @@ describe('loadConfig', () => {
       credentialsKey: Buffer.from(KEY, 'base64'),
       whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v26.0' },
       whatsappTestRecipient: null,
+      notificationsNumber: null,
       anthropicApiKey: 'sk-ant-clave-de-prueba',
       anthropicModel: 'claude-haiku-5-5',
     });
@@ -210,6 +212,39 @@ describe('loadConfig', () => {
 
       expect(error.message).toContain('ANTHROPIC_MODEL');
       expect(error.message).not.toContain('sk-ant-secreta');
+    });
+  });
+
+  describe('número de avisos del servicio (8.2)', () => {
+    it('con el número y el token, los avisos a las dueñas salen de ahí', () => {
+      const config = loadConfig({
+        DATABASE_URL: databaseUrl,
+        NOTIFICATIONS_PHONE_NUMBER_ID: '1004988256039822',
+        NOTIFICATIONS_ACCESS_TOKEN: 'EAAG-token-de-avisos',
+      });
+
+      expect(config.notificationsNumber).toEqual({ phoneNumberId: '1004988256039822', accessToken: 'EAAG-token-de-avisos' });
+    });
+
+    it('sin configurar (vacías en .env), los avisos salen del número de cada negocio: la fase 0', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl, NOTIFICATIONS_PHONE_NUMBER_ID: '', NOTIFICATIONS_ACCESS_TOKEN: '' });
+
+      expect(config.notificationsNumber).toBeNull();
+    });
+
+    it('el número y el token se configuran juntos, y el error no muestra el token', () => {
+      const error = captureError(() =>
+        loadConfig({ DATABASE_URL: databaseUrl, NOTIFICATIONS_ACCESS_TOKEN: 'EAAG-secreto' }),
+      );
+
+      expect(error.message).toContain('NOTIFICATIONS_PHONE_NUMBER_ID');
+      expect(error.message).not.toContain('EAAG-secreto');
+    });
+
+    it('el número son solo dígitos, como lo da Meta', () => {
+      expect(() =>
+        loadConfig({ DATABASE_URL: databaseUrl, NOTIFICATIONS_PHONE_NUMBER_ID: '+54 261', NOTIFICATIONS_ACCESS_TOKEN: 'x' }),
+      ).toThrow(ConfigError);
     });
   });
 });
