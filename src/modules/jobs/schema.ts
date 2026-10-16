@@ -4,7 +4,13 @@ import { createdAt, instant, updatedAt } from '../../shared/db-columns.js';
 import { tenantId } from '../tenants/schema.js';
 
 /** Tipos de tarea (sección 6.7). Cada hito suma el suyo junto con quien lo ejecuta. */
-export const jobKind = pgEnum('job_kind', ['process_conversation']);
+export const jobKind = pgEnum('job_kind', [
+  'process_conversation',
+  // Avisos (H9): enviar uno, procesar el botón que tocó la dueña y volver a avisarle de un comprobante.
+  'send_notification',
+  'process_owner_reply',
+  'remind_deposit_receipt',
+]);
 
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);
 

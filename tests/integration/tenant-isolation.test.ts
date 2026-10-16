@@ -7,6 +7,7 @@ import {
 } from '../../src/modules/catalog/schema.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications, ownerReplies } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
@@ -214,6 +215,7 @@ describe('aislamiento entre negocios: la base rechaza mezclar datos', () => {
         tenantId: a.tenantId,
         appointmentId: b.appointmentId,
         amountCents: 540_000,
+        method: 'transfer',
         expiresAt: FIXTURE_APPOINTMENT_RANGE.start,
       }),
       FOREIGN_KEY_VIOLATION,
@@ -268,6 +270,59 @@ describe('aislamiento entre negocios: la base rechaza mezclar datos', () => {
       }),
       FOREIGN_KEY_VIOLATION,
       'agent_runs_conversation_fk',
+    );
+  });
+
+  const ownerNotice = (fixture: TenantFixture) => ({
+    tenantId: fixture.tenantId,
+    recipient: 'owner' as const,
+    kind: 'appointment_cancelled' as const,
+    customerId: fixture.customerId,
+    message: { type: 'text' as const, body: 'Caro canceló su turno' },
+  });
+
+  it('un aviso no se refiere a una clienta de otro negocio', async () => {
+    await expectConstraintViolation(
+      db.insert(notifications).values({ ...ownerNotice(a), customerId: b.customerId }),
+      FOREIGN_KEY_VIOLATION,
+      'notifications_customer_fk',
+    );
+  });
+
+  it('un aviso no se refiere a un turno de otro negocio', async () => {
+    await expectConstraintViolation(
+      db.insert(notifications).values({ ...ownerNotice(a), appointmentId: b.appointmentId }),
+      FOREIGN_KEY_VIOLATION,
+      'notifications_appointment_fk',
+    );
+  });
+
+  it('un aviso no se refiere a una derivación de otro negocio', async () => {
+    const [handoff] = await db
+      .insert(handoffs)
+      .values({ tenantId: b.tenantId, conversationId: b.conversationId, reason: 'complaint', summary: 'Reclamo' })
+      .returning({ id: handoffs.id });
+
+    await expectConstraintViolation(
+      db.insert(notifications).values({ ...ownerNotice(a), kind: 'handoff', handoffId: handoff?.id }),
+      FOREIGN_KEY_VIOLATION,
+      'notifications_handoff_fk',
+    );
+  });
+
+  it('el botón de la dueña no se registra sobre un aviso de otro negocio', async () => {
+    const [notice] = await db.insert(notifications).values(ownerNotice(b)).returning({ id: notifications.id });
+
+    await expectConstraintViolation(
+      db.insert(ownerReplies).values({
+        tenantId: a.tenantId,
+        notificationId: notice?.id ?? '',
+        action: 'handoff_attended',
+        whatsappMessageId: `wamid.${crypto.randomUUID()}`,
+        receivedAt: new Date(),
+      }),
+      FOREIGN_KEY_VIOLATION,
+      'owner_replies_notification_fk',
     );
   });
 });

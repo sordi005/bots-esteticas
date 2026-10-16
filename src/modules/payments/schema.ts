@@ -26,7 +26,7 @@ export const deposits = pgTable(
     appointmentId: uuid('appointment_id').notNull(),
     amountCents: integer('amount_cents').notNull(),
     /** El medio del negocio al reservar (4.5, decisión 23), como el precio. */
-    method: paymentMethod('method'),
+    method: paymentMethod('method').notNull(),
     status: depositStatus('status').notNull().default('pending'),
     /** Vencimiento de la reserva provisoria. */
     expiresAt: instant('expires_at').notNull(),

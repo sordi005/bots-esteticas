@@ -37,6 +37,8 @@ export const handoffReason = pgEnum('handoff_reason', [
   'off_catalog',
   'policy_exception',
   'not_understood',
+  // Un problema con la seña que no resuelve el asistente (4.5, 4.8). Solo lo usa el código.
+  'payment_issue',
 ]);
 
 export const handoffStatus = pgEnum('handoff_status', ['open', 'resolved']);
@@ -152,6 +154,7 @@ export const handoffs = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
+    unique('handoffs_tenant_id_id_key').on(t.tenantId, t.id),
     foreignKey({
       name: 'handoffs_conversation_fk',
       columns: [t.tenantId, t.conversationId],

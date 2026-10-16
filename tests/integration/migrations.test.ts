@@ -22,6 +22,8 @@ const MVP_TABLES = [
   'holidays',
   'message_templates',
   'messages',
+  'notifications',
+  'owner_replies',
   'professional_services',
   'professionals',
   'schedule_exceptions',

@@ -92,6 +92,27 @@
       "when": 1792038263568,
       "tag": "0012_conversacion_reanudada",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792165337936,
+      "tag": "0013_sena_con_medio_datos",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792165384718,
+      "tag": "0014_derivaciones_y_tareas_de_avisos",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1792165386819,
+      "tag": "0015_avisos_a_la_duena",
+      "breakpoints": true
     }
   ]
 }
