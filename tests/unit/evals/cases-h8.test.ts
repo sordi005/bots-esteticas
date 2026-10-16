@@ -135,12 +135,12 @@ describe('reserva_completa', () => {
     );
   });
 
-  it('espera crear_reserva, el monto de la seña escrito por el código y ni rastro de un alias', () => {
+  it('espera crear_reserva, el monto de la seña escrito por el código y, desde H9, el alias y el pedido del comprobante', () => {
     const { espera } = byName('reserva_completa');
 
     expect(espera.herramientas).toEqual(['crear_reserva']);
-    expect(espera.menciona).toEqual(['5.400']);
-    expect(espera.noMenciona).toEqual(['estetica.ejemplo']);
+    expect(espera.menciona).toEqual(['5.400', 'estetica.ejemplo', 'comprobante']);
+    expect(espera.noMenciona).toBeUndefined();
   });
 
   it('la clienta ya tiene nombre y toca el horario del viernes 9/10 a las 15:00 con Mica', () => {

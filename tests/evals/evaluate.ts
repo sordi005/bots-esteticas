@@ -94,6 +94,8 @@ export interface EvalAppointmentSetup {
   otraClienta?: string;
   /** La seña ya está paga: el turno queda confirmado. */
   senaAprobada?: boolean;
+  /** Ya mandó el comprobante: la seña queda en verificación (H9, 4.5). */
+  comprobante?: boolean;
   /**
    * Los inicios anteriores del turno, del primero al último: se reservó en el primero y se
    * reprogramó a cada uno de los siguientes hasta `inicio`. Cada uno es una reprogramación usada.

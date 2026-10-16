@@ -152,7 +152,15 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           summary: SEVERAL_PENDING_RECEIPTS_SUMMARY,
           now: at,
         });
-        logger.info({ outcome: 'several_pending_receipts' }, 'Comprobante con varias señas pendientes: se deriva');
+        await db.insert(agentRuns).values({
+          tenantId,
+          conversationId,
+          model: null,
+          llmCalls: 0,
+          outcome: 'handoff_payment_issue',
+          createdAt: at,
+        });
+        logger.info({ outcome: 'handoff_payment_issue' }, 'Comprobante con varias señas pendientes: se deriva');
         return { type: 'text', body: severalPendingReceiptsText(when) };
       }
       if (registration.kind === 'registered') {

@@ -513,7 +513,9 @@ describe('los casos de cases.ts contra el seed', () => {
   it.each(evalCases)('$nombre se puede preparar y correr', async (evalCase) => {
     const before = await countAppointments();
 
-    await expect(run(evalCase, [finalAnswer('ok')]).result).resolves.toMatchObject({ outcome: 'replied' });
+    // Con dos señas pendientes el código deriva sin llamar al modelo (4.5): esa vuelta tiene su propio motivo.
+    const outcome = evalCase.nombre === 'sena_comprobante_dos_senas' ? 'handoff_payment_issue' : 'replied';
+    await expect(run(evalCase, [finalAnswer('ok')]).result).resolves.toMatchObject({ outcome });
 
     expect(await countAppointments()).toBe(before);
   });

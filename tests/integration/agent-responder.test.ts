@@ -1008,6 +1008,8 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
     expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toMatchObject([
       { reason: 'payment_issue', status: 'open' },
     ]);
+    // Una fila por respuesta (7.2), aunque no se llamó al modelo.
+    expect(await runsOf(f)).toMatchObject([{ outcome: 'handoff_payment_issue', model: null, llmCalls: 0 }]);
   });
 
   it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
