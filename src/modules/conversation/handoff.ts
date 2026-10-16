@@ -52,9 +52,21 @@ export function buildHandoffSummary(reason: HandoffReason, modelSummary: string)
  * de los feriados (4.8). Devuelve el texto listo para decirle a la clienta.
  */
 export async function describeWhenHumanReplies(
-  db: NodePgDatabase,
+  db: Queryable,
   input: { tenantId: string; now: Date },
 ): Promise<string> {
+  const { attention, timeZone } = await loadHumanAttention(db, input);
+  return describeHumanAttention(attention, timeZone);
+}
+
+/**
+ * Si en `now` atiende una persona del negocio, o cuándo empieza a atender (4.8), con su horario y
+ * sus feriados. Lo usan la derivación y los recordatorios a la dueña (4.5).
+ */
+export async function loadHumanAttention(
+  db: Queryable,
+  input: { tenantId: string; now: Date },
+): Promise<{ attention: HumanAttention; timeZone: string }> {
   const { tenantId, now } = input;
   const [tenant] = await db
     .select({
@@ -77,7 +89,7 @@ export async function describeWhenHumanReplies(
     holidays: holidays.map((holiday) => holiday.date),
     worksOnHolidays: tenant.worksOnHolidays ?? false,
   });
-  return describeHumanAttention(attention, tenant.timeZone);
+  return { attention, timeZone: tenant.timeZone };
 }
 
 export interface HandOffInput {
