@@ -3,6 +3,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { createBookingTool } from '../../src/modules/conversation/tools/create-booking.js';
 import { runTool } from '../../src/modules/conversation/tools/tool.js';
+import { conversations, handoffs } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
@@ -53,6 +54,66 @@ const appointmentsOf = (f: CatalogFixture) =>
     .from(appointments)
     .where(and(eq(appointments.tenantId, f.tenantId), eq(appointments.customerId, f.customerId)));
 
+describe('crear_reserva: los datos para pagar la seña (H9, 4.5)', () => {
+  it('con CBU, también lo pasa', async () => {
+    const f = await createCatalogFixture(db, { settings: { transferCbu: '0110012340001234567890' } });
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    expect(result.content).toMatchObject({ pago: { alias: 'estetica.prueba', cbu: '0110012340001234567890' } });
+    expect(JSON.stringify(result.content)).toContain('CBU 0110012340001234567890');
+  });
+
+  it('solo con CBU, el texto y la verificación usan el CBU', async () => {
+    const f = await createCatalogFixture(db, {
+      settings: { transferAlias: null, transferCbu: '0110012340001234567890' },
+    });
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    expect(result.content).not.toHaveProperty('pago.alias');
+    expect(result.mustMention).toBe('0110012340001234567890');
+  });
+
+  it('sin seña no hay datos de pago ni nada que verificar', async () => {
+    const f = await createCatalogFixture(db, { settings: { depositRequirement: 'never' } });
+
+    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+
+    expect(result.content).not.toHaveProperty('pago');
+    expect(result.mustMention).toBeUndefined();
+  });
+
+  it.each([
+    ['sin alias ni CBU cargados', { transferAlias: null, transferCbu: null }],
+    ['con Mercado Pago, que todavía no está conectado (H11)', { depositPaymentOptions: 'mercadopago' as const }],
+  ])('%s: reserva igual, no inventa datos y deriva sola con «pago»', async (_case, settings) => {
+    const f = await createCatalogFixture(db, {
+      settings: {
+        ...settings,
+        humanAttentionHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' })),
+      },
+    });
+    const { id: conversationId } = single(
+      await db.insert(conversations).values({ tenantId: f.tenantId, customerId: f.customerId }).returning({ id: conversations.id }),
+    );
+    const horarioId = slot(f);
+
+    const result = await runTool(
+      createBookingTool,
+      { horario_id: horarioId, nombre: 'Caro Pérez' },
+      toolContext(db, f, { conversationId, chosenOptionIds: new Set([horarioId]) }),
+    );
+
+    expect(result.content).toMatchObject({ reservado: true, derivada: true, cuando: 'el lunes 5/10 a las 9:00' });
+    expect(result.content).not.toHaveProperty('pago');
+    expect(result.mustMention).toBeUndefined();
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, conversationId))).toMatchObject([
+      { reason: 'payment_issue', status: 'open' },
+    ]);
+  });
+});
+
 describe('crear_reserva: el camino feliz', () => {
   it('reserva con seña: queda pendiente de seña, con el monto, el plazo y el medio escritos por el código', async () => {
     const f = await createCatalogFixture(db);
@@ -71,8 +132,20 @@ describe('crear_reserva: el camino feliz', () => {
       fecha: 'lunes 5/10 9:00',
       estado: 'pendiente de seña',
       sena: { monto: '$5.400', estado: 'pendiente de pago', pagarHasta: 'hoy a las 10:00', medio: 'transferencia' },
-      mensaje: 'Quedó reservado, pendiente de seña: si no se paga hoy a las 10:00, se libera el horario.',
+      pago: {
+        medio: 'transferencia',
+        monto: '$5.400',
+        pagarHasta: 'hoy a las 10:00',
+        alias: 'estetica.prueba',
+        titular: 'Estética Prueba',
+        texto:
+          'Para confirmarlo, transferí la seña de $5.400 al alias estetica.prueba (titular: Estética Prueba) hasta hoy a las 10:00 y mandame por acá la foto del comprobante.',
+      },
+      mensaje:
+        'Quedó reservado, pendiente de seña: si no se paga hoy a las 10:00, se libera el horario. En esta misma respuesta pasale los datos de «pago» tal cual (sirve «pago.texto») y pedile la foto del comprobante. No inventes otros datos.',
     });
+    // El ciclo del agente verifica que el alias salga en la respuesta (4.5).
+    expect(result.mustMention).toBe('estetica.prueba');
   });
 
   it('guarda la seña y el evento de creación del asistente, en la base', async () => {
@@ -104,12 +177,20 @@ describe('crear_reserva: el camino feliz', () => {
     expect(result.content).toMatchObject({ sena: { pagarHasta: 'el lunes 5/10 a las 9:00' } });
   });
 
-  it('dice el medio que eligió el negocio', async () => {
+  it('dice el medio que eligió el negocio (con Mercado Pago, hasta H11, además deriva por la seña)', async () => {
     const f = await createCatalogFixture(db, { settings: { depositPaymentOptions: 'mercadopago' } });
+    const { id: conversationId } = single(
+      await db.insert(conversations).values({ tenantId: f.tenantId, customerId: f.customerId }).returning({ id: conversations.id }),
+    );
+    const horarioId = slot(f);
 
-    const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
+    const result = await runTool(
+      createBookingTool,
+      { horario_id: horarioId, nombre: 'Caro Pérez' },
+      toolContext(db, f, { conversationId, chosenOptionIds: new Set([horarioId]) }),
+    );
 
-    expect(result.content).toMatchObject({ sena: { medio: 'Mercado Pago' } });
+    expect(result.content).toMatchObject({ sena: { medio: 'Mercado Pago' }, derivada: true });
   });
 
   it('el id del horario puede ser el de otra profesional que hace el servicio', async () => {

@@ -13,6 +13,7 @@ import {
   type AppointmentSettings,
 } from './appointment-summary.js';
 import { parseChoiceId } from './choice-ids.js';
+import { depositPayment, derivedPaymentMessage, PAYMENT_INSTRUCTIONS } from './deposit-payment.js';
 import { NEEDS_CHOICE_MESSAGE, offerForConfirmation, wasChosenByCustomer } from './slot-offer.js';
 import type { AgentTool, ToolContext, ToolResult } from './tool.js';
 
@@ -86,28 +87,42 @@ function describeRefusal(reason: BookingRefusal): ToolResult {
   }
 }
 
-function reservedResult(
+/**
+ * El turno quedó reservado. Con la seña pendiente lleva los datos para pagarla (4.5): salen en la
+ * misma respuesta que la reserva. Si no hay cómo cobrarla por acá, deriva sola.
+ */
+async function reservedResult(
   appointment: CustomerAppointment,
   ctx: ToolContext,
   settings: AppointmentSettings,
   alreadyBooked: boolean,
-): ToolResult {
+): Promise<ToolResult> {
   const summary = summarizeAppointment(appointment, { now: ctx.now, timeZone: ctx.timeZone, settings });
   const deadline = (summary.sena as { pagarHasta?: string } | undefined)?.pagarHasta;
   const state =
     appointment.status === 'PENDING_DEPOSIT'
       ? `Quedó reservado, pendiente de seña${deadline ? `: si no se paga ${deadline}, se libera el horario` : ''}.`
       : 'Quedó confirmado.';
-  return {
-    content: {
-      reservado: true,
-      ...(alreadyBooked ? { yaEstabaReservado: true } : {}),
-      ...summary,
-      mensaje: alreadyBooked ? `Esa reserva ya estaba hecha. ${state}` : state,
-    },
-    options: [],
-    changedAppointment: true,
-  };
+  const intro = alreadyBooked ? `Esa reserva ya estaba hecha. ${state}` : state;
+  const base = { reservado: true, ...(alreadyBooked ? { yaEstabaReservado: true } : {}), ...summary };
+
+  const payment = appointment.status === 'PENDING_DEPOSIT' && deadline ? await depositPayment(ctx, appointment) : null;
+  if (payment?.kind === 'transfer') {
+    return {
+      content: { ...base, pago: payment.content, mensaje: `${intro} ${PAYMENT_INSTRUCTIONS}` },
+      options: [],
+      changedAppointment: true,
+      mustMention: payment.mustMention,
+    };
+  }
+  if (payment?.kind === 'derived') {
+    return {
+      content: { ...base, derivada: true, cuando: payment.when, mensaje: `${intro} ${derivedPaymentMessage(payment.when)}` },
+      options: [],
+      changedAppointment: true,
+    };
+  }
+  return { content: { ...base, mensaje: intro }, options: [], changedAppointment: true };
 }
 
 /**
@@ -150,7 +165,7 @@ export const createBookingTool: AgentTool<Input> = {
     'Reserva un horario para la clienta. Pasale el horario_id que devolvió consultar_disponibilidad (o el que ' +
     'indica el contexto cuando ella eligió un horario con un botón) y, si el contexto dice que no hay un nombre ' +
     'cargado, el nombre. Devuelve el estado del turno (confirmado o pendiente de seña) y, si lleva seña, el monto, ' +
-    'hasta cuándo pagarla y el medio, ya escritos: decilos tal cual. Solo decí que quedó reservado si devuelve ' +
+    'hasta cuándo pagarla y los datos para pagarla («pago»), ya escritos: pasáselos tal cual en la misma respuesta. Solo decí que quedó reservado si devuelve ' +
     'reservado=true. Solo reserva un horario que la clienta eligió con un botón o una lista: si todavía no lo ' +
     'eligió, no reserva nada y devuelve motivo=falta_que_elija con ese horario para que se lo ofrezcas como ' +
     'opción. Si el horario se ocupó, volvé a consultar la disponibilidad y ofrecé otros. Pedirlo dos veces ' +

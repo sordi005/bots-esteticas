@@ -47,7 +47,10 @@ export async function createCatalogFixture(
       .values({ name: `Estética ${label}`, slug: `estetica-${label}`, plan: 'appointments', assistantName: 'Luna' })
       .returning({ id: tenants.id }),
   );
-  await db.insert(tenantSettings).values({ tenantId, ...options.settings });
+  // Los datos para cobrar la seña por transferencia, como los tiene cargados un negocio (4.5).
+  await db
+    .insert(tenantSettings)
+    .values({ tenantId, transferAlias: 'estetica.prueba', transferAccountHolder: 'Estética Prueba', ...options.settings });
 
   const [mica, sofi] = (
     await db

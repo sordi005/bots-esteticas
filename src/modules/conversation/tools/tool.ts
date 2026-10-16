@@ -63,6 +63,11 @@ export interface ToolResult {
    * herramienta hizo (6.4).
    */
   changedAppointment?: true;
+  /**
+   * Un dato que la respuesta tiene que decir: el alias (o el CBU) para pagar la seña (4.5, D4). Si el
+   * texto final no lo trae, el ciclo del agente se lo hace notar al modelo una vez.
+   */
+  mustMention?: string;
 }
 
 export interface AgentTool<Input> {

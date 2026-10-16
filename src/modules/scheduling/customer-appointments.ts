@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm';
 import { professionals, services } from '../catalog/schema.js';
-import { deposits, type depositStatus } from '../payments/schema.js';
+import { deposits, type depositStatus, type paymentMethod } from '../payments/schema.js';
 import type { Queryable } from '../../shared/db.js';
 import {
   APPOINTMENT_STATUSES,
@@ -32,6 +32,8 @@ export interface CustomerAppointment {
   deposit: {
     amountCents: number;
     status: (typeof depositStatus.enumValues)[number];
+    /** El medio del negocio al reservar (4.5). */
+    method: (typeof paymentMethod.enumValues)[number];
     expiresAt: Date;
   } | null;
 }
@@ -55,6 +57,7 @@ async function selectCustomerAppointments(
       professionalName: professionals.name,
       depositAmountCents: deposits.amountCents,
       depositStatus: deposits.status,
+      depositMethod: deposits.method,
       depositExpiresAt: deposits.expiresAt,
     })
     .from(appointments)
@@ -87,8 +90,16 @@ async function selectCustomerAppointments(
     professionalId: row.professionalId,
     professionalName: row.professionalName,
     deposit:
-      row.depositAmountCents !== null && row.depositStatus !== null && row.depositExpiresAt !== null
-        ? { amountCents: row.depositAmountCents, status: row.depositStatus, expiresAt: row.depositExpiresAt }
+      row.depositAmountCents !== null &&
+      row.depositStatus !== null &&
+      row.depositMethod !== null &&
+      row.depositExpiresAt !== null
+        ? {
+            amountCents: row.depositAmountCents,
+            status: row.depositStatus,
+            method: row.depositMethod,
+            expiresAt: row.depositExpiresAt,
+          }
         : null,
   }));
 }

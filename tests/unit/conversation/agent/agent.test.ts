@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   FALLBACK_REPLY_TEXT,
   MAX_TOOL_CALLS_PER_REPLY,
+  PAYMENT_DETAILS_NOTICE,
   PENDING_WORK_NOTICE,
   UNCONFIRMED_CHANGE_NOTICE,
   runAgent,
@@ -70,6 +71,28 @@ function changeTool(name: string, content: Record<string, unknown>, changed: boo
   const tool: AgentTool<Input> = {
     name,
     description: `Herramienta de prueba ${name}.`,
+    input: z.object({ horario_id: z.string().optional() }),
+    run,
+  };
+  return { tool: tool as AgentTool<unknown>, run };
+}
+
+/** `crear_reserva` con seña: el alias tiene que salir en la respuesta (4.5). */
+function bookingWithDeposit(alias = 'estetica.ejemplo') {
+  interface Input {
+    horario_id?: string | undefined;
+  }
+  const run = vi.fn<AgentTool<Input>['run']>(() =>
+    Promise.resolve({
+      content: { reservado: true, pago: { alias } },
+      options: [],
+      changedAppointment: true as const,
+      mustMention: alias,
+    }),
+  );
+  const tool: AgentTool<Input> = {
+    name: 'crear_reserva',
+    description: 'Herramienta de prueba crear_reserva.',
     input: z.object({ horario_id: z.string().optional() }),
     run,
   };
@@ -1344,6 +1367,57 @@ describe('runAgent: el asistente nunca confirma un cambio que no pasó (6.4)', (
     const { run, requests } = agent(script);
 
     await expect(run({ toolContext: { ...toolContext, signal: controller.signal } })).rejects.toThrow('tiempo agotado');
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe('runAgent: los datos para pagar la seña salen en la respuesta (4.5, D4)', () => {
+  const WITHOUT_ALIAS = 'Listo, te guardo el lunes 5/10 a las 15:30 con Mica. Una persona del equipo te pasa los datos.';
+  const WITH_ALIAS =
+    'Listo, te guardo el lunes 5/10 a las 15:30 con Mica. Transferí la seña de $5.400 al alias Estetica.Ejemplo y mandame la foto del comprobante.';
+
+  it('si el texto no trae el alias que devolvió la herramienta, se lo marca una vez y contesta con los datos', async () => {
+    const booking = bookingWithDeposit();
+    const omitted = finalAnswer(WITHOUT_ALIAS);
+    const { run, requests } = agent([callTools([{ name: 'crear_reserva' }]), omitted, finalAnswer(WITH_ALIAS)], [booking.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.messages.slice(-2)).toEqual([
+      { role: 'assistant_turn', turn: omitted.assistantTurn },
+      { role: 'system_note', text: PAYMENT_DETAILS_NOTICE },
+    ]);
+    expect(message).toEqual({ type: 'text', body: WITH_ALIAS });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3 });
+  });
+
+  it('con el alias en el texto (sin importar mayúsculas) no se le marca nada', async () => {
+    const { run, requests } = agent([callTools([{ name: 'crear_reserva' }]), finalAnswer(WITH_ALIAS)], [bookingWithDeposit().tool]);
+
+    await run();
+
+    expect(requests).toHaveLength(2);
+  });
+
+  it('si lo vuelve a omitir se envía igual: no afirma nada falso, solo le falta un dato', async () => {
+    const { run, requests } = agent(
+      [callTools([{ name: 'crear_reserva' }]), finalAnswer(WITHOUT_ALIAS), finalAnswer(WITHOUT_ALIAS)],
+      [bookingWithDeposit().tool],
+    );
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(message).toEqual({ type: 'text', body: WITHOUT_ALIAS });
+    expect(record.outcome).toBe('replied');
+  });
+
+  it('sin una herramienta que pida datos de pago, no hay nada que verificar', async () => {
+    const { run, requests } = agent([finalAnswer(WITHOUT_ALIAS)]);
+
+    await run();
+
     expect(requests).toHaveLength(1);
   });
 });

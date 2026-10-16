@@ -1044,7 +1044,7 @@ describe('createAgentResponder: turnos con las herramientas reales (H8)', () => 
       const horario_id = /opción elegida: (\S+)\)/.exec(text)?.[1];
       return callTools([{ name: 'crear_reserva', input: { horario_id, nombre: 'Caro Pérez' } }]);
     };
-    const { result } = reply(f, pending, [bookFromHistory, finalAnswer('Listo Caro, te guardo el martes 6/10 a las 15:30 con Mica.')]);
+    const { result } = reply(f, pending, [bookFromHistory, finalAnswer('Listo Caro, te guardo el martes 6/10 a las 15:30 con Mica. Transferí la seña al alias estetica.prueba y mandame el comprobante.')]);
     await result;
 
     const [appointment] = await db.select().from(appointments).where(eq(appointments.customerId, f.customerId));

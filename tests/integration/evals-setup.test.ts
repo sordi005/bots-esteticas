@@ -441,7 +441,8 @@ describe('el estado que queda en la base', () => {
       'horario:00000000-0000-4000-8000-000000000201:00000000-0000-4000-8000-000000000101:2026-10-09T18:00:00.000Z';
     const { result } = run(caseWith({ mensajes: [FRIDAY_CHOICE, 'Caro Pérez'] }), [
       callTools([{ name: 'crear_reserva', input: { horario_id: slotId, nombre: 'Caro Pérez' } }]),
-      finalAnswer('Listo'),
+      // Con seña, la respuesta lleva el alias (4.5): si no, el ciclo pediría otra vuelta.
+      finalAnswer('Listo, transferí la seña al alias estetica.ejemplo'),
     ]);
     const evaluated = await result;
 
@@ -494,7 +495,8 @@ describe('la limpieza', () => {
       'horario:00000000-0000-4000-8000-000000000201:00000000-0000-4000-8000-000000000101:2026-10-09T18:00:00.000Z';
     const script = () => [
       callTools([{ name: 'crear_reserva', input: { horario_id: slotId, nombre: 'Caro Pérez' } }]),
-      finalAnswer('Listo'),
+      // Con seña, la respuesta lleva el alias (4.5): si no, el ciclo pediría otra vuelta.
+      finalAnswer('Listo, transferí la seña al alias estetica.ejemplo'),
     ];
 
     await run(caseWith({ mensajes: [FRIDAY_CHOICE] }), script()).result;
