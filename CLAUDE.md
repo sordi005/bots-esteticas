@@ -60,9 +60,10 @@ pnpm db:generate          # después de cambiar un schema.ts: genera la migraci�
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
+pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
 ```
 
-Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1).
+Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba.
 
 Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una terminal aparte y con el `PORT` de tu `.env` (el dominio es fijo y ya está registrado en Meta):
 
@@ -70,7 +71,7 @@ Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una ter
 ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
 ```
 
-Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
+Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (un aviso fuera de la ventana de 24 horas falla con 131047 hasta que lleguen las plantillas en H10). Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
 
 El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
 
@@ -127,6 +128,9 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - El webhook solo valida la firma, guarda y responde: nunca contesta ni llama a la IA (regla 6). Al guardar un mensaje nuevo, el inbox programa la vuelta de su conversación; contestar es del worker.
 - Los formatos de Meta se toman de la documentación oficial, no de memoria. Un tipo de mensaje nuevo entra con su ejemplo oficial en `tests/contracts/whatsapp/`.
 - Para enviar: `sendWhatsAppMessage` de `modules/conversation/outbox.ts`. Valida los límites de Meta, usa el token cifrado del negocio y registra el mensaje.
+- Un aviso (a la dueña, o a la clienta fuera de la respuesta del asistente) nunca se envía en el momento: `enqueueNotification` de `modules/notifications/outbox.ts`, **dentro de la transacción del cambio** que lo origina (las funciones de `booking.ts` aceptan `inTransaction` para eso). Lo envía la tarea `send_notification`. Los textos los escribe el código (`notifications/texts.ts`).
+- Los botones de la dueña son `aviso:<id del aviso>:<acción>`. El inbox los guarda en `owner_replies` (no en `messages`) y los procesa la tarea `process_owner_reply`. En la fase 0 los avisos salen del número del negocio: ahí es de la dueña solo un botón `aviso:` que toca `tenants.owner_phone` (6.5).
+- Qué imagen es un comprobante lo decide el código (`conversation/deposit-receipts.ts`) antes de llamar al modelo, nunca el modelo.
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
 - Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
 - Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
