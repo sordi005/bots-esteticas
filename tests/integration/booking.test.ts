@@ -91,7 +91,19 @@ describe('bookAppointment: reservar un turno', () => {
     const deposit = single(
       await db.select().from(deposits).where(eq(deposits.appointmentId, result.appointmentId)),
     );
-    expect(deposit).toMatchObject({ amountCents: 540_000, status: 'pending', method: null });
+    // El medio es el que tiene el negocio al reservar, como el precio (4.5, decisión 23).
+    expect(deposit).toMatchObject({ amountCents: 540_000, status: 'pending', method: 'transfer' });
+  });
+
+  it('guarda el medio de seña del negocio: Mercado Pago si así cobra', async () => {
+    const fixture = await createBookableFixture(db, { settings: { depositPaymentOptions: 'mercadopago' } });
+
+    const result = expectBooked(await booking(fixture));
+
+    const deposit = single(
+      await db.select().from(deposits).where(eq(deposits.appointmentId, result.appointmentId)),
+    );
+    expect(deposit.method).toBe('mercadopago');
   });
 
   it('sin seña, el turno queda confirmado directo', async () => {
@@ -292,6 +304,64 @@ describe('changeAppointmentStatus: cambios de estado con auditoría (regla 4)', 
     expectBooked(await booking(fixture, { customerId: otherCustomer }));
   });
 
+  it('el callback corre en la misma transacción: si falla, el estado no cambia', async () => {
+    const fixture = await createBookableFixture(db);
+    const { appointmentId } = expectBooked(await booking(fixture));
+
+    await expect(
+      changeAppointmentStatus(db, {
+        tenantId: fixture.tenantId,
+        appointmentId,
+        to: 'CANCELLED_BY_CUSTOMER',
+        actor: 'assistant',
+        now: SUNDAY_MORNING,
+        inTransaction: () => Promise.reject(new Error('falló el aviso')),
+      }),
+    ).rejects.toThrow('falló el aviso');
+
+    expect((await appointmentRow(appointmentId)).status).toBe('PENDING_DEPOSIT');
+  });
+
+  it('el callback recibe el estado anterior (para avisar si había seña)', async () => {
+    const fixture = await createBookableFixture(db);
+    const { appointmentId } = expectBooked(await booking(fixture));
+    const seen: string[] = [];
+
+    await changeAppointmentStatus(db, {
+      tenantId: fixture.tenantId,
+      appointmentId,
+      to: 'CANCELLED_BY_CUSTOMER',
+      actor: 'assistant',
+      now: SUNDAY_MORNING,
+      inTransaction: (_tx, change) => {
+        seen.push(`${change.from}->${change.to}`);
+        return Promise.resolve();
+      },
+    });
+
+    expect(seen).toEqual(['PENDING_DEPOSIT->CANCELLED_BY_CUSTOMER']);
+  });
+
+  it('una transición rechazada no llama al callback', async () => {
+    const fixture = await createBookableFixture(db, { settings: { depositRequirement: 'never' } });
+    const { appointmentId } = expectBooked(await booking(fixture));
+    let called = false;
+
+    await changeAppointmentStatus(db, {
+      tenantId: fixture.tenantId,
+      appointmentId,
+      to: 'NO_SHOW',
+      actor: 'assistant',
+      now: SUNDAY_MORNING,
+      inTransaction: () => {
+        called = true;
+        return Promise.resolve();
+      },
+    });
+
+    expect(called).toBe(false);
+  });
+
   it('no encuentra un turno de otro negocio (regla 1)', async () => {
     const fixture = await createBookableFixture(db);
     const other = await createBookableFixture(db);
@@ -383,6 +453,44 @@ describe('rescheduleAppointment: reprogramar', () => {
       ok: false,
       reason: 'not_reschedulable',
     });
+  });
+
+  it('el callback corre en la misma transacción: si falla, el turno no se mueve', async () => {
+    const fixture = await createBookableFixture(db);
+    const { appointmentId } = expectBooked(await booking(fixture));
+
+    await expect(
+      rescheduleAppointment(db, {
+        tenantId: fixture.tenantId,
+        appointmentId,
+        newStart: at('2026-10-05', '16:00'),
+        actor: 'assistant',
+        now: SUNDAY_MORNING,
+        inTransaction: () => Promise.reject(new Error('falló el aviso')),
+      }),
+    ).rejects.toThrow('falló el aviso');
+
+    expect((await appointmentRow(appointmentId)).timeRange.start).toEqual(MONDAY_10);
+  });
+
+  it('el callback recibe el horario anterior y el nuevo', async () => {
+    const fixture = await createBookableFixture(db);
+    const { appointmentId } = expectBooked(await booking(fixture));
+    const seen: Date[] = [];
+
+    await rescheduleAppointment(db, {
+      tenantId: fixture.tenantId,
+      appointmentId,
+      newStart: at('2026-10-05', '16:00'),
+      actor: 'assistant',
+      now: SUNDAY_MORNING,
+      inTransaction: (_tx, moved) => {
+        seen.push(moved.previousStart, moved.newStart);
+        return Promise.resolve();
+      },
+    });
+
+    expect(seen).toEqual([MONDAY_10, at('2026-10-05', '16:00')]);
   });
 
   it('cuenta las reprogramaciones para la política de seña', async () => {

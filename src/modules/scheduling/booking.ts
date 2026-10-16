@@ -35,6 +35,12 @@ import { appointmentEvents, appointments } from './schema.js';
 const MINUTE_MS = 60_000;
 const NO_OVERLAP = 'appointments_no_overlap';
 
+/**
+ * Lo que el que llama quiere hacer en la misma transacción que el cambio, por ejemplo guardar el
+ * aviso a la dueña (6.7): si falla, el cambio tampoco queda. El dominio no sabe qué es un aviso.
+ */
+export type InTransaction<T> = (tx: Queryable, change: T) => Promise<void>;
+
 export type SlotCheck = 'ok' | 'slot_unavailable' | 'slot_taken';
 
 /**
@@ -263,7 +269,14 @@ export async function bookAppointment(
       const expiresAt = new Date(now.getTime() + settings.depositPaymentWindowMinutes * MINUTE_MS);
       const [deposit] = await tx
         .insert(deposits)
-        .values({ tenantId, appointmentId: appointment.id, amountCents: depositCents, expiresAt })
+        // El medio es el que tiene el negocio al reservar, como el precio (4.5, decisión 23).
+        .values({
+          tenantId,
+          appointmentId: appointment.id,
+          amountCents: depositCents,
+          method: settings.depositPaymentOptions,
+          expiresAt,
+        })
         .returning({ id: deposits.id });
       if (!deposit) throw new Error('La base no devolvió la seña creada');
 
@@ -289,6 +302,12 @@ export type StatusChangeResult =
   | { ok: true }
   | { ok: false; reason: 'not_found' | 'invalid_transition' };
 
+export interface StatusChange {
+  appointmentId: string;
+  from: AppointmentStatus;
+  to: AppointmentStatus;
+}
+
 export async function changeAppointmentStatus(
   db: NodePgDatabase,
   input: {
@@ -298,9 +317,10 @@ export async function changeAppointmentStatus(
     actor: Actor;
     reason?: string;
     now: Date;
+    inTransaction?: InTransaction<StatusChange>;
   },
 ): Promise<StatusChangeResult> {
-  const { tenantId, appointmentId, to, actor } = input;
+  const { tenantId, appointmentId, to, actor, inTransaction } = input;
 
   return db.transaction(async (tx) => {
     const [current] = await tx
@@ -314,11 +334,155 @@ export async function changeAppointmentStatus(
     }
 
     await applyStatusChange(tx, {
-      ...input,
+      tenantId,
+      appointmentId,
+      to,
+      actor,
+      ...(input.reason ? { reason: input.reason } : {}),
+      now: input.now,
       from: current.status,
       customerId: current.customerId,
     });
+    await inTransaction?.(tx, { appointmentId, from: current.status, to });
     return { ok: true } as const;
+  });
+}
+
+// ─── Seña por transferencia ────────────────────────────────────────────────────
+
+/** La seña con su turno, bloqueados para decidir sobre ellos (dentro de `tx`). */
+async function lockDeposit(tx: Queryable, input: { tenantId: string; depositId: string }) {
+  const [row] = await tx
+    .select({
+      appointmentId: appointments.id,
+      appointmentStatus: appointments.status,
+      customerId: appointments.customerId,
+      depositStatus: deposits.status,
+      receiptMediaId: deposits.receiptMediaId,
+    })
+    .from(deposits)
+    .innerJoin(
+      appointments,
+      and(eq(appointments.tenantId, deposits.tenantId), eq(appointments.id, deposits.appointmentId)),
+    )
+    .where(and(eq(deposits.tenantId, input.tenantId), eq(deposits.id, input.depositId)))
+    .for('update');
+  return row;
+}
+
+export type ReceiptResult =
+  | { ok: true; appointmentId: string; alreadyRegistered: boolean }
+  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'not_pending'; status: AppointmentStatus };
+
+/**
+ * Llegó la foto del comprobante de una transferencia (4.5): el turno pasa a verificación y deja
+ * de vencer. Antes se verifica, con el turno bloqueado, que siga pendiente de seña: cancelar no
+ * cambia la seña, así que se mira el turno. Se acepta pasado el plazo mientras no haya vencido.
+ *
+ * La misma imagen otra vez (un reintento de la vuelta) devuelve `alreadyRegistered` sin tocar nada.
+ */
+export async function submitTransferReceipt(
+  db: NodePgDatabase,
+  input: {
+    tenantId: string;
+    depositId: string;
+    /** Id de la imagen en WhatsApp. */
+    mediaId: string;
+    now: Date;
+    inTransaction?: InTransaction<{ appointmentId: string }>;
+  },
+): Promise<ReceiptResult> {
+  const { tenantId, depositId, mediaId, now, inTransaction } = input;
+
+  return db.transaction(async (tx) => {
+    const current = await lockDeposit(tx, { tenantId, depositId });
+    if (!current) return { ok: false, reason: 'not_found' } as const;
+    const { appointmentId } = current;
+
+    if (current.receiptMediaId === mediaId) {
+      return { ok: true, appointmentId, alreadyRegistered: true } as const;
+    }
+    if (current.appointmentStatus !== 'PENDING_DEPOSIT' || current.depositStatus !== 'pending') {
+      return { ok: false, reason: 'not_pending', status: current.appointmentStatus } as const;
+    }
+
+    await applyStatusChange(tx, {
+      tenantId,
+      appointmentId,
+      from: 'PENDING_DEPOSIT',
+      to: 'DEPOSIT_REVIEW',
+      actor: 'assistant',
+      reason: 'Llegó el comprobante de la transferencia',
+      now,
+    });
+    await tx
+      .update(deposits)
+      .set({ status: 'in_review', receiptMediaId: mediaId })
+      .where(and(eq(deposits.tenantId, tenantId), eq(deposits.id, depositId)));
+    await inTransaction?.(tx, { appointmentId });
+    return { ok: true, appointmentId, alreadyRegistered: false } as const;
+  });
+}
+
+export type DepositDecision = 'approved' | 'rejected';
+
+export interface DepositReview {
+  appointmentId: string;
+  customerId: string;
+  status: 'CONFIRMED' | 'DEPOSIT_REJECTED';
+}
+
+export type DepositReviewResult =
+  | { ok: true; appointmentId: string; status: DepositReview['status'] }
+  | { ok: false; reason: 'not_found' | 'not_allowed' }
+  | { ok: false; reason: 'not_in_review'; appointmentId: string; status: AppointmentStatus };
+
+/**
+ * La dueña responde el aviso del comprobante (4.5): "Recibida" confirma el turno, "No llegó" lo
+ * rechaza y libera el horario. Una transferencia la confirma siempre una persona, nunca el
+ * asistente (4.4). Si el turno ya no está en verificación (ya respondió, o la clienta canceló),
+ * no cambia nada y devuelve el estado actual para contárselo.
+ */
+export async function reviewDeposit(
+  db: NodePgDatabase,
+  input: {
+    tenantId: string;
+    depositId: string;
+    decision: DepositDecision;
+    actor: Actor;
+    now: Date;
+    inTransaction?: InTransaction<DepositReview>;
+  },
+): Promise<DepositReviewResult> {
+  const { tenantId, depositId, decision, actor, now, inTransaction } = input;
+  const to = decision === 'approved' ? 'CONFIRMED' : 'DEPOSIT_REJECTED';
+  if (!canTransition('DEPOSIT_REVIEW', to, actor)) return { ok: false, reason: 'not_allowed' };
+
+  return db.transaction(async (tx) => {
+    const current = await lockDeposit(tx, { tenantId, depositId });
+    if (!current) return { ok: false, reason: 'not_found' } as const;
+    const { appointmentId, customerId } = current;
+
+    if (current.appointmentStatus !== 'DEPOSIT_REVIEW' || current.depositStatus !== 'in_review') {
+      return { ok: false, reason: 'not_in_review', appointmentId, status: current.appointmentStatus } as const;
+    }
+
+    await applyStatusChange(tx, {
+      tenantId,
+      appointmentId,
+      from: 'DEPOSIT_REVIEW',
+      to,
+      actor,
+      reason: decision === 'approved' ? 'La transferencia llegó' : 'La transferencia no llegó',
+      now,
+    });
+    await tx
+      .update(deposits)
+      .set({ status: decision })
+      .where(and(eq(deposits.tenantId, tenantId), eq(deposits.id, depositId)));
+    await inTransaction?.(tx, { appointmentId, customerId, status: to });
+    return { ok: true, appointmentId, status: to } as const;
   });
 }
 
@@ -343,9 +507,10 @@ export async function rescheduleAppointment(
     actor: Actor;
     reason?: string;
     now: Date;
+    inTransaction?: InTransaction<{ appointmentId: string; previousStart: Date; newStart: Date }>;
   },
 ): Promise<RescheduleResult> {
-  const { tenantId, appointmentId, newStart, actor, reason, now } = input;
+  const { tenantId, appointmentId, newStart, actor, reason, now, inTransaction } = input;
   const thisAppointment = and(eq(appointments.tenantId, tenantId), eq(appointments.id, appointmentId));
 
   const [current] = await db.select().from(appointments).where(thisAppointment);
@@ -396,6 +561,7 @@ export async function rescheduleAppointment(
       });
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
+      await inTransaction?.(tx, { appointmentId, previousStart: locked.timeRange.start, newStart });
       return { ok: true } as const;
     }));
   } catch (error) {
