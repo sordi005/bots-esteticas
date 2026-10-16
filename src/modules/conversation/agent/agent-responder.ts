@@ -3,8 +3,14 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { professionals } from '../../catalog/schema.js';
 import { customers } from '../../customers/schema.js';
+import { loadNoticeAppointment } from '../../notifications/notice-data.js';
+import { deposits } from '../../payments/schema.js';
+import { appointments } from '../../scheduling/schema.js';
 import { tenants } from '../../tenants/schema.js';
 import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
+import { inboundImageId } from '../../whatsapp/webhook-payload.js';
+import { registerTransferReceipt } from '../deposit-receipts.js';
+import { formatLocalSlot } from '../format.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, conversations, messages } from '../schema.js';
@@ -37,6 +43,17 @@ export const NEW_CONVERSATION_AFTER_MS = DAY_MS;
 
 /** Lo que ve la dueña cuando el código deriva porque el modelo falló dos veces seguidas (4.8). */
 export const NOT_UNDERSTOOD_SUMMARY = 'El asistente no entendió dos veces seguidas';
+
+/** Lo que ve la dueña cuando llega un comprobante y la clienta tiene varias señas pendientes (4.5). */
+export const SEVERAL_PENDING_RECEIPTS_SUMMARY = 'Mandó un comprobante y tiene más de una seña pendiente';
+
+/** [D] Lo que recibe la clienta en ese caso: el código no adivina de qué turno es (4.5). */
+export function severalPendingReceiptsText(when: string): string {
+  return (
+    'Recibí la imagen. Como tenés más de un turno esperando la seña, una persona del equipo ' +
+    `la revisa y te responde por acá ${when}.`
+  );
+}
 
 export interface AgentResponderDependencies {
   db: NodePgDatabase;
@@ -118,9 +135,37 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       preferredProfessionalName = professional?.name ?? null;
     }
 
+    // El comprobante lo reconoce el código, antes de llamar al modelo (4.5, 5.3): la primera imagen de
+    // la vuelta es el comprobante si la clienta tiene una sola seña por transferencia pendiente.
+    const receiptMediaIds = await loadReceiptMediaIds(db, turn);
+    const imageIds = turn.messages.flatMap((message) => (message.type === 'image' ? (inboundImageId(message.content) ?? []) : []));
+    let receipt: string | undefined;
+    const [firstImage] = imageIds;
+    if (firstImage) {
+      const registration = await registerTransferReceipt(db, { tenantId, customerId, mediaId: firstImage, now: at });
+      if (registration.kind === 'several_pending') {
+        // No adivina de qué turno es: lo ve una persona, sin llamar al modelo.
+        const { when } = await handOff(db, {
+          tenantId,
+          conversationId,
+          reason: 'payment_issue',
+          summary: SEVERAL_PENDING_RECEIPTS_SUMMARY,
+          now: at,
+        });
+        logger.info({ outcome: 'several_pending_receipts' }, 'Comprobante con varias señas pendientes: se deriva');
+        return { type: 'text', body: severalPendingReceiptsText(when) };
+      }
+      if (registration.kind === 'registered') {
+        // Las fotos de esta vuelta son el comprobante (puede venir en más de una).
+        for (const id of imageIds) receiptMediaIds.add(id);
+        const appointment = await loadNoticeAppointment(db, { tenantId, appointmentId: registration.appointmentId });
+        receipt = `${formatLocalSlot(appointment.start, tenant.timeZone)} (${appointment.serviceName} con ${appointment.professionalName})`;
+      }
+    }
+
     const resumedAt = await loadResumedAt(db, turn);
     const since = historySince(at, resumedAt);
-    const history = await loadHistory(db, turn, since);
+    const history = await loadHistory(db, turn, since, receiptMediaIds);
     const isNewConversation = !(await sentRecently(db, turn, at));
     // Reanudado y sin haberle escrito todavía a la clienta: el modelo empieza de cero y tiene que saber por qué (4.8).
     const resumedAfterHandoff = resumedAt !== null && !(await assistantWroteSince(db, turn, resumedAt));
@@ -131,7 +176,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     const pendingMessages: LlmMessage[] = [];
     const chosenOptionIds = new Set<string>();
     for (const message of turn.messages) {
-      const described = describeInbound(message.type, message.content);
+      const described = describeInbound(message.type, message.content, receiptMediaIds);
       pendingMessages.push({ role: 'user', text: described.text });
       if (described.replyId) {
         chosenOptionIds.add(described.replyId);
@@ -158,6 +203,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           humanReplyWhen,
           resumedAfterHandoff,
           choices,
+          ...(receipt ? { receipt } : {}),
         }),
         history: [...history, ...pendingMessages],
         toolContext: {
@@ -236,7 +282,12 @@ function historySince(at: Date, resumedAt: Date | null): Date {
  * salientes. Los entrantes sin procesar son los pendientes (o llegaron después y son de la
  * próxima vuelta): nunca van en el historial, así no se repite ninguno.
  */
-async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, since: Date): Promise<LlmMessage[]> {
+async function loadHistory(
+  db: NodePgDatabase,
+  turn: ConversationTurn,
+  since: Date,
+  receiptMediaIds: ReadonlySet<string>,
+): Promise<LlmMessage[]> {
   const rows = await db
     .select({ direction: messages.direction, type: messages.type, content: messages.content })
     .from(messages)
@@ -261,7 +312,7 @@ async function loadHistory(db: NodePgDatabase, turn: ConversationTurn, since: Da
   const history: LlmMessage[] = [];
   for (const row of rows.reverse()) {
     if (row.direction === 'inbound') {
-      const described = describeInbound(row.type, row.content);
+      const described = describeInbound(row.type, row.content, receiptMediaIds);
       history.push({ role: 'user', text: historyText(described) });
     } else {
       const text = outgoingToText(row.content);
@@ -329,6 +380,28 @@ async function previousRunFailed(db: NodePgDatabase, turn: ConversationTurn, at:
     .orderBy(desc(agentRuns.createdAt))
     .limit(1);
   return previous !== undefined && isFallbackOutcome(previous.outcome);
+}
+
+/**
+ * Las imágenes de esta clienta que el código registró como comprobantes (4.5): en el historial se
+ * ven como comprobantes, no como imágenes para derivar.
+ */
+async function loadReceiptMediaIds(db: NodePgDatabase, turn: ConversationTurn): Promise<Set<string>> {
+  const rows = await db
+    .select({ mediaId: deposits.receiptMediaId })
+    .from(deposits)
+    .innerJoin(
+      appointments,
+      and(eq(appointments.tenantId, deposits.tenantId), eq(appointments.id, deposits.appointmentId)),
+    )
+    .where(
+      and(
+        eq(deposits.tenantId, turn.tenantId),
+        eq(appointments.customerId, turn.customerId),
+        isNotNull(deposits.receiptMediaId),
+      ),
+    );
+  return new Set(rows.flatMap((row) => row.mediaId ?? []));
 }
 
 /** Cuándo se reanudó el asistente después de una derivación, o null si esta conversación nunca estuvo pausada (4.8). */

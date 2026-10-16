@@ -34,6 +34,22 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     expect(context).toContain('2026-10-05');
   });
 
+  describe('el comprobante de la seña (4.5)', () => {
+    const receipt = 'martes 6/10 10:00 (Esmaltado semipermanente con Mica)';
+
+    it('si el código registró un comprobante, se lo dice al modelo con el turno, y que no lo dé por confirmado', () => {
+      const context = buildTurnContext({ ...base, receipt });
+
+      expect(context).toContain(`comprobante de la transferencia de la seña de su turno del ${receipt}`);
+      expect(context).toMatch(/una persona del equipo verifica/);
+      expect(context).toMatch(/No digas que la seña ni el turno quedaron confirmados/);
+    });
+
+    it('sin comprobante, no hay ninguna línea sobre comprobantes', () => {
+      expect(buildTurnContext(base)).not.toMatch(/comprobante/i);
+    });
+  });
+
   it('avisa si la conversación es nueva y si no', () => {
     expect(buildTurnContext({ ...base, isNewConversation: true })).toMatch(/Conversación nueva: sí/);
     expect(buildTurnContext({ ...base, isNewConversation: false })).toMatch(/Conversación nueva: no/);

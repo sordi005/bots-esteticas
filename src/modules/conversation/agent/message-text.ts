@@ -1,5 +1,5 @@
 import { outgoingMessageSchema } from '../../whatsapp/outgoing.js';
-import { inboundContent } from '../../whatsapp/webhook-payload.js';
+import { inboundContent, inboundImageId } from '../../whatsapp/webhook-payload.js';
 
 /**
  * Los mensajes guardados en `messages`, como texto para el modelo (5.3). Los que no son texto
@@ -10,6 +10,9 @@ import { inboundContent } from '../../whatsapp/webhook-payload.js';
 export const CHOICE_MARKER = '[La clienta tocó una opción de un botón o una lista]';
 
 const UNREADABLE = '[Mensaje que no se puede leer]';
+
+/** Una imagen que el código registró como el comprobante de la seña (4.5): no es una imagen para derivar. */
+export const RECEIPT_MARKER = '[Comprobante de la seña]';
 
 const MARKERS: Record<string, string> = {
   audio: '[Audio]',
@@ -28,8 +31,15 @@ export interface InboundDescription {
   replyTitle: string | null;
 }
 
-/** Lo que dijo la clienta en un mensaje entrante (`type` y `content` tal como se guardaron). */
-export function describeInbound(type: string, content: Record<string, unknown>): InboundDescription {
+/**
+ * Lo que dijo la clienta en un mensaje entrante (`type` y `content` tal como se guardaron).
+ * `receiptMediaIds`: las imágenes que el código ya registró como comprobantes.
+ */
+export function describeInbound(
+  type: string,
+  content: Record<string, unknown>,
+  receiptMediaIds: ReadonlySet<string> = new Set(),
+): InboundDescription {
   const { text, replyId } = inboundContent(content);
   if (replyId) return { text: CHOICE_MARKER, replyId, replyTitle: text };
 
@@ -37,7 +47,9 @@ export function describeInbound(type: string, content: Record<string, unknown>):
   if (type === 'text') {
     described = text ?? UNREADABLE;
   } else if (type === 'image') {
-    described = text ? `[Imagen] «${text}»` : '[Imagen]';
+    const imageId = inboundImageId(content);
+    const marker = imageId && receiptMediaIds.has(imageId) ? RECEIPT_MARKER : '[Imagen]';
+    described = text ? `${marker} «${text}»` : marker;
   } else {
     described = MARKERS[type] ?? UNREADABLE;
   }

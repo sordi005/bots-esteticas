@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   createAgentResponder,
   MAX_INBOUND_MESSAGES_PER_HOUR,
+  severalPendingReceiptsText,
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
@@ -924,6 +925,105 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
 
     expect(await result).toEqual({ type: 'text', body: FALLBACK_REPLY_TEXT });
     expect(await handoffsOf(f)).toEqual([]);
+  });
+});
+
+describe('createAgentResponder: el comprobante de la seña lo reconoce el código (4.5, 5.3)', () => {
+  const statusOf = async (appointmentId: string) =>
+    single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
+
+  async function pendingDeposit(f: Fixture, start = at('2026-10-06', '15:30')) {
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start,
+      actor: 'assistant',
+      now: minutesAgo(10),
+    });
+    if (!booked.ok || !booked.deposit) throw new Error('La reserva de prueba no quedó pendiente de seña');
+    return booked.appointmentId;
+  }
+
+  const image = (f: Fixture, id: string, caption?: string) =>
+    addInbound(f, {
+      type: 'image',
+      content: { type: 'image', image: { id, mime_type: 'image/jpeg', ...(caption ? { caption } : {}) } },
+      at: minutesAgo(1),
+      processed: false,
+    });
+
+  it('con una seña pendiente: registra el comprobante y el modelo lo ve como tal, con el hecho en el contexto', async () => {
+    const f = await setup('Caro Pérez');
+    const appointmentId = await pendingDeposit(f);
+
+    const { result, requests } = reply(f, [await image(f, 'media-1', 'ahí va')], [finalAnswer('¡Gracias! Ya lo recibí.')]);
+    await result;
+
+    expect(await statusOf(appointmentId)).toBe('DEPOSIT_REVIEW');
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual(['user: [Comprobante de la seña] «ahí va»']);
+    expect(requests[0]?.turnContext).toContain('comprobante de la transferencia de la seña de su turno del martes 6/10 15:30');
+    expect(requests[0]?.turnContext).toMatch(/No digas que la seña ni el turno quedaron confirmados/);
+  });
+
+  it('dos fotos seguidas del mismo comprobante: las dos son el comprobante', async () => {
+    const f = await setup('Caro Pérez');
+    await pendingDeposit(f);
+    const first = await image(f, 'media-1');
+    const second = await image(f, 'media-2');
+
+    const { result, requests } = reply(f, [first, second], [finalAnswer('¡Gracias!')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      'user: [Comprobante de la seña]',
+      'user: [Comprobante de la seña]',
+    ]);
+  });
+
+  it('sin seña pendiente, una imagen es una imagen: la decide el modelo como siempre', async () => {
+    const f = await setup('Caro Pérez');
+
+    const { result, requests } = reply(f, [await image(f, 'media-1')], [finalAnswer('Dale')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual(['user: [Imagen]']);
+    expect(requests[0]?.turnContext).not.toMatch(/comprobante/i);
+  });
+
+  it('con dos señas pendientes no adivina: deriva con «pago» y un texto fijo, sin llamar al modelo', async () => {
+    const f = await setup('Caro Pérez', {
+      settings: { humanAttentionHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' })) },
+    });
+    const first = await pendingDeposit(f);
+    await pendingDeposit(f, at('2026-10-07', '15:30'));
+
+    const { result, requests } = reply(f, [await image(f, 'media-1')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({ type: 'text', body: severalPendingReceiptsText('en este horario') });
+    expect(await statusOf(first)).toBe('PENDING_DEPOSIT');
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toMatchObject([
+      { reason: 'payment_issue', status: 'open' },
+    ]);
+  });
+
+  it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
+    const f = await setup('Caro Pérez');
+    await pendingDeposit(f);
+    const { result } = reply(f, [await image(f, 'media-1')], [finalAnswer('¡Gracias! Ya lo recibí.')]);
+    await result;
+    await db.update(messages).set({ processedAt: minutesAgo(1) }).where(eq(messages.conversationId, f.conversationId));
+
+    const next = reply(f, await pendingTexts(f, '¿ya lo vieron?'), [finalAnswer('Todavía no.')]);
+    await next.result;
+
+    expect(conversationOf(next.requests[0]?.messages ?? [])).toEqual([
+      'user: [Comprobante de la seña]',
+      'user: ¿ya lo vieron?',
+    ]);
   });
 });
 
