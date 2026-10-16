@@ -21,6 +21,9 @@ const listSection = z.object({
   rows: z.array(listRow).min(1),
 });
 
+/** Una imagen de encabezado, por su id de Meta: el aviso de un comprobante a la dueña (8.2). */
+const imageHeader = z.object({ type: z.literal('image'), imageId: z.string().min(1) });
+
 const hasUniqueIds = (items: { id: string }[]) => new Set(items.map((item) => item.id)).size === items.length;
 
 export const outgoingMessageSchema = z.discriminatedUnion('type', [
@@ -32,6 +35,7 @@ export const outgoingMessageSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('buttons'),
+      header: imageHeader.optional(),
       body: z.string().min(1).max(1024),
       footer: z.string().min(1).max(60).optional(),
       buttons: z.array(replyButton).min(1).max(3),
@@ -76,6 +80,7 @@ export function toGraphPayload(to: string, message: OutgoingMessage): Record<str
         type: 'interactive',
         interactive: {
           type: 'button',
+          ...(valid.header ? { header: { type: 'image', image: { id: valid.header.imageId } } } : {}),
           body: { text: valid.body },
           ...(valid.footer ? { footer: { text: valid.footer } } : {}),
           action: {
