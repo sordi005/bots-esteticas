@@ -292,7 +292,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 
 Detalle del flujo con transferencia (H9):
 
-- **[D]** `crear_reserva` devuelve los datos para pagar (alias, CBU, titular, monto y plazo, escritos por el código) cuando el turno queda pendiente de seña: así salen en la misma respuesta que la reserva. `generar_pago_seña` los vuelve a dar si la clienta los pide después. Si en la vuelta se reservó con seña y el texto no incluye el alias, el ciclo del agente se lo hace notar al modelo **una vez** (como en 6.4).
+- **[D]** `crear_reserva` devuelve los datos para pagar (alias, CBU, titular, monto y plazo, escritos por el código) cuando el turno queda pendiente de seña: así salen en la misma respuesta que la reserva. `generar_pago_sena` los vuelve a dar si la clienta los pide después. Si en la vuelta se reservó con seña y el texto no incluye el alias, el ciclo del agente se lo hace notar al modelo **una vez** (como en 6.4).
 - **[D]** El medio de la seña se guarda al reservar, con el que tiene el negocio en ese momento (como el precio). Si el negocio cobra con Mercado Pago (hasta H11) o no tiene cargados los datos de transferencia, la herramienta no inventa nada: deriva sola con motivo "pago".
 - **[D]** Qué imagen es un comprobante lo decide el código, no el modelo, antes de llamarlo. La primera imagen de la vuelta es el comprobante si la clienta tiene **una sola** seña por transferencia pendiente y su turno sigue en `PENDIENTE_SEÑA` (4.5: cancelar no cambia la seña, por eso se mira el turno). Se acepta aunque haya pasado el plazo, mientras el turno no haya vencido: la dueña igual verifica el pago. Con varias señas pendientes, deriva con motivo "pago". Sin seña pendiente, o con la seña ya en verificación, la imagen se deriva como cualquier otra (4.8).
 - **[D]** El comprobante se registra (turno en verificación, id de la imagen en la seña) en la misma transacción que el aviso a la dueña. Después el agente contesta con ese hecho en el contexto de la vuelta: que lo recibió y que una persona del equipo lo verifica. El asistente nunca dice que la seña o el turno quedaron confirmados si en esa vuelta no lo confirmó una herramienta (6.4).
@@ -618,7 +618,7 @@ Herramientas del agente en el MVP:
 | `consultar_hora(servicio, fecha, hora, profesional?)` | Dice si una hora puntual está libre para reservar; si lo está, la ofrece |
 | `consultar_hora_para_reprogramar(turno, fecha, hora)` | Lo mismo, para mover ese turno |
 | `crear_reserva(horario, nombre?)` | Crea el turno o la reserva provisoria, aplicando las reglas de seña |
-| `generar_pago_seña(turno)` | Genera el link de Mercado Pago o devuelve el alias, según el medio que eligió el negocio (4.5). `crear_reserva` ya los devuelve: esta es para cuando la clienta los pide de nuevo |
+| `generar_pago_sena(turno)` | Genera el link de Mercado Pago o devuelve el alias, según el medio que eligió el negocio (4.5). `crear_reserva` ya los devuelve: esta es para cuando la clienta los pide de nuevo |
 | `listar_turnos_de_la_clienta()` | Turnos futuros de quien escribe |
 | `reprogramar_turno(horario)` | Aplica la política. El horario es uno de los que devolvió `consultar_horarios_para_reprogramar` |
 | `cancelar_turno(turno, confirmada)` | Aplica la política |
@@ -629,7 +629,7 @@ Herramientas del agente en el MVP:
 
 Detalle de las herramientas de consulta (H7):
 
-- **[D]** Los nombres de las herramientas van en español, como en la tabla: son lo que ve el modelo y lo que piden las evaluaciones. Las funciones del código van en inglés.
+- **[D]** Los nombres de las herramientas van en español, como en la tabla: son lo que ve el modelo y lo que piden las evaluaciones. Las funciones del código van en inglés. Solo llevan letras sin tilde, números, `_` y `-`: la API del modelo rechaza la llamada entera con otro carácter (por eso `generar_pago_sena`, sin ñ: las evaluaciones de H9 lo mostraron).
 - **[D]** Los precios y las fechas salen escritos por el código ("$18.000", "viernes 9/10 15:30", en la zona horaria del negocio). El modelo no hace cuentas ni convierte horarios.
 - `buscar_servicios(texto?)` busca en nombre y alias sin distinguir tildes ni mayúsculas. Sin texto, devuelve el catálogo visible completo. Cada servicio trae su id, precio, precio en efectivo, tipo de precio, duración, si requiere consulta previa y qué profesionales lo hacen.
 - `consultar_informacion(tema)` acepta los temas de `business_info` más `horarios`, que el código arma con el horario semanal de las profesionales activas. Un tema sin texto cargado se informa como "no cargado".
@@ -656,7 +656,7 @@ Detalle de las herramientas de turnos y derivación (H8):
 - Por qué derivar no es una herramienta: las evaluaciones (con Haiku 5.5 y con Sonnet 5.5) mostraron al modelo llamando a `derivar_a_persona` sin haberlo decidido, justo al cerrar una respuesta con opciones, con resúmenes como «No, nada. Esta respuesta no deriva.». Una sola llamada suelta pausaba la conversación 12 horas, y ni los filtros de texto ni las reglas del prompt lo frenaban del todo. Una herramienta sirve para consultar o actuar en medio del razonamiento; la derivación es el resultado de la respuesta.
 Detalle de la seña (H9):
 
-- `generar_pago_seña(turno)`: valida que el turno sea de la clienta que escribe y que siga pendiente de seña. Con transferencia devuelve alias, CBU, titular, monto y plazo, escritos por el código, y le pide a la clienta la foto del comprobante. Si el turno ya no espera la seña (en verificación, confirmado, cancelado), lo dice. Con Mercado Pago (hasta H11) o sin datos de transferencia cargados, deriva sola con motivo "pago" (4.5).
+- `generar_pago_sena(turno)`: valida que el turno sea de la clienta que escribe y que siga pendiente de seña. Con transferencia devuelve alias, CBU, titular, monto y plazo, escritos por el código, y le pide a la clienta la foto del comprobante. Si el turno ya no espera la seña (en verificación, confirmado, cancelado), lo dice. Con Mercado Pago (hasta H11) o sin datos de transferencia cargados, deriva sola con motivo "pago" (4.5).
 - **[D]** El comprobante no pasa por una herramienta: lo reconoce el código antes de llamar al modelo y el contexto de la vuelta se lo informa (4.5). Así una foto nunca queda sin registrar porque el modelo no llamó a algo.
 - **[D]** "El asistente nunca confirma un cambio que no pasó" también vale para "confirmado": si el texto dice que el turno o la seña quedaron confirmados y en esa vuelta ninguna herramienta lo confirmó (una reserva sin seña sí lo hace), el ciclo se lo hace notar al modelo una vez.
 

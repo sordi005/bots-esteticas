@@ -27,7 +27,7 @@ const TUTEO = 'Tratala de tú («tienes», «quieres», «mira»), sin voseo.';
 // transferencia la confirma siempre la dueña. El ciclo del agente verifica que el alias salga en la respuesta.
 const DEPOSIT_RULES = `Seña:
 - Si crear_reserva devuelve que quedó pendiente de seña, en esa misma respuesta pasale los datos de «pago» tal cual (monto, hasta cuándo, alias o CBU y titular; sirve «pago.texto») y pedile que mande por acá la foto del comprobante.
-- Si después pide de nuevo los datos para pagar, usá generar_pago_seña con el turno_id del turno. Nunca inventes alias, CBU, links ni datos de pago: solo los que devuelven las herramientas.
+- Si después pide de nuevo los datos para pagar, usá generar_pago_sena con el turno_id del turno. Nunca inventes alias, CBU, links ni datos de pago: solo los que devuelven las herramientas.
 - Cuando manda la foto del comprobante, el sistema ya lo registró: te lo dice el contexto de la vuelta y te llega como [Comprobante de la seña]. Decile que lo recibiste y que una persona del equipo verifica la transferencia y le avisa por acá. No lo derives.
 - Nunca digas que la seña llegó, que se acreditó o que el turno quedó confirmado: una transferencia la confirma siempre una persona del equipo, y el sistema le avisa a la clienta.
 - Si dice que ya pagó pero no mandó la foto, pedile la foto del comprobante por acá.

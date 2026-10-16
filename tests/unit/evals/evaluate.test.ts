@@ -293,4 +293,8 @@ describe('evaluateCase: varias condiciones y el outcome', () => {
   it('llegar al tope de herramientas cuenta como respuesta: lo juzgan las expectativas', () => {
     expect(evaluateCase(caso({ menciona: ['Luna'] }), result({ outcome: 'tool_limit' })).ok).toBe(true);
   });
+
+  it('la derivación del código por varias señas pendientes es una respuesta, no un fallo (H9, 4.5)', () => {
+    expect(evaluateCase(caso({ sinHerramientas: true }), result({ outcome: 'handoff_payment_issue' })).ok).toBe(true);
+  });
 });

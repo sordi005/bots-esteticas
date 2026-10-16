@@ -8,7 +8,7 @@ import type { ToolContext } from './tool.js';
 
 /**
  * Los datos para pagar la seña (4.5, 6.4): los escribe el código, nunca el modelo. Los usan
- * `crear_reserva` (en la misma respuesta que la reserva) y `generar_pago_seña` (si los pide de nuevo).
+ * `crear_reserva` (en la misma respuesta que la reserva) y `generar_pago_sena` (si los pide de nuevo).
  */
 
 /** Lo que el modelo le pasa a la clienta. */

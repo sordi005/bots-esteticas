@@ -67,7 +67,7 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
     const prompt = buildSystemPrompt(example);
 
     expect(prompt).toMatch(/datos de «pago» tal cual/);
-    expect(prompt).toMatch(/generar_pago_seña/);
+    expect(prompt).toMatch(/generar_pago_sena/);
     expect(prompt).toMatch(/\[Comprobante de la seña\][^\n]*no se deriva/);
     expect(prompt).toMatch(/Nunca digas que la seña llegó, que se acreditó o que el turno quedó confirmado/);
     expect(prompt).not.toMatch(/regla temporal/);

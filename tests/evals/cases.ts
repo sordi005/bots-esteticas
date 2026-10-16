@@ -596,7 +596,7 @@ export const evalCases: EvalCase[] = [
     mensajes: ['me pasás de nuevo el alias para pagar la seña?'],
     preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
     espera: {
-      herramientas: ['generar_pago_seña'],
+      herramientas: ['generar_pago_sena'],
       menciona: ['estetica.ejemplo', '5.400'],
       verifica: (resultado) =>
         combineChecks(verifyReplied(resultado), verifyNotHandedOff(resultado), verifyNoFalseConfirmation(resultado)),

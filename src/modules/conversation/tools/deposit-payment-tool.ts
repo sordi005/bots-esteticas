@@ -25,12 +25,12 @@ const noPayment = (turnoId: string, mensaje: string): ToolResult => ({
 });
 
 /**
- * `generar_pago_seña(turno_id)` (6.4, 4.5): los datos para pagar la seña de un turno de la clienta,
+ * `generar_pago_sena(turno_id)` (6.4, 4.5): los datos para pagar la seña de un turno de la clienta,
  * cuando los pide de nuevo (`crear_reserva` ya los da al reservar). Solo con la seña pendiente y en
  * plazo; si no hay cómo cobrarla por acá, deriva sola. No cambia nada del turno.
  */
 export const depositPaymentTool: AgentTool<Input> = {
-  name: 'generar_pago_seña',
+  name: 'generar_pago_sena',
   description:
     'Devuelve los datos para pagar la seña de un turno de la clienta (alias o CBU, titular, monto y hasta cuándo), ' +
     'ya escritos. Usala cuando la clienta pide de nuevo los datos para pagar; al reservar no hace falta: ' +

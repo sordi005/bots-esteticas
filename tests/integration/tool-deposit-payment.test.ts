@@ -10,7 +10,7 @@ import { testDatabaseUrl } from './support/database.js';
 import { createCustomer, single } from './support/fixtures.js';
 
 /**
- * `generar_pago_seña(turno_id)` (6.4, 4.5): vuelve a dar los datos para pagar la seña de un turno de
+ * `generar_pago_sena(turno_id)` (6.4, 4.5): vuelve a dar los datos para pagar la seña de un turno de
  * la clienta. Los datos y el estado los escribe el código; si no hay cómo cobrar, deriva sola.
  */
 
@@ -56,7 +56,7 @@ const pay = (f: Fixture, turnoId: string, now = at('2026-10-04', '09:30')) =>
 
 const handoffsOf = (f: Fixture) => db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId));
 
-describe('generar_pago_seña: con la seña pendiente', () => {
+describe('generar_pago_sena: con la seña pendiente', () => {
   it('devuelve los datos de la transferencia escritos por el código, y pide verificar el alias en la respuesta', async () => {
     const f = await setup();
     const { appointmentId } = await book(f);
@@ -86,7 +86,7 @@ describe('generar_pago_seña: con la seña pendiente', () => {
   });
 });
 
-describe('generar_pago_seña: cuando el turno ya no espera la seña', () => {
+describe('generar_pago_sena: cuando el turno ya no espera la seña', () => {
   it('con el comprobante en verificación lo dice, sin datos para pagar de nuevo', async () => {
     const f = await setup();
     const { appointmentId, depositId } = await book(f);
@@ -129,7 +129,7 @@ describe('generar_pago_seña: cuando el turno ya no espera la seña', () => {
   });
 });
 
-describe('generar_pago_seña: sin cómo cobrar, deriva sola (4.5)', () => {
+describe('generar_pago_sena: sin cómo cobrar, deriva sola (4.5)', () => {
   it.each([
     ['sin alias ni CBU', { transferAlias: null, transferCbu: null }],
     ['con Mercado Pago (H11)', { depositPaymentOptions: 'mercadopago' as const }],
@@ -145,7 +145,7 @@ describe('generar_pago_seña: sin cómo cobrar, deriva sola (4.5)', () => {
   });
 });
 
-describe('generar_pago_seña: solo los turnos de esta clienta (regla 2)', () => {
+describe('generar_pago_sena: solo los turnos de esta clienta (regla 2)', () => {
   it('el turno de otra clienta no se ve', async () => {
     const f = await setup();
     const other = await createCustomer(db, f.tenantId);
