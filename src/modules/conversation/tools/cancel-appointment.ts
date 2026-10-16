@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { enqueueAppointmentChangeNotice } from '../../notifications/appointment-notices.js';
 import { changeAppointmentStatus } from '../../scheduling/booking.js';
 import { evaluateCustomerCancellation } from '../../scheduling/change-policy.js';
 import { holdsSchedule } from '../../scheduling/availability.js';
@@ -145,6 +146,9 @@ export const cancelAppointmentTool: AgentTool<Input> = {
       actor: 'assistant',
       reason: CANCEL_REASON,
       now,
+      // El aviso a la dueña queda con la cancelación, en la misma transacción (4.6, 6.7).
+      inTransaction: (tx) =>
+        enqueueAppointmentChangeNotice(tx, { tenantId, appointmentId: appointment.id, change: { kind: 'cancelled' }, now }),
     });
 
     // Otra llamada lo canceló justo antes (por ejemplo, dos confirmaciones a la vez): ya quedó cancelado.

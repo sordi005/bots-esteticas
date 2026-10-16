@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { holdsSchedule } from '../../scheduling/availability.js';
+import { enqueueAppointmentChangeNotice } from '../../notifications/appointment-notices.js';
 import { countReschedules, rescheduleAppointment } from '../../scheduling/booking.js';
 import { evaluateCustomerReschedule } from '../../scheduling/change-policy.js';
 import { findCustomerAppointment, type CustomerAppointment } from '../../scheduling/customer-appointments.js';
@@ -192,6 +193,14 @@ export const rescheduleAppointmentTool: AgentTool<Input> = {
       actor: 'assistant',
       reason: RESCHEDULE_REASON,
       now,
+      // El aviso a la dueña queda con la reprogramación, en la misma transacción (4.6, 6.7).
+      inTransaction: (tx, moved) =>
+        enqueueAppointmentChangeNotice(tx, {
+          tenantId,
+          appointmentId: appointment.id,
+          change: { kind: 'rescheduled', previousStart: moved.previousStart },
+          now,
+        }),
     });
     if (!moved.ok) {
       switch (moved.reason) {

@@ -5,6 +5,7 @@ import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { rescheduleAppointmentTool } from '../../src/modules/conversation/tools/reschedule-appointment.js';
 import { runTool } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
@@ -164,6 +165,34 @@ describe('reprogramar_turno: el camino feliz', () => {
     expect(second.content).toMatchObject({ reprogramado: true });
     expect(await reschedulesOf(id)).toHaveLength(2);
     expect(await handoffsOf(f)).toEqual([]);
+  });
+});
+
+describe('reprogramar_turno: le avisa a la dueña (4.6)', () => {
+  const noticesOf = (f: Fixture) =>
+    db
+      .select()
+      .from(notifications)
+      .where(and(eq(notifications.tenantId, f.tenantId), eq(notifications.kind, 'appointment_rescheduled')));
+
+  it('reprogramar guarda el aviso con el horario anterior y el nuevo', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) });
+
+    const [notice] = await noticesOf(f);
+    expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, status: 'pending' });
+    expect(notice?.message.body).toContain('del martes 6/10 10:00 al miércoles 7/10 10:00');
+  });
+
+  it('si la clienta no eligió el horario no se movió nada: no avisa', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    await reschedule(f, { horario_id: slotId(id, WEDNESDAY_10) }, at('2026-10-04', '09:30'), []);
+
+    expect(await noticesOf(f)).toEqual([]);
   });
 });
 

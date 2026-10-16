@@ -3,6 +3,7 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { professionals, services } from '../../src/modules/catalog/schema.js';
 import { conversations, handoffs } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications, ownerReplies } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import type { EvalState } from './evaluate.js';
@@ -78,7 +79,7 @@ export async function readEvalState(db: NodePgDatabase, input: StateInput): Prom
 }
 
 /**
- * Borra los turnos de esas clientas, con sus señas y sus eventos de auditoría (limpieza de test:
+ * Borra los turnos de esas clientas, con sus señas, sus eventos de auditoría y los avisos (limpieza de test:
  * en producción un turno no se borra). Los demás datos del caso (clientas, conversaciones,
  * mensajes) no pisan a nadie: cada caso usa clientas nuevas.
  */
@@ -90,6 +91,16 @@ export async function deleteAppointmentsOf(
   if (customerIds.length === 0) return;
 
   await db.transaction(async (tx) => {
+    // Los avisos (H9) apuntan a los turnos: se borran primero, con los botones que tocó la dueña.
+    const notices = tx
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(and(eq(notifications.tenantId, tenantId), inArray(notifications.customerId, customerIds)));
+    await tx.delete(ownerReplies).where(and(eq(ownerReplies.tenantId, tenantId), inArray(ownerReplies.notificationId, notices)));
+    await tx
+      .delete(notifications)
+      .where(and(eq(notifications.tenantId, tenantId), inArray(notifications.customerId, customerIds)));
+
     const rows = await tx
       .select({ id: appointments.id })
       .from(appointments)
