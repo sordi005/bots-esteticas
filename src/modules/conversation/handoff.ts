@@ -1,7 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Queryable } from '../../shared/db.js';
 import { addDaysToLocalDate, instantToLocal } from '../../shared/time-zone.js';
 import { listHolidays } from '../catalog/queries.js';
+import { loadNoticeCustomer } from '../notifications/notice-data.js';
+import { enqueueNotification } from '../notifications/outbox.js';
+import { handoffNotice } from '../notifications/texts.js';
 import { tenants, tenantSettings } from '../tenants/schema.js';
 import {
   ATTENTION_SEARCH_DAYS,
@@ -84,6 +89,11 @@ export interface HandOffInput {
   summary: string;
   /** La hora actual, inyectada (regla 5). */
   now: Date;
+  /**
+   * Avisarle a la dueña (por defecto, sí). No hace falta cuando ella misma lo originó: tocó
+   * «No llegó» en el aviso de un comprobante (4.5).
+   */
+  notifyOwner?: boolean;
 }
 
 export interface HandOffResult {
@@ -94,63 +104,83 @@ export interface HandOffResult {
 }
 
 export async function handOff(db: NodePgDatabase, input: HandOffInput): Promise<HandOffResult> {
-  const { tenantId, conversationId, reason, now } = input;
-
   // Antes de la transacción: si no se puede calcular, no queda una derivación hecha de la que el
   // modelo no se entera (reintentaría y quedaría repetida).
-  const when = await describeWhenHumanReplies(db, { tenantId, now });
+  const when = await describeWhenHumanReplies(db, { tenantId: input.tenantId, now: input.now });
 
-  const handoffId = await db.transaction(async (tx) => {
-    // Se bloquea la conversación: dos derivaciones a la vez (o cancelar fuera de plazo y después
-    // derivar, en la misma vuelta) se ordenan y la segunda ve la pausa de la primera.
-    const [conversation] = await tx
-      .select({ assistantStatus: conversations.assistantStatus, pausedUntil: conversations.pausedUntil })
-      .from(conversations)
-      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)))
-      .for('update');
-    if (!conversation) throw new Error('No se encontró la conversación a derivar');
-
-    // Ya está derivada y la pausa sigue vigente: la derivación abierta es la de esta pausa.
-    const pauseIsActive =
-      conversation.assistantStatus === 'paused' &&
-      (conversation.pausedUntil === null || conversation.pausedUntil.getTime() > now.getTime());
-    if (pauseIsActive) {
-      const [open] = await tx
-        .select({ id: handoffs.id })
-        .from(handoffs)
-        .where(
-          and(
-            eq(handoffs.tenantId, tenantId),
-            eq(handoffs.conversationId, conversationId),
-            eq(handoffs.status, 'open'),
-          ),
-        )
-        .orderBy(desc(handoffs.createdAt))
-        .limit(1);
-      if (open) return open.id;
-    }
-
-    await tx
-      .update(conversations)
-      .set({
-        assistantStatus: 'paused',
-        pausedUntil: new Date(now.getTime() + HANDOFF_PAUSE_MS),
-      })
-      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
-
-    const [handoff] = await tx
-      .insert(handoffs)
-      .values({
-        tenantId,
-        conversationId,
-        reason,
-        summary: buildHandoffSummary(reason, input.summary),
-        createdAt: now,
-      })
-      .returning({ id: handoffs.id });
-    if (!handoff) throw new Error('La base no devolvió la derivación');
-    return handoff.id;
-  });
-
+  const handoffId = await db.transaction((tx) => recordHandoff(tx, input));
   return { handoffId, when };
+}
+
+/**
+ * La derivación en sí, dentro de una transacción abierta: la pausa, el registro y el aviso a la
+ * dueña quedan juntos (4.8, 6.7). La usa también quien deriva como parte de otro cambio (la dueña
+ * tocó «No llegó», 4.5). Devuelve la derivación abierta de esta pausa: si ya había una, es esa, y
+ * no se avisa de nuevo.
+ */
+export async function recordHandoff(tx: Queryable, input: HandOffInput): Promise<string> {
+  const { tenantId, conversationId, reason, now } = input;
+
+  // Se bloquea la conversación: dos derivaciones a la vez (o cancelar fuera de plazo y después
+  // derivar, en la misma vuelta) se ordenan y la segunda ve la pausa de la primera.
+  const [conversation] = await tx
+    .select({
+      assistantStatus: conversations.assistantStatus,
+      pausedUntil: conversations.pausedUntil,
+      customerId: conversations.customerId,
+    })
+    .from(conversations)
+    .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)))
+    .for('update');
+  if (!conversation) throw new Error('No se encontró la conversación a derivar');
+
+  // Ya está derivada y la pausa sigue vigente: la derivación abierta es la de esta pausa.
+  const pauseIsActive =
+    conversation.assistantStatus === 'paused' &&
+    (conversation.pausedUntil === null || conversation.pausedUntil.getTime() > now.getTime());
+  if (pauseIsActive) {
+    const [open] = await tx
+      .select({ id: handoffs.id })
+      .from(handoffs)
+      .where(
+        and(
+          eq(handoffs.tenantId, tenantId),
+          eq(handoffs.conversationId, conversationId),
+          eq(handoffs.status, 'open'),
+        ),
+      )
+      .orderBy(desc(handoffs.createdAt))
+      .limit(1);
+    if (open) return open.id;
+  }
+
+  const pausedUntil = new Date(now.getTime() + HANDOFF_PAUSE_MS);
+  await tx
+    .update(conversations)
+    .set({ assistantStatus: 'paused', pausedUntil })
+    .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
+
+  const summary = buildHandoffSummary(reason, input.summary);
+  const [handoff] = await tx
+    .insert(handoffs)
+    .values({ tenantId, conversationId, reason, summary, createdAt: now })
+    .returning({ id: handoffs.id });
+  if (!handoff) throw new Error('La base no devolvió la derivación');
+
+  if (input.notifyOwner !== false) {
+    // El aviso lleva el resumen guardado: con un tema sensible, el fijo (regla 9).
+    const notificationId = randomUUID();
+    const customer = await loadNoticeCustomer(tx, { tenantId, customerId: conversation.customerId });
+    await enqueueNotification(tx, {
+      id: notificationId,
+      tenantId,
+      recipient: 'owner',
+      kind: 'handoff',
+      customerId: conversation.customerId,
+      handoffId: handoff.id,
+      message: handoffNotice({ notificationId, appointment: customer, reason, summary, pausedUntil }),
+      now,
+    });
+  }
+  return handoff.id;
 }
