@@ -1033,7 +1033,7 @@ describe('runAgent: el asistente nunca confirma un cambio que no pasó (6.4)', (
 
   it('el aviso es el que aprobó el equipo', () => {
     expect(UNCONFIRMED_CHANGE_NOTICE).toBe(
-      'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.',
+      'En tu respuesta dijiste que el turno quedó reservado, cancelado, reprogramado o confirmado (o que la seña llegó), pero ninguna herramienta lo hizo en esta respuesta: no cambió nada. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. La seña por transferencia la confirma una persona del equipo, nunca vos. Si no, corregí el texto: no le digas que pasó algo que no pasó; si el turno ya estaba confirmado desde antes, decilo como algo que ya estaba («está confirmado»).',
     );
   });
 
