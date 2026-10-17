@@ -1,9 +1,10 @@
-import { and, count, desc, eq, gt, isNotNull, notInArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, gt, inArray, isNotNull, notInArray, or } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { professionals } from '../../catalog/schema.js';
 import { customers } from '../../customers/schema.js';
 import { loadNoticeAppointment } from '../../notifications/notice-data.js';
+import { notifications } from '../../notifications/schema.js';
 import { deposits } from '../../payments/schema.js';
 import { appointments } from '../../scheduling/schema.js';
 import { tenants } from '../../tenants/schema.js';
@@ -20,7 +21,13 @@ import { agentTools } from '../tools/index.js';
 import type { AgentTool } from '../tools/tool.js';
 import { isFallbackOutcome, notUnderstoodHandoffText, runAgent, type AgentRun } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
-import { describeInbound, outgoingToText, type InboundDescription } from './message-text.js';
+import {
+  describeInbound,
+  outgoingToText,
+  SYSTEM_NOTICE_LABELS,
+  type InboundDescription,
+  type SystemNoticeKind,
+} from './message-text.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildTurnContext } from './turn-context.js';
 
@@ -297,7 +304,12 @@ async function loadHistory(
   receiptMediaIds: ReadonlySet<string>,
 ): Promise<LlmMessage[]> {
   const rows = await db
-    .select({ direction: messages.direction, type: messages.type, content: messages.content })
+    .select({
+      direction: messages.direction,
+      type: messages.type,
+      content: messages.content,
+      whatsappMessageId: messages.whatsappMessageId,
+    })
     .from(messages)
     .where(
       and(
@@ -317,6 +329,12 @@ async function loadHistory(
     .orderBy(desc(messages.occurredAt), desc(messages.createdAt))
     .limit(HISTORY_MAX_MESSAGES);
 
+  const notices = await loadSystemNotices(
+    db,
+    turn,
+    rows.flatMap((row) => (row.direction === 'outbound' && row.whatsappMessageId ? [row.whatsappMessageId] : [])),
+  );
+
   const history: LlmMessage[] = [];
   for (const row of rows.reverse()) {
     if (row.direction === 'inbound') {
@@ -324,7 +342,8 @@ async function loadHistory(
       history.push({ role: 'user', text: historyText(described) });
     } else {
       const text = outgoingToText(row.content);
-      if (text) history.push({ role: 'assistant', text });
+      const notice = row.whatsappMessageId ? notices.get(row.whatsappMessageId) : undefined;
+      if (text) history.push({ role: 'assistant', text: notice ? `${SYSTEM_NOTICE_LABELS[notice]} ${text}` : text });
     }
   }
   // La API exige que la conversación empiece con la clienta.
@@ -388,6 +407,35 @@ async function previousRunFailed(db: NodePgDatabase, turn: ConversationTurn, at:
     .orderBy(desc(agentRuns.createdAt))
     .limit(1);
   return previous !== undefined && isFallbackOutcome(previous.outcome);
+}
+
+/**
+ * Cuáles de esos mensajes salientes son avisos que mandó el código a la clienta (4.5), y de qué tipo.
+ * Se cruzan por el id de WhatsApp: el aviso lo guarda al enviarse.
+ */
+async function loadSystemNotices(
+  db: NodePgDatabase,
+  turn: ConversationTurn,
+  whatsappMessageIds: string[],
+): Promise<Map<string, SystemNoticeKind>> {
+  if (whatsappMessageIds.length === 0) return new Map();
+  const rows = await db
+    .select({ whatsappMessageId: notifications.whatsappMessageId, kind: notifications.kind })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.tenantId, turn.tenantId),
+        eq(notifications.recipient, 'customer'),
+        inArray(notifications.whatsappMessageId, whatsappMessageIds),
+      ),
+    );
+  const notices = new Map<string, SystemNoticeKind>();
+  for (const row of rows) {
+    if (row.whatsappMessageId && row.kind in SYSTEM_NOTICE_LABELS) {
+      notices.set(row.whatsappMessageId, row.kind as SystemNoticeKind);
+    }
+  }
+  return notices;
 }
 
 /**

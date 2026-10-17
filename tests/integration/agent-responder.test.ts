@@ -9,12 +9,13 @@ import {
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
-import { CHOICE_MARKER } from '../../src/modules/conversation/agent/message-text.js';
+import { CHOICE_MARKER, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
@@ -1010,6 +1011,45 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
     ]);
     // Una fila por respuesta (7.2), aunque no se llamó al modelo.
     expect(await runsOf(f)).toMatchObject([{ outcome: 'handoff_payment_issue', model: null, llmCalls: 0 }]);
+  });
+
+  it('en el historial, un aviso que mandó el código se ve como aviso del sistema, no como algo que dijo el asistente', async () => {
+    // Lo encontró la prueba manual: después de «¡Seña recibida! Tu turno quedó confirmado» (lo manda el código cuando
+    // la dueña toca «Recibida»), a un «hola» el asistente contestó «te aclaro: tu turno todavía no está confirmado».
+    // Creía haberlo escrito él, contra la regla de no dar la seña por confirmada.
+    const f = await setup('Caro Pérez');
+    const confirmed = { type: 'text' as const, body: '¡Seña recibida! Tu turno quedó confirmado: martes 6/10 15:30.' };
+    const whatsappMessageId = `wamid.${randomUUID()}`;
+    await addInbound(f, { text: 'hola', at: minutesAgo(30) });
+    await db.insert(messages).values({
+      tenantId: f.tenantId,
+      conversationId: f.conversationId,
+      direction: 'outbound',
+      type: 'text',
+      content: confirmed,
+      whatsappMessageId,
+      occurredAt: minutesAgo(20),
+    });
+    await db.insert(notifications).values({
+      tenantId: f.tenantId,
+      recipient: 'customer',
+      kind: 'deposit_confirmed',
+      customerId: f.customerId,
+      message: confirmed,
+      status: 'sent',
+      whatsappMessageId,
+      sentAt: minutesAgo(20),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('¡Hola!')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      'user: hola',
+      `assistant: ${SYSTEM_NOTICE_LABELS.deposit_confirmed} ${confirmed.body}`,
+      'user: hola',
+    ]);
+    expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
   });
 
   it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
