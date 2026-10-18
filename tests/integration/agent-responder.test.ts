@@ -9,6 +9,7 @@ import {
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
+import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
 import { CHOICE_MARKER, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
@@ -609,6 +610,94 @@ describe('createAgentResponder: las elecciones con botones se resuelven antes de
 
     expect(withName.requests[0]?.turnContext).toMatch(/Nombre para el turno: Caro Pérez \(ya está cargado/);
     expect(withoutName.requests[0]?.turnContext).toMatch(/Nombre para el turno: no está cargado/);
+  });
+});
+
+describe('createAgentResponder: si la clienta eligió un horario libre, la respuesta tiene que reservarlo (6.4)', () => {
+  // Prueba manual de H9: tocó un horario libre y el modelo contestó «no quedó reservado» sin llamar a crear_reserva.
+  const tuesday = at('2026-10-06', '09:00');
+  const tap = (f: Fixture, id: string) =>
+    addInbound(f, { type: 'interactive', content: interactiveReply(id, 'mar 6/10 9:00'), at: minutesAgo(1), processed: false });
+  const lastNote = (request: { messages: LlmMessage[] } | undefined) => request?.messages.at(-1);
+
+  it('con nombre y el horario libre, si no llama a crear_reserva se lo marca con ese horario_id', async () => {
+    const f = await setup('Caro Pérez');
+    const slotId = choiceIds.slot(f.semi, f.mica, tuesday);
+
+    const { result, requests } = reply(f, [await tap(f, slotId)], [finalAnswer('No quedó reservado'), finalAnswer('Perdón')]);
+    await result;
+
+    expect(requests).toHaveLength(2);
+    expect(lastNote(requests[1])).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'crear_reserva', slotId }),
+    });
+  });
+
+  it('sin nombre cargado no: primero tiene que preguntárselo', async () => {
+    const f = await setup(null);
+
+    const { result, requests } = reply(f, [await tap(f, choiceIds.slot(f.semi, f.mica, tuesday))], [finalAnswer('¿A nombre de quién?')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it('si el horario ya no está libre no: no hay nada que reservar', async () => {
+    const f = await setup('Caro Pérez');
+    const monday = at('2026-10-05', '15:00');
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: monday,
+      actor: 'assistant',
+      now: minutesAgo(5),
+    });
+    expect(booked.ok).toBe(true);
+
+    const { result, requests } = reply(f, [await tap(f, choiceIds.slot(f.semi, f.mica, monday))], [finalAnswer('Ese ya no está')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it('un horario para mover su turno pide reprogramar_turno, aunque no tenga nombre', async () => {
+    const f = await setup(null);
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-05', '15:00'),
+      actor: 'assistant',
+      now: minutesAgo(5),
+    });
+    if (!booked.ok) throw new Error('no se pudo reservar');
+    const slotId = choiceIds.reschedule(booked.appointmentId, tuesday);
+
+    const { result, requests } = reply(f, [await tap(f, slotId)], [finalAnswer('¿Lo pasamos?'), finalAnswer('Perdón')]);
+    await result;
+
+    expect(lastNote(requests[1])).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'reprogramar_turno', slotId }),
+    });
+  });
+
+  it('una elección de antes (historial) no cuenta: solo la de esta vuelta', async () => {
+    const f = await setup('Caro Pérez');
+    await addInbound(f, {
+      type: 'interactive',
+      content: interactiveReply(choiceIds.slot(f.semi, f.mica, tuesday), 'mar 6/10 9:00'),
+      at: minutesAgo(10),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, '¿Qué turnos tengo?'), [finalAnswer('No tenés turnos')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
   });
 });
 

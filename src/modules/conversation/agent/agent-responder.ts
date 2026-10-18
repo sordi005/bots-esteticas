@@ -15,11 +15,17 @@ import { formatLocalSlot } from '../format.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
 import { agentRuns, conversations, messages } from '../schema.js';
-import { parseChoiceId } from '../tools/choice-ids.js';
+import { choiceIds, parseChoiceId } from '../tools/choice-ids.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
 import { agentTools } from '../tools/index.js';
 import type { AgentTool } from '../tools/tool.js';
-import { isFallbackOutcome, notUnderstoodHandoffText, runAgent, type AgentRun } from './agent.js';
+import {
+  isFallbackOutcome,
+  notUnderstoodHandoffText,
+  runAgent,
+  type AgentRun,
+  type ChosenSlot,
+} from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
 import {
   describeInbound,
@@ -198,6 +204,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
         choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
       }
     }
+    const chosenSlot = slotToActOn(choices, customer.name !== null);
     // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
 
@@ -231,6 +238,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           chosenOptionIds,
           signal,
         },
+        ...(chosenSlot ? { chosenSlot } : {}),
       },
     );
 
@@ -407,6 +415,21 @@ async function previousRunFailed(db: NodePgDatabase, turn: ConversationTurn, at:
     .orderBy(desc(agentRuns.createdAt))
     .limit(1);
   return previous !== undefined && isFallbackOutcome(previous.outcome);
+}
+
+/**
+ * El horario que la clienta eligió en esta vuelta y que la respuesta tiene que reservar o mover ya (6.4): el último
+ * horario que tocó, si sigue libre. Para reservar uno nuevo hace falta el nombre: sin él, primero se lo pregunta.
+ */
+function slotToActOn(choices: ResolvedChoice[], hasBookingName: boolean): ChosenSlot | undefined {
+  const last = choices.findLast((choice) => choice.tipo === 'horario' || choice.tipo === 'reprogramar');
+  if (!last?.sigueLibre) return undefined;
+  if (last.tipo === 'horario') {
+    return hasBookingName
+      ? { tool: 'crear_reserva', slotId: choiceIds.slot(last.servicioId, last.profesionalId, new Date(last.inicio)) }
+      : undefined;
+  }
+  return { tool: 'reprogramar_turno', slotId: choiceIds.reschedule(last.turnoId, new Date(last.inicio)) };
 }
 
 /**

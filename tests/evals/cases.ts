@@ -690,6 +690,40 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
+    // Prueba manual de H9: con un turno ya confirmado (seña aprobada) y la charla sobre sus turnos en el historial, pidió
+    // otro turno y tocó un horario libre. El modelo contestó «no pude confirmar todavía… no quedó reservado» sin llamar a
+    // crear_reserva. Elegir es la confirmación (5.3): tiene que reservarlo, y el turno anterior sigue como estaba.
+    nombre: 'reserva_otro_turno_con_sena_aprobada',
+    mensajes: [
+      {
+        eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 10:00' },
+        titulo: 'mié 14/10 10:00',
+      },
+    ],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [{ ...TUESDAY_APPOINTMENT, senaAprobada: true }],
+      historial: [
+        { clienta: 'que turnos tengo reservado?' },
+        { asistente: 'Tenés el martes 13/10 a las 17:00, Esmaltado semipermanente con Mica: está confirmado.' },
+        { clienta: 'quiero sacar otro turno, para el miércoles que tenés?' },
+        {
+          asistente: 'Para el miércoles 14/10 Mica tiene estos horarios:',
+          botones: ['mié 14/10 10:00', 'mié 14/10 15:30', 'mié 14/10 17:00'],
+        },
+      ],
+    },
+    espera: {
+      herramientas: ['crear_reserva'],
+      menciona: ['estetica.ejemplo'],
+      verifica: (resultado) =>
+        verifyAppointmentsOf(resultado, 'clienta', [
+          { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-13 17:00', estado: 'CONFIRMED' },
+          { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 10:00', estado: 'PENDING_DEPOSIT' },
+        ]),
+    },
+  },
+  {
     // 4.8: fuera del horario de atención (jueves 20:30), dice cuándo le responde una persona: el viernes 9/10 a las 9:00.
     nombre: 'derivacion_fuera_de_horario',
     ahora: '2026-10-08 20:30',

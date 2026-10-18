@@ -68,6 +68,25 @@ export const UNCONFIRMED_CHANGE_NOTICE =
 export const PAYMENT_DETAILS_NOTICE =
   'Una herramienta devolvió los datos para pagar la seña («pago»), pero tu respuesta no los trae: sin el alias o el CBU la clienta no puede pagar. Volvé a escribir la respuesta con los datos de «pago» tal cual (sirve «pago.texto») y pedile la foto del comprobante.';
 
+/**
+ * El horario que la clienta eligió en esta vuelta con un botón o una lista y que sigue libre (5.3, 6.4): elegirlo ya
+ * es la confirmación, así que la respuesta tiene que llamar a la herramienta que lo reserva o lo mueve. Lo arma el
+ * código antes de llamar al modelo.
+ */
+export interface ChosenSlot {
+  tool: 'crear_reserva' | 'reprogramar_turno';
+  /** El id tal cual lo devolvió WhatsApp (`horario:` o `reprogramar:`). */
+  slotId: string;
+}
+
+/**
+ * Lo que se le dice al modelo cuando la clienta eligió un horario libre y su respuesta no llamó a la herramienta que
+ * lo reserva o lo mueve (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export function chosenSlotNotice({ tool, slotId }: ChosenSlot): string {
+  return `La clienta eligió un horario con un botón y sigue libre: elegirlo ya es la confirmación. Tu respuesta no lo reservó y la respuesta se envía tal cual. Llamá ahora a ${tool} con horario_id=${slotId} (tal cual) y contestá con lo que devuelva. Si devuelve que no se pudo, explicale por qué y ofrecé otros horarios.`;
+}
+
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -176,6 +195,8 @@ export interface AgentInput {
   history: LlmMessage[];
   /** Del servidor: el negocio y la clienta nunca los elige el modelo (regla 2). */
   toolContext: ToolContext;
+  /** El horario libre que la clienta eligió en esta vuelta, si hay uno para reservar o mover ya. */
+  chosenSlot?: ChosenSlot;
 }
 
 /** La derivación que pidió la respuesta del modelo, con el motivo ya traducido al de la base (4.8). */
@@ -384,6 +405,22 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
         );
         continue;
       }
+      // Eligió un horario libre y en la vuelta no se llamó a la herramienta que lo reserva o lo mueve (6.4): una vez
+      // se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
+      const skipsChosenSlot =
+        answer !== null &&
+        input.chosenSlot !== undefined &&
+        answer.derivar === null &&
+        !executedTools.includes(input.chosenSlot.tool);
+      if (skipsChosenSlot && input.chosenSlot && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: chosenSlotNotice(input.chosenSlot) },
+        );
+        continue;
+      }
+      if (skipsChosenSlot) logger.debug('La respuesta no reservó el horario que eligió la clienta');
       if (missesPayment) logger.debug('La respuesta no trae los datos para pagar la seña');
       // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
       if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');

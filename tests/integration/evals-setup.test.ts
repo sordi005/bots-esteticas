@@ -30,7 +30,8 @@ const NAMED = 'Caro Pérez';
 beforeAll(() => seedEsteticaEjemplo(db));
 afterAll(() => database.close());
 
-function run(evalCase: EvalCase, script: ScriptStep[] = [finalAnswer('ok')]) {
+// Dos respuestas: si la clienta toca un horario libre y el modelo no lo reserva, el agente le pide una segunda (6.4).
+function run(evalCase: EvalCase, script: ScriptStep[] = [finalAnswer('ok'), finalAnswer('ok')]) {
   const { llm, requests } = scriptedLlm(script);
   const result = runEvalCase({ db, llm, tenantId: DEMO_TENANT_ID }, evalCase);
   return { result, requests };
@@ -515,7 +516,7 @@ describe('los casos de cases.ts contra el seed', () => {
 
     // Con dos señas pendientes el código deriva sin llamar al modelo (4.5): esa vuelta tiene su propio motivo.
     const outcome = evalCase.nombre === 'sena_comprobante_dos_senas' ? 'handoff_payment_issue' : 'replied';
-    await expect(run(evalCase, [finalAnswer('ok')]).result).resolves.toMatchObject({ outcome });
+    await expect(run(evalCase).result).resolves.toMatchObject({ outcome });
 
     expect(await countAppointments()).toBe(before);
   });
