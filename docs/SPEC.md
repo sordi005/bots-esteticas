@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.12 · 16/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.13 · 20/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -296,6 +296,7 @@ Detalle del flujo con transferencia (H9):
 - **[D]** El medio de la seña se guarda al reservar, con el que tiene el negocio en ese momento (como el precio). Si el negocio cobra con Mercado Pago (hasta H11) o no tiene cargados los datos de transferencia, la herramienta no inventa nada: deriva sola con motivo "pago".
 - **[D]** Qué imagen es un comprobante lo decide el código, no el modelo, antes de llamarlo. La primera imagen de la vuelta es el comprobante si la clienta tiene **una sola** seña por transferencia pendiente y su turno sigue en `PENDIENTE_SEÑA` (4.5: cancelar no cambia la seña, por eso se mira el turno). Se acepta aunque haya pasado el plazo, mientras el turno no haya vencido: la dueña igual verifica el pago. Con varias señas pendientes, deriva con motivo "pago". Sin seña pendiente, o con la seña ya en verificación, la imagen se deriva como cualquier otra (4.8).
 - **[D]** El comprobante se registra (turno en verificación, id de la imagen en la seña) en la misma transacción que el aviso a la dueña. Después el agente contesta con ese hecho en el contexto de la vuelta: que lo recibió y que una persona del equipo lo verifica. El asistente nunca dice que la seña o el turno quedaron confirmados si en esa vuelta no lo confirmó una herramienta (6.4).
+- **[D]** El comprobante también se registra con el asistente pausado por una derivación (4.8): turno en verificación, aviso a la dueña con los botones y recordatorio, igual que siempre, pero sin llamar al modelo ni contestarle a la clienta, porque la está atendiendo una persona. Con varias señas pendientes no se vuelve a derivar: la conversación ya está en manos de una persona. Sin esto, una clienta que paga durante la pausa quedaba con el turno pendiente de seña y se le vencía (lo encontró la prueba manual de H9).
 - **[S]** Si la dueña no contesta, se le vuelve a avisar a las 2 horas, hasta 3 veces, solo dentro del horario de atención humana (4.8): si el aviso cae fuera, sale al próximo inicio. El primer aviso sale enseguida, a cualquier hora.
 - **[D]** "Recibida": el turno pasa a `CONFIRMADO`, la seña a aprobada y la clienta recibe un texto fijo: "¡Seña recibida! Tu turno quedó confirmado: {turno}."
 - **[D]** "No llegó": el turno pasa a `RECHAZADO` (el horario se libera) y la clienta recibe un texto fijo: "No pudimos verificar la transferencia de la seña, así que el turno del {turno} quedó sin reservar. Si ya la hiciste, una persona del equipo te escribe por acá." La conversación se deriva con motivo "pago" (4.8), para que el asistente no discuta un pago: no sale otro aviso a la dueña, que acaba de tocar el botón.
@@ -370,7 +371,7 @@ Detalle de la derivación (H8):
 - **[D]** Si la dueña responde desde su app de WhatsApp Business, el sistema lo detecta (mensajes "eco" de la coexistencia, sección 8.1) y **mantiene pausado** el asistente mientras ella esté conversando.
 - **[S]** El asistente se reanuda solo después de 12 horas sin mensajes de la dueña en esa conversación. Hasta que lleguen los ecos (H13), las 12 horas se cuentan desde la derivación (`paused_until`); en H13 cada eco las corre.
 - **[D]** La pausa vence sola por fecha: no hace falta una tarea programada. Al procesar una conversación con la pausa vencida, el asistente vuelve a estar activo y contesta normalmente.
-- **[D]** Mientras el asistente está pausado, los mensajes de la clienta se marcan como procesados sin llamar al modelo ni contestar. Así no se acumulan para cuando se reanude: los atiende la persona.
+- **[D]** Mientras el asistente está pausado, los mensajes de la clienta se marcan como procesados sin llamar al modelo ni contestar. Así no se acumulan para cuando se reanude: los atiende la persona. La única excepción es el comprobante de una seña, que el código registra igual (4.5).
 - **[D]** Que venza la pausa no resuelve la derivación: queda abierta hasta que la resuelva una persona.
 - **[D]** La dueña la resuelve con el botón "Ya la atendí" del aviso (H9; desde H15 también desde el panel). Resolverla **reanuda el asistente** en esa conversación en ese momento, igual que cuando vence la pausa (`resumed_at`): es la señal más explícita de que terminó. Si el asistente ya se había reanudado, o en esa conversación hay una derivación más nueva abierta, solo la marca como resuelta. Tocar el botón de una derivación ya resuelta no cambia nada.
 - **[D]** Al reanudarse, el asistente no ve lo que se habló antes: eso ya lo atendió (o lo está atendiendo) una persona. Se guarda cuándo se reanudó (`resumed_at`), el historial que ve el modelo arranca ahí (también las opciones elegidas que habilitan reservar o reprogramar: una elección de antes de la derivación ya no cuenta) y el contexto de la vuelta le avisa que se reanudó después de una derivación, para que atienda solo el pedido nuevo. Sin esto, la prueba manual con Meta mostró un ciclo: al vencer la pausa, el modelo veía en el historial a la clienta pidiendo una persona sin respuesta ("¿qué pasó con la persona?") y volvía a derivar, sin atender el turno que pedía. Los mensajes que la dueña manda desde su app (ecos, H13) no entran en ese historial, así que el ciclo no se cortaría solo.
@@ -740,7 +741,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[D]** La respuesta se guarda en la conversación (`pending_reply`) en la misma transacción que marca los mensajes como procesados, y recién después se envía. Si el envío falla, el reintento **solo reenvía la respuesta guardada**: no vuelve a llamar al modelo. Desde H8 las herramientas cambian cosas (reservan, cancelan, derivan), y volver a correr el agente daría otra respuesta: después de cancelar un turno, el segundo intento ya no lo encuentra y contestaría "no tenés turnos".
 - **[S]** Una respuesta guardada que no se pudo enviar en 5 minutos se descarta, con un aviso en el log: los reintentos son a los 30 segundos y a los 2 minutos, y más tarde ya no tiene sentido.
 - Si el envío sale pero falla borrar la respuesta guardada, el reintento puede repetirla: es preferible contestar dos veces a no contestar.
-- **[D]** Si el asistente está pausado por una derivación (4.8), los mensajes se marcan como procesados sin llamar al modelo.
+- **[D]** Si el asistente está pausado por una derivación (4.8), los mensajes se marcan como procesados sin llamar al modelo. Antes, el código registra el comprobante si una imagen lo es (4.5).
 - **[S]** Solo contestan los negocios activos. Los mensajes de un negocio pausado o dado de baja se marcan como procesados sin respuesta, con un aviso en el log.
 - **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 
@@ -1129,6 +1130,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 31 | El código reconoce el comprobante antes de llamar al modelo | Una herramienta "registrar comprobante" | Una foto con una seña pendiente siempre se registra, aunque el modelo no llame a nada; la regla es simple y no depende de interpretar la imagen |
 | 32 | Avisos interactivos en H9, plantillas en H10 | Plantillas desde H9 | Las plantillas se construyen una sola vez para los recordatorios y los avisos; la demo funciona con mensajes interactivos porque la dueña le escribe al número |
 | 33 | "Ya la atendí" resuelve la derivación y reanuda el asistente | Que solo la resuelva y el asistente siga esperando las 12 horas | Es la señal más explícita de la dueña; sin ella la clienta queda sin respuesta hasta que vence la pausa |
+| 34 | El comprobante se registra aunque el asistente esté pausado | Que lo vea solo la persona que atiende el chat | La dueña no siempre mira ese chat (sin coexistencia no lo ve), y el turno quedaba pendiente de seña hasta vencerse aunque la clienta hubiera pagado. Registrarlo no habla con la clienta: no se pisa con la persona |
 
 ---
 

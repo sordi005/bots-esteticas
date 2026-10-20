@@ -13,6 +13,7 @@ import { depositReceiptNotice } from '../notifications/texts.js';
 import { deposits } from '../payments/schema.js';
 import { submitTransferReceipt } from '../scheduling/booking.js';
 import { appointments } from '../scheduling/schema.js';
+import { inboundImageId } from '../whatsapp/webhook-payload.js';
 import { loadHumanAttention } from './handoff.js';
 
 /**
@@ -79,6 +80,22 @@ async function scheduleReminder(tx: Queryable, input: { tenantId: string; deposi
     payload: { depositId: input.depositId },
     runAt: input.runAt,
   });
+}
+
+/**
+ * El comprobante que llega con el asistente pausado por una derivación (4.5, 4.8): se registra igual,
+ * sin llamar al modelo ni contestarle a la clienta. Con varias señas pendientes no se vuelve a derivar:
+ * la conversación ya la atiende una persona. Null si en la vuelta no hay ninguna imagen.
+ */
+export async function registerReceiptWhilePaused(
+  db: NodePgDatabase,
+  input: { tenantId: string; customerId: string; messages: { type: string; content: Record<string, unknown> }[]; now: Date },
+): Promise<ReceiptRegistration | null> {
+  const [mediaId] = input.messages.flatMap((message) =>
+    message.type === 'image' ? (inboundImageId(message.content) ?? []) : [],
+  );
+  if (!mediaId) return null;
+  return registerTransferReceipt(db, { tenantId: input.tenantId, customerId: input.customerId, mediaId, now: input.now });
 }
 
 /**

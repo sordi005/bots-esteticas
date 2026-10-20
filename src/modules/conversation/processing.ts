@@ -8,6 +8,7 @@ import type { JobHandler } from '../jobs/runner.js';
 import { tenants } from '../tenants/schema.js';
 import type { WhatsAppClient } from '../whatsapp/client.js';
 import { outgoingMessageSchema, type OutgoingMessage } from '../whatsapp/outgoing.js';
+import { registerReceiptWhilePaused } from './deposit-receipts.js';
 import { sendWhatsAppMessage } from './outbox.js';
 import { conversations, messages } from './schema.js';
 
@@ -255,6 +256,9 @@ export async function processConversation(
     // Pausa sin fecha = hasta que se reanude a mano. Con fecha, vence sola: no hay tarea que la reanude (4.8).
     const stillPaused = conversation.pausedUntil === null || conversation.pausedUntil.getTime() > deps.now().getTime();
     if (stillPaused) {
+      // El comprobante de una seña se registra igual (4.5): sin él, el turno se vencería aunque la clienta pagó.
+      const receipt = await registerReceiptWhilePaused(db, { tenantId, customerId, messages: pending, now: deps.now() });
+      if (receipt) target.logger.info({ receipt: receipt.kind }, 'Imagen con el asistente pausado');
       await markProcessed(db);
       return 'paused';
     }
