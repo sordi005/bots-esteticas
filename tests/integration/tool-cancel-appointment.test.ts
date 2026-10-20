@@ -5,6 +5,7 @@ import { cancelAppointmentTool } from '../../src/modules/conversation/tools/canc
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { runTool } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
@@ -177,6 +178,57 @@ describe('cancelar_turno: confirmada=true cancela', () => {
     expect(b.isError).toBeFalsy();
     const cancellations = (await eventsOf(id)).filter((event) => event.toStatus === 'CANCELLED_BY_CUSTOMER');
     expect(cancellations).toHaveLength(1);
+  });
+});
+
+describe('cancelar_turno: le avisa a la dueña (4.6)', () => {
+  const noticesOf = (f: Fixture, kind: 'appointment_cancelled' | 'handoff') =>
+    db
+      .select()
+      .from(notifications)
+      .where(and(eq(notifications.tenantId, f.tenantId), eq(notifications.kind, kind)));
+
+  it('cancelar guarda el aviso con el turno; con la seña pagada recuerda la devolución', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await changeAppointmentStatus(db, { tenantId: f.tenantId, appointmentId: id, to: 'CONFIRMED', actor: 'owner', now: BOOKED_AT });
+    await db.update(deposits).set({ status: 'approved' }).where(eq(deposits.appointmentId, id));
+
+    await cancel(f, { turno_id: id, confirmada: true });
+
+    const [notice] = await noticesOf(f, 'appointment_cancelled');
+    expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, customerId: f.customerId, status: 'pending' });
+    expect(notice?.message.body).toContain('martes 6/10 10:00');
+    expect(notice?.message.body).toMatch(/devolución/);
+  });
+
+  it('pedir la confirmación no avisa: todavía no se canceló nada', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    await cancel(f, { turno_id: id, confirmada: false });
+
+    expect(await noticesOf(f, 'appointment_cancelled')).toEqual([]);
+  });
+
+  it('dos confirmaciones a la vez avisan una sola vez', async () => {
+    const f = await setup();
+    const id = await book(f);
+
+    await Promise.all([cancel(f, { turno_id: id, confirmada: true }), cancel(f, { turno_id: id, confirmada: true })]);
+
+    expect(await noticesOf(f, 'appointment_cancelled')).toHaveLength(1);
+  });
+
+  it('fuera de plazo no cancela ni avisa una cancelación: avisa la derivación', async () => {
+    const f = await setup();
+    const id = await book(f);
+    await changeAppointmentStatus(db, { tenantId: f.tenantId, appointmentId: id, to: 'CONFIRMED', actor: 'owner', now: BOOKED_AT });
+
+    await cancel(f, { turno_id: id, confirmada: true }, at('2026-10-06', '08:00'));
+
+    expect(await noticesOf(f, 'appointment_cancelled')).toEqual([]);
+    expect(await noticesOf(f, 'handoff')).toHaveLength(1);
   });
 });
 

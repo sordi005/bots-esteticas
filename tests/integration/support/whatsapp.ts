@@ -64,6 +64,32 @@ export function textMessageWebhook(input: {
   );
 }
 
+/** Un botón tocado, con la forma exacta del ejemplo de Meta (tests/contracts/whatsapp/button-reply.json). */
+export function buttonReplyWebhook(input: {
+  phoneNumberId: string;
+  from: string;
+  messageId: string;
+  replyId: string;
+  title: string;
+  timestamp?: number;
+}): string {
+  return JSON.stringify(
+    envelope(input.phoneNumberId, {
+      contacts: [{ profile: { name: 'Dueña' }, wa_id: input.from }],
+      messages: [
+        {
+          context: { from: '5492615550000', id: 'wamid.aviso-original' },
+          from: input.from,
+          id: input.messageId,
+          timestamp: String(input.timestamp ?? 1_790_000_000),
+          type: 'interactive',
+          interactive: { type: 'button_reply', button_reply: { id: input.replyId, title: input.title } },
+        },
+      ],
+    }),
+  );
+}
+
 export function statusWebhook(input: {
   phoneNumberId: string;
   messageId: string;

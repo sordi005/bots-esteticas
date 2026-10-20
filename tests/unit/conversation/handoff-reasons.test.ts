@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CODE_ONLY_HANDOFF_REASONS,
   HANDOFF_SUMMARY_MIN_WORDS,
   MODEL_HANDOFF_REASONS,
   MODEL_HANDOFF_REASON_NAMES,
@@ -21,7 +22,7 @@ describe('MODEL_HANDOFF_REASONS: los motivos que ve el modelo (4.8)', () => {
     ]);
   });
 
-  it('cada motivo se guarda con el motivo de la base que le corresponde, y no queda ninguno de la base sin nombre', () => {
+  it('cada motivo se guarda con el motivo de la base que le corresponde, y los de la base son estos más los del código', () => {
     const stored = MODEL_HANDOFF_REASON_NAMES.map((name) => MODEL_HANDOFF_REASONS[name].reason);
 
     expect(stored).toEqual([
@@ -34,7 +35,14 @@ describe('MODEL_HANDOFF_REASONS: los motivos que ve el modelo (4.8)', () => {
       'policy_exception',
       'not_understood',
     ]);
-    expect([...stored].sort()).toEqual([...handoffReason.enumValues].sort());
+    expect([...stored, ...CODE_ONLY_HANDOFF_REASONS].sort()).toEqual([...handoffReason.enumValues].sort());
+  });
+
+  it('el modelo no puede elegir un motivo que es solo del código (4.8)', () => {
+    const stored: string[] = MODEL_HANDOFF_REASON_NAMES.map((name) => MODEL_HANDOFF_REASONS[name].reason);
+
+    expect(CODE_ONLY_HANDOFF_REASONS).toEqual(['payment_issue']);
+    expect(stored).not.toContain('payment_issue');
   });
 
   it('cada motivo trae una descripción para el modelo', () => {

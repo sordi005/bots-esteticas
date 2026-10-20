@@ -31,6 +31,11 @@ export interface TurnContextInput {
   resumedAfterHandoff: boolean;
   /** Lo que la clienta tocó en botones o listas, ya resuelto y vuelto a validar (5.3). */
   choices: ResolvedChoice[];
+  /**
+   * El turno del comprobante que el código registró en esta vuelta (4.5), escrito por el código
+   * ("martes 6/10 10:00 (Esmaltado semipermanente con Mica)"). El modelo no decide qué es un comprobante.
+   */
+  receipt?: string;
 }
 
 /** Cómo se le cuenta al modelo una elección ya resuelta: nunca ve el título del botón. */
@@ -103,6 +108,11 @@ export function buildTurnContext(input: TurnContextInput): string {
   lines.push(
     `- Si derivás a una persona, le responde ${input.humanReplyWhen}: escribilo tal cual en tu mensaje («te va a responder por acá ${input.humanReplyWhen}»), sin prometer otra hora.`,
   );
+  if (input.receipt) {
+    lines.push(
+      `- La clienta mandó el comprobante de la transferencia de la seña de su turno del ${input.receipt}: quedó registrado y una persona del equipo verifica la transferencia. Decile que lo recibiste y que le avisás por acá cuando esté verificada. No digas que la seña ni el turno quedaron confirmados, y no derives por la imagen.`,
+    );
+  }
   if (input.choices.length > 0) {
     lines.push(
       '- Elecciones de la clienta en este mensaje:',

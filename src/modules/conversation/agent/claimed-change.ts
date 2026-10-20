@@ -1,5 +1,5 @@
 /**
- * ¿El texto afirma que un turno quedó reservado, cancelado o reprogramado? (6.4)
+ * ¿El texto afirma que un turno quedó reservado, cancelado, reprogramado o confirmado? (6.4)
  *
  * El asistente nunca confirma un cambio que no pasó: si el texto lo afirma y en la vuelta ninguna
  * herramienta lo hizo, el ciclo del agente se lo hace notar al modelo. Es pura.
@@ -14,8 +14,13 @@
  * más al modelo; pero si el modelo vuelve a escribir lo mismo, la clienta recibe el texto fijo «no te
  * entendí». Un falso negativo deja pasar una confirmación falsa. Por eso se prefieren las frases que de
  * verdad afirman un cambio y se dejan afuera las que se parecen a una descripción: el presente «queda
- * reservado» (las políticas de seña lo usan: «si no pagás, queda cancelado»), un «reservado» suelto y
- * «confirmado» (un turno se confirma solo cuando llega la seña, sin ninguna herramienta).
+ * reservado» (las políticas de seña lo usan: «si no pagás, queda cancelado») y un «reservado» o un
+ * «confirmado» sueltos en medio de la frase («tenés un turno confirmado»).
+ *
+ * Desde H9 cuenta también «confirmado» como algo que pasó («quedó confirmado», «se acreditó la seña»,
+ * «recibí la transferencia»): una transferencia la confirma siempre la dueña (4.5), y después de recibir
+ * el comprobante el asistente no puede decir que la seña llegó. Una reserva sin seña sí lo confirma
+ * (`crear_reserva` marca el cambio), y lo que confirma la dueña se lo avisa el código a la clienta.
  *
  * Trabaja sobre el texto con tildes: «cancelé» (hice) y «cancele» (que cancele) son frases distintas.
  */
@@ -26,7 +31,7 @@ const LETTER_OR_DIGIT = String.raw`\p{L}\p{N}`;
 const phrase = (body: string): string => String.raw`(?<![${LETTER_OR_DIGIT}])(?:${body})(?![${LETTER_OR_DIGIT}])`;
 
 /** El estado de un turno, ya hecho: «reservado», «cancelada», «reprogramados». */
-const DONE = String.raw`(?:reservad|cancelad|reprogramad|agendad|anotad)[oa]s?`;
+const DONE = String.raw`(?:reservad|cancelad|reprogramad|agendad|anotad|confirmad|aprobad|acreditad)[oa]s?`;
 
 interface ClaimPattern {
   regex: RegExp;
@@ -51,11 +56,15 @@ const CLAIM_PATTERNS: ClaimPattern[] = [
   // «ya te quedó el turno para el jueves»
   result(phrase(String.raw`ya te quedó (?:el|tu) turno`)),
   // «se canceló», «se reprogramó»
-  result(phrase(String.raw`se (?:canceló|reprogramó|reservó|agendó)`)),
+  result(phrase(String.raw`se (?:canceló|reprogramó|reservó|agendó|confirmó|acreditó|aprobó)`)),
+  // «tu seña quedó aprobada» la cubre «quedó»; «seña acreditada» suelta también afirma
+  result(phrase(String.raw`seña (?:acreditada|aprobada|confirmada)`)),
   // Una confirmación suelta, al empezar la frase: «listo, reprogramado», «anotado», «¡agendado!»
   result(String.raw`^(?:(?:${CONFIRMATION_OPENERS})[ ,]+)*(?:ya )?${phrase(DONE)}`),
   // «te lo reservé», «cancelé tu turno», «reprogramé», «agendé»
-  action(phrase('reservé|cancelé|reprogramé|agendé')),
+  action(phrase('reservé|cancelé|reprogramé|agendé|confirmé|acredité')),
+  // «recibí la transferencia», «ya recibimos tu seña»; «recibí el comprobante» no afirma que llegó la plata (4.5)
+  action(phrase(String.raw`recib(?:í|imos) (?:la|tu) (?:transferencia|seña|pago)`)),
   // «te pasé el turno al miércoles», «ya lo pasé al jueves», «lo moví», «lo cambié»
   action(phrase(String.raw`lo (?:pasé|moví|cambié)|(?:pasé|moví|cambié) (?:tu|el) turno`)),
   // «lo paso al miércoles a las 15:30»: el destino lo vuelve una acción hecha, no una oferta

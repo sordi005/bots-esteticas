@@ -46,6 +46,36 @@ describe('claimsAppointmentChange: el texto afirma que un turno cambió (6.4)', 
   });
 });
 
+describe('claimsAppointmentChange: la seña y la confirmación (H9, 4.5)', () => {
+  // Una transferencia la confirma siempre la dueña: el asistente nunca dice que pasó.
+  it.each([
+    'Listo, tu turno quedó confirmado para el martes.',
+    'Recibí el comprobante. ¡Tu turno quedó confirmado!',
+    'Listo, confirmado.',
+    'Ya se acreditó tu seña.',
+    'Se confirmó la seña, te esperamos el martes.',
+    'Recibí la transferencia, ¡gracias!',
+    'Ya recibimos tu seña.',
+    'Tu seña quedó aprobada.',
+    'Confirmé tu turno del martes.',
+  ])('detecta: %s', (text) => {
+    expect(claimsAppointmentChange(text)).toBe(true);
+  });
+
+  it.each([
+    'Recibí el comprobante: una persona del equipo verifica la transferencia y te confirmo por acá.',
+    '¡Gracias! Ya lo recibí. Apenas el equipo verifique la transferencia, te aviso por acá.',
+    'Cuando se verifique la transferencia, tu turno queda confirmado.',
+    'Tenés un turno confirmado el viernes 16/10 a las 16:00.',
+    'Tu turno del martes está confirmado.',
+    'Todavía no está confirmado: el equipo está verificando la transferencia.',
+    'No se confirmó todavía la seña.',
+    '¿Querés que te pase los datos para pagar la seña?',
+  ])('no detecta: %s', (text) => {
+    expect(claimsAppointmentChange(text)).toBe(false);
+  });
+});
+
 describe('claimsAppointmentChange: preguntas y ofertas', () => {
   it.each([
     '¿Te lo reservo?',

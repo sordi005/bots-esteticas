@@ -4,8 +4,10 @@ import { z } from 'zod';
 import {
   FALLBACK_REPLY_TEXT,
   MAX_TOOL_CALLS_PER_REPLY,
+  PAYMENT_DETAILS_NOTICE,
   PENDING_WORK_NOTICE,
   UNCONFIRMED_CHANGE_NOTICE,
+  chosenSlotNotice,
   runAgent,
   type AgentInput,
 } from '../../../../src/modules/conversation/agent/agent.js';
@@ -70,6 +72,28 @@ function changeTool(name: string, content: Record<string, unknown>, changed: boo
   const tool: AgentTool<Input> = {
     name,
     description: `Herramienta de prueba ${name}.`,
+    input: z.object({ horario_id: z.string().optional() }),
+    run,
+  };
+  return { tool: tool as AgentTool<unknown>, run };
+}
+
+/** `crear_reserva` con seña: el alias tiene que salir en la respuesta (4.5). */
+function bookingWithDeposit(alias = 'estetica.ejemplo') {
+  interface Input {
+    horario_id?: string | undefined;
+  }
+  const run = vi.fn<AgentTool<Input>['run']>(() =>
+    Promise.resolve({
+      content: { reservado: true, pago: { alias } },
+      options: [],
+      changedAppointment: true as const,
+      mustMention: alias,
+    }),
+  );
+  const tool: AgentTool<Input> = {
+    name: 'crear_reserva',
+    description: 'Herramienta de prueba crear_reserva.',
     input: z.object({ horario_id: z.string().optional() }),
     run,
   };
@@ -1033,7 +1057,7 @@ describe('runAgent: el asistente nunca confirma un cambio que no pasó (6.4)', (
 
   it('el aviso es el que aprobó el equipo', () => {
     expect(UNCONFIRMED_CHANGE_NOTICE).toBe(
-      'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.',
+      'En tu respuesta dijiste que el turno quedó reservado, cancelado, reprogramado o confirmado (o que la seña llegó), pero ninguna herramienta lo hizo en esta respuesta: no cambió nada. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. La seña por transferencia la confirma una persona del equipo, nunca vos. Si no, corregí el texto: no le digas que pasó algo que no pasó; si el turno ya estaba confirmado desde antes, decilo como algo que ya estaba («está confirmado»).',
     );
   });
 
@@ -1344,6 +1368,168 @@ describe('runAgent: el asistente nunca confirma un cambio que no pasó (6.4)', (
     const { run, requests } = agent(script);
 
     await expect(run({ toolContext: { ...toolContext, signal: controller.signal } })).rejects.toThrow('tiempo agotado');
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe('runAgent: los datos para pagar la seña salen en la respuesta (4.5, D4)', () => {
+  const WITHOUT_ALIAS = 'Listo, te guardo el lunes 5/10 a las 15:30 con Mica. Una persona del equipo te pasa los datos.';
+  const WITH_ALIAS =
+    'Listo, te guardo el lunes 5/10 a las 15:30 con Mica. Transferí la seña de $5.400 al alias Estetica.Ejemplo y mandame la foto del comprobante.';
+
+  it('si el texto no trae el alias que devolvió la herramienta, se lo marca una vez y contesta con los datos', async () => {
+    const booking = bookingWithDeposit();
+    const omitted = finalAnswer(WITHOUT_ALIAS);
+    const { run, requests } = agent([callTools([{ name: 'crear_reserva' }]), omitted, finalAnswer(WITH_ALIAS)], [booking.tool]);
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.messages.slice(-2)).toEqual([
+      { role: 'assistant_turn', turn: omitted.assistantTurn },
+      { role: 'system_note', text: PAYMENT_DETAILS_NOTICE },
+    ]);
+    expect(message).toEqual({ type: 'text', body: WITH_ALIAS });
+    expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3 });
+  });
+
+  it('con el alias en el texto (sin importar mayúsculas) no se le marca nada', async () => {
+    const { run, requests } = agent([callTools([{ name: 'crear_reserva' }]), finalAnswer(WITH_ALIAS)], [bookingWithDeposit().tool]);
+
+    await run();
+
+    expect(requests).toHaveLength(2);
+  });
+
+  it('si lo vuelve a omitir se envía igual: no afirma nada falso, solo le falta un dato', async () => {
+    const { run, requests } = agent(
+      [callTools([{ name: 'crear_reserva' }]), finalAnswer(WITHOUT_ALIAS), finalAnswer(WITHOUT_ALIAS)],
+      [bookingWithDeposit().tool],
+    );
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(message).toEqual({ type: 'text', body: WITHOUT_ALIAS });
+    expect(record.outcome).toBe('replied');
+  });
+
+  it('sin una herramienta que pida datos de pago, no hay nada que verificar', async () => {
+    const { run, requests } = agent([finalAnswer(WITHOUT_ALIAS)]);
+
+    await run();
+
+    expect(requests).toHaveLength(1);
+  });
+});
+
+describe('runAgent: la clienta eligió un horario libre y la respuesta no lo reserva (6.4)', () => {
+  // Lo encontró la prueba manual de H9: tocó «mar 20/10 10:30», el horario seguía libre, y el modelo contestó
+  // «no pude confirmar todavía… no quedó reservado» sin llamar a crear_reserva.
+  const SLOT = 'horario:00000000-0000-4000-8000-00000000000a:00000000-0000-4000-8000-00000000000b:2026-10-20T13:30:00.000Z';
+  const MOVE = 'reprogramar:00000000-0000-4000-8000-00000000000c:2026-10-20T13:30:00.000Z';
+  const NOT_BOOKED = 'No pude confirmar todavía el turno del martes 20/10 10:30: no quedó reservado.';
+  const BOOKED = 'Listo, te reservé el martes 20/10 a las 10:30.';
+
+  it('si no llamó a crear_reserva, se lo marca una vez con el horario_id y contesta con lo que devuelva', async () => {
+    const booking = changeTool('crear_reserva', { reservado: true }, true);
+    const skipped = finalAnswer(NOT_BOOKED);
+    const { run, requests } = agent(
+      [skipped, callTools([{ name: 'crear_reserva', input: { horario_id: SLOT } }]), finalAnswer(BOOKED)],
+      [booking.tool],
+      { chosenSlot: { tool: 'crear_reserva', slotId: SLOT } },
+    );
+
+    const { message, run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[1]?.messages.slice(-2)).toEqual([
+      { role: 'assistant_turn', turn: skipped.assistantTurn },
+      { role: 'system_note', text: chosenSlotNotice({ tool: 'crear_reserva', slotId: SLOT }) },
+    ]);
+    expect(booking.run).toHaveBeenCalledWith({ horario_id: SLOT }, expect.anything());
+    expect(message).toEqual({ type: 'text', body: BOOKED });
+    expect(record).toMatchObject({ outcome: 'replied', toolCalls: ['crear_reserva'] });
+  });
+
+  it('el aviso nombra la herramienta y el horario_id exacto', () => {
+    expect(chosenSlotNotice({ tool: 'crear_reserva', slotId: SLOT })).toContain(`crear_reserva con horario_id=${SLOT}`);
+    expect(chosenSlotNotice({ tool: 'reprogramar_turno', slotId: MOVE })).toContain(`reprogramar_turno con horario_id=${MOVE}`);
+  });
+
+  it('al reprogramar, el aviso pide reprogramar_turno', async () => {
+    const skipped = finalAnswer('¿Querés que lo pase al martes?');
+    const { run, requests } = agent(
+      [skipped, callTools([{ name: 'reprogramar_turno', input: { horario_id: MOVE } }]), finalAnswer('Listo, lo pasé.')],
+      [changeTool('reprogramar_turno', { reprogramado: true }, true).tool],
+      { chosenSlot: { tool: 'reprogramar_turno', slotId: MOVE } },
+    );
+
+    await run();
+
+    expect(requests[1]?.messages.at(-1)).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'reprogramar_turno', slotId: MOVE }),
+    });
+  });
+
+  it('si llamó a la herramienta, aunque no haya podido reservar, no se le marca nada', async () => {
+    const booking = changeTool('crear_reserva', { reservado: false, motivo: 'ocupado' }, false);
+    const { run, requests } = agent(
+      [callTools([{ name: 'crear_reserva', input: { horario_id: SLOT } }]), finalAnswer('Ese horario se ocupó recién.')],
+      [booking.tool],
+      { chosenSlot: { tool: 'crear_reserva', slotId: SLOT } },
+    );
+
+    await run();
+
+    expect(requests).toHaveLength(2);
+  });
+
+  it('si llamó a otra herramienta y no a la que corresponde, se lo marca igual', async () => {
+    const { run, requests } = agent(
+      [callTools([{ name: 'buscar_servicios' }]), finalAnswer(NOT_BOOKED), finalAnswer(NOT_BOOKED)],
+      [fakeTool('buscar_servicios').tool],
+      { chosenSlot: { tool: 'crear_reserva', slotId: SLOT } },
+    );
+
+    await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.messages.at(-1)).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'crear_reserva', slotId: SLOT }),
+    });
+  });
+
+  it('si vuelve a no llamarla, se envía su respuesta: no se le marca dos veces', async () => {
+    const { run, requests } = agent([finalAnswer(NOT_BOOKED), finalAnswer(NOT_BOOKED)], [], {
+      chosenSlot: { tool: 'crear_reserva', slotId: SLOT },
+    });
+
+    const { message } = await run();
+
+    expect(requests).toHaveLength(2);
+    expect(message).toEqual({ type: 'text', body: NOT_BOOKED });
+  });
+
+  it('si la respuesta deriva a una persona, no se le marca nada', async () => {
+    const { run, requests } = agent(
+      [handoffAnswer('Le paso tu consulta a una persona del equipo.', { motivo: 'queja', resumen: 'Quiere reclamar por el turno anterior' })],
+      [],
+      { chosenSlot: { tool: 'crear_reserva', slotId: SLOT } },
+    );
+
+    await run();
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it('sin un horario elegido en la vuelta, no hay nada que verificar', async () => {
+    const { run, requests } = agent([finalAnswer(NOT_BOOKED)]);
+
+    await run();
+
     expect(requests).toHaveLength(1);
   });
 });

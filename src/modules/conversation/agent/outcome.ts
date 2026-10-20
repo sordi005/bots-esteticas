@@ -23,6 +23,11 @@ export const agentOutcomes = [
    * Cuenta como intento fallido para el segundo intento que deriva (4.8).
    */
   'fallback_unconfirmed_change',
+  /**
+   * Llegó una imagen con varias señas pendientes: el código no adivina de qué turno es el comprobante, deriva con
+   * «pago» y envía un texto fijo, sin llamar al modelo (4.5, H9).
+   */
+  'handoff_payment_issue',
 ] as const;
 
 export type AgentOutcome = (typeof agentOutcomes)[number];

@@ -8,7 +8,8 @@ import type { WhatsAppClient } from './client.js';
  * la lista de permitidos del número de prueba lo guarda como 54 + área + 15 + número y
  * compara el texto tal cual (error 131030). En producción no hay lista y no hace falta.
  */
-export function withRecipientOverride(client: WhatsAppClient, to: string | undefined): WhatsAppClient {
+export function withRecipientOverride<T extends WhatsAppClient>(client: T, to: string | undefined): T {
   if (!to) return client;
-  return { sendMessage: (input) => client.sendMessage({ ...input, to }) };
+  // Las imágenes no tienen destinataria: los demás métodos quedan como están.
+  return { ...client, sendMessage: (input) => client.sendMessage({ ...input, to }) };
 }

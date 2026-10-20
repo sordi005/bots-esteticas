@@ -5,15 +5,18 @@ import { z } from 'zod';
 import {
   createAgentResponder,
   MAX_INBOUND_MESSAGES_PER_HOUR,
+  severalPendingReceiptsText,
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
-import { CHOICE_MARKER } from '../../src/modules/conversation/agent/message-text.js';
+import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
+import { CHOICE_MARKER, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
@@ -610,6 +613,94 @@ describe('createAgentResponder: las elecciones con botones se resuelven antes de
   });
 });
 
+describe('createAgentResponder: si la clienta eligió un horario libre, la respuesta tiene que reservarlo (6.4)', () => {
+  // Prueba manual de H9: tocó un horario libre y el modelo contestó «no quedó reservado» sin llamar a crear_reserva.
+  const tuesday = at('2026-10-06', '09:00');
+  const tap = (f: Fixture, id: string) =>
+    addInbound(f, { type: 'interactive', content: interactiveReply(id, 'mar 6/10 9:00'), at: minutesAgo(1), processed: false });
+  const lastNote = (request: { messages: LlmMessage[] } | undefined) => request?.messages.at(-1);
+
+  it('con nombre y el horario libre, si no llama a crear_reserva se lo marca con ese horario_id', async () => {
+    const f = await setup('Caro Pérez');
+    const slotId = choiceIds.slot(f.semi, f.mica, tuesday);
+
+    const { result, requests } = reply(f, [await tap(f, slotId)], [finalAnswer('No quedó reservado'), finalAnswer('Perdón')]);
+    await result;
+
+    expect(requests).toHaveLength(2);
+    expect(lastNote(requests[1])).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'crear_reserva', slotId }),
+    });
+  });
+
+  it('sin nombre cargado no: primero tiene que preguntárselo', async () => {
+    const f = await setup(null);
+
+    const { result, requests } = reply(f, [await tap(f, choiceIds.slot(f.semi, f.mica, tuesday))], [finalAnswer('¿A nombre de quién?')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it('si el horario ya no está libre no: no hay nada que reservar', async () => {
+    const f = await setup('Caro Pérez');
+    const monday = at('2026-10-05', '15:00');
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: monday,
+      actor: 'assistant',
+      now: minutesAgo(5),
+    });
+    expect(booked.ok).toBe(true);
+
+    const { result, requests } = reply(f, [await tap(f, choiceIds.slot(f.semi, f.mica, monday))], [finalAnswer('Ese ya no está')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
+  });
+
+  it('un horario para mover su turno pide reprogramar_turno, aunque no tenga nombre', async () => {
+    const f = await setup(null);
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-05', '15:00'),
+      actor: 'assistant',
+      now: minutesAgo(5),
+    });
+    if (!booked.ok) throw new Error('no se pudo reservar');
+    const slotId = choiceIds.reschedule(booked.appointmentId, tuesday);
+
+    const { result, requests } = reply(f, [await tap(f, slotId)], [finalAnswer('¿Lo pasamos?'), finalAnswer('Perdón')]);
+    await result;
+
+    expect(lastNote(requests[1])).toEqual({
+      role: 'system_note',
+      text: chosenSlotNotice({ tool: 'reprogramar_turno', slotId }),
+    });
+  });
+
+  it('una elección de antes (historial) no cuenta: solo la de esta vuelta', async () => {
+    const f = await setup('Caro Pérez');
+    await addInbound(f, {
+      type: 'interactive',
+      content: interactiveReply(choiceIds.slot(f.semi, f.mica, tuesday), 'mar 6/10 9:00'),
+      at: minutesAgo(10),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, '¿Qué turnos tengo?'), [finalAnswer('No tenés turnos')]);
+    await result;
+
+    expect(requests).toHaveLength(1);
+  });
+});
+
 describe('createAgentResponder: la respuesta y el registro en agent_runs (7.2)', () => {
   it('devuelve el mensaje del agente con las opciones que ofreció una herramienta real', async () => {
     const f = await setup();
@@ -927,6 +1018,146 @@ describe('createAgentResponder: el segundo intento fallido deriva a una persona 
   });
 });
 
+describe('createAgentResponder: el comprobante de la seña lo reconoce el código (4.5, 5.3)', () => {
+  const statusOf = async (appointmentId: string) =>
+    single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
+
+  async function pendingDeposit(f: Fixture, start = at('2026-10-06', '15:30')) {
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start,
+      actor: 'assistant',
+      now: minutesAgo(10),
+    });
+    if (!booked.ok || !booked.deposit) throw new Error('La reserva de prueba no quedó pendiente de seña');
+    return booked.appointmentId;
+  }
+
+  const image = (f: Fixture, id: string, caption?: string) =>
+    addInbound(f, {
+      type: 'image',
+      content: { type: 'image', image: { id, mime_type: 'image/jpeg', ...(caption ? { caption } : {}) } },
+      at: minutesAgo(1),
+      processed: false,
+    });
+
+  it('con una seña pendiente: registra el comprobante y el modelo lo ve como tal, con el hecho en el contexto', async () => {
+    const f = await setup('Caro Pérez');
+    const appointmentId = await pendingDeposit(f);
+
+    const { result, requests } = reply(f, [await image(f, 'media-1', 'ahí va')], [finalAnswer('¡Gracias! Ya lo recibí.')]);
+    await result;
+
+    expect(await statusOf(appointmentId)).toBe('DEPOSIT_REVIEW');
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual(['user: [Comprobante de la seña] «ahí va»']);
+    expect(requests[0]?.turnContext).toContain('comprobante de la transferencia de la seña de su turno del martes 6/10 15:30');
+    expect(requests[0]?.turnContext).toMatch(/No digas que la seña ni el turno quedaron confirmados/);
+  });
+
+  it('dos fotos seguidas del mismo comprobante: las dos son el comprobante', async () => {
+    const f = await setup('Caro Pérez');
+    await pendingDeposit(f);
+    const first = await image(f, 'media-1');
+    const second = await image(f, 'media-2');
+
+    const { result, requests } = reply(f, [first, second], [finalAnswer('¡Gracias!')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      'user: [Comprobante de la seña]',
+      'user: [Comprobante de la seña]',
+    ]);
+  });
+
+  it('sin seña pendiente, una imagen es una imagen: la decide el modelo como siempre', async () => {
+    const f = await setup('Caro Pérez');
+
+    const { result, requests } = reply(f, [await image(f, 'media-1')], [finalAnswer('Dale')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual(['user: [Imagen]']);
+    expect(requests[0]?.turnContext).not.toMatch(/comprobante/i);
+  });
+
+  it('con dos señas pendientes no adivina: deriva con «pago» y un texto fijo, sin llamar al modelo', async () => {
+    const f = await setup('Caro Pérez', {
+      settings: { humanAttentionHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' })) },
+    });
+    const first = await pendingDeposit(f);
+    await pendingDeposit(f, at('2026-10-07', '15:30'));
+
+    const { result, requests } = reply(f, [await image(f, 'media-1')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({ type: 'text', body: severalPendingReceiptsText('en este horario') });
+    expect(await statusOf(first)).toBe('PENDING_DEPOSIT');
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toMatchObject([
+      { reason: 'payment_issue', status: 'open' },
+    ]);
+    // Una fila por respuesta (7.2), aunque no se llamó al modelo.
+    expect(await runsOf(f)).toMatchObject([{ outcome: 'handoff_payment_issue', model: null, llmCalls: 0 }]);
+  });
+
+  it('en el historial, un aviso que mandó el código se ve como aviso del sistema, no como algo que dijo el asistente', async () => {
+    // Lo encontró la prueba manual: después de «¡Seña recibida! Tu turno quedó confirmado» (lo manda el código cuando
+    // la dueña toca «Recibida»), a un «hola» el asistente contestó «te aclaro: tu turno todavía no está confirmado».
+    // Creía haberlo escrito él, contra la regla de no dar la seña por confirmada.
+    const f = await setup('Caro Pérez');
+    const confirmed = { type: 'text' as const, body: '¡Seña recibida! Tu turno quedó confirmado: martes 6/10 15:30.' };
+    const whatsappMessageId = `wamid.${randomUUID()}`;
+    await addInbound(f, { text: 'hola', at: minutesAgo(30) });
+    await db.insert(messages).values({
+      tenantId: f.tenantId,
+      conversationId: f.conversationId,
+      direction: 'outbound',
+      type: 'text',
+      content: confirmed,
+      whatsappMessageId,
+      occurredAt: minutesAgo(20),
+    });
+    await db.insert(notifications).values({
+      tenantId: f.tenantId,
+      recipient: 'customer',
+      kind: 'deposit_confirmed',
+      customerId: f.customerId,
+      message: confirmed,
+      status: 'sent',
+      whatsappMessageId,
+      sentAt: minutesAgo(20),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('¡Hola!')]);
+    await result;
+
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      'user: hola',
+      `assistant: ${SYSTEM_NOTICE_LABELS.deposit_confirmed} ${confirmed.body}`,
+      'user: hola',
+    ]);
+    expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
+  });
+
+  it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
+    const f = await setup('Caro Pérez');
+    await pendingDeposit(f);
+    const { result } = reply(f, [await image(f, 'media-1')], [finalAnswer('¡Gracias! Ya lo recibí.')]);
+    await result;
+    await db.update(messages).set({ processedAt: minutesAgo(1) }).where(eq(messages.conversationId, f.conversationId));
+
+    const next = reply(f, await pendingTexts(f, '¿ya lo vieron?'), [finalAnswer('Todavía no.')]);
+    await next.result;
+
+    expect(conversationOf(next.requests[0]?.messages ?? [])).toEqual([
+      'user: [Comprobante de la seña]',
+      'user: ¿ya lo vieron?',
+    ]);
+  });
+});
+
 describe('createAgentResponder: turnos con las herramientas reales (H8)', () => {
   const statusOf = async (appointmentId: string) =>
     single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
@@ -944,7 +1175,7 @@ describe('createAgentResponder: turnos con las herramientas reales (H8)', () => 
       const horario_id = /opción elegida: (\S+)\)/.exec(text)?.[1];
       return callTools([{ name: 'crear_reserva', input: { horario_id, nombre: 'Caro Pérez' } }]);
     };
-    const { result } = reply(f, pending, [bookFromHistory, finalAnswer('Listo Caro, te guardo el martes 6/10 a las 15:30 con Mica.')]);
+    const { result } = reply(f, pending, [bookFromHistory, finalAnswer('Listo Caro, te guardo el martes 6/10 a las 15:30 con Mica. Transferí la seña al alias estetica.prueba y mandame el comprobante.')]);
     await result;
 
     const [appointment] = await db.select().from(appointments).where(eq(appointments.customerId, f.customerId));

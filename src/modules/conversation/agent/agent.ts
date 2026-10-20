@@ -59,7 +59,33 @@ export const PENDING_WORK_NOTICE =
  * en la vuelta ninguna herramienta lo hizo (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
  */
 export const UNCONFIRMED_CHANGE_NOTICE =
-  'En tu respuesta dijiste que el turno quedó reservado, cancelado o reprogramado, pero ninguna herramienta lo hizo en esta respuesta: el turno no cambió. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. Si no, corregí el texto: no le digas que pasó algo que no pasó.';
+  'En tu respuesta dijiste que el turno quedó reservado, cancelado, reprogramado o confirmado (o que la seña llegó), pero ninguna herramienta lo hizo en esta respuesta: no cambió nada. Si la clienta lo eligió o lo confirmó, llamá ahora a la herramienta que corresponde (crear_reserva, cancelar_turno o reprogramar_turno) y contestá con lo que devuelva. La seña por transferencia la confirma una persona del equipo, nunca vos. Si no, corregí el texto: no le digas que pasó algo que no pasó; si el turno ya estaba confirmado desde antes, decilo como algo que ya estaba («está confirmado»).';
+
+/**
+ * Lo que se le dice al modelo cuando una herramienta devolvió los datos para pagar la seña y su respuesta no
+ * los trae (4.5): sin el alias, la clienta no puede pagar. Se le hace notar una sola vez.
+ */
+export const PAYMENT_DETAILS_NOTICE =
+  'Una herramienta devolvió los datos para pagar la seña («pago»), pero tu respuesta no los trae: sin el alias o el CBU la clienta no puede pagar. Volvé a escribir la respuesta con los datos de «pago» tal cual (sirve «pago.texto») y pedile la foto del comprobante.';
+
+/**
+ * El horario que la clienta eligió en esta vuelta con un botón o una lista y que sigue libre (5.3, 6.4): elegirlo ya
+ * es la confirmación, así que la respuesta tiene que llamar a la herramienta que lo reserva o lo mueve. Lo arma el
+ * código antes de llamar al modelo.
+ */
+export interface ChosenSlot {
+  tool: 'crear_reserva' | 'reprogramar_turno';
+  /** El id tal cual lo devolvió WhatsApp (`horario:` o `reprogramar:`). */
+  slotId: string;
+}
+
+/**
+ * Lo que se le dice al modelo cuando la clienta eligió un horario libre y su respuesta no llamó a la herramienta que
+ * lo reserva o lo mueve (6.4). Se le hace notar una sola vez, con el turno que acaba de dar.
+ */
+export function chosenSlotNotice({ tool, slotId }: ChosenSlot): string {
+  return `La clienta eligió un horario con un botón y sigue libre: elegirlo ya es la confirmación. Tu respuesta no lo reservó y la respuesta se envía tal cual. Llamá ahora a ${tool} con horario_id=${slotId} (tal cual) y contestá con lo que devuelva. Si devuelve que no se pudo, explicale por qué y ofrecé otros horarios.`;
+}
 
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
@@ -169,6 +195,8 @@ export interface AgentInput {
   history: LlmMessage[];
   /** Del servidor: el negocio y la clienta nunca los elige el modelo (regla 2). */
   toolContext: ToolContext;
+  /** El horario libre que la clienta eligió en esta vuelta, si hay uno para reservar o mover ya. */
+  chosenSlot?: ChosenSlot;
 }
 
 /** La derivación que pidió la respuesta del modelo, con el motivo ya traducido al de la base (4.8). */
@@ -205,6 +233,7 @@ function addUsage(total: LlmUsage, usage: LlmUsage): LlmUsage {
 interface ExecutedToolCall {
   result: LlmToolResult;
   changedAppointment: boolean;
+  mustMention?: string;
 }
 
 /** Ejecuta una herramienta pedida por el modelo y arma el resultado que se le devuelve. */
@@ -230,7 +259,14 @@ async function executeToolCall(
   return {
     result: { toolCallId: call.id, content: JSON.stringify(result.content), isError: result.isError ?? false },
     changedAppointment: result.changedAppointment === true,
+    ...(result.mustMention ? { mustMention: result.mustMention } : {}),
   };
+}
+
+/** ¿El texto deja afuera algún dato que tenía que decir? Sin distinguir mayúsculas. */
+function missesRequiredMention(text: string, required: ReadonlySet<string>): boolean {
+  const folded = text.toLowerCase();
+  return [...required].some((value) => !folded.includes(value.toLowerCase()));
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
@@ -304,6 +340,8 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   let hitToolLimit = false;
   // Alguna herramienta dejó un turno reservado, cancelado o reprogramado en esta vuelta.
   let changedAppointment = false;
+  // Lo que la respuesta tiene que decir: los datos para pagar la seña (4.5).
+  const requiredMentions = new Set<string>();
   // Solo se le hace notar UNA vez, por lo que sea: un anuncio de búsqueda sin hacerla o un cambio que no pasó.
   let corrected = false;
   let answer: FinalAnswer | null;
@@ -356,6 +394,34 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
         );
         continue;
       }
+      // Una herramienta devolvió los datos para pagar la seña y el texto no los trae (4.5): una vez se lo hace
+      // notar. Si los vuelve a omitir, se envía igual: no afirma nada falso.
+      const missesPayment = answer !== null && missesRequiredMention(answer.texto, requiredMentions);
+      if (missesPayment && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: PAYMENT_DETAILS_NOTICE },
+        );
+        continue;
+      }
+      // Eligió un horario libre y en la vuelta no se llamó a la herramienta que lo reserva o lo mueve (6.4): una vez
+      // se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
+      const skipsChosenSlot =
+        answer !== null &&
+        input.chosenSlot !== undefined &&
+        answer.derivar === null &&
+        !executedTools.includes(input.chosenSlot.tool);
+      if (skipsChosenSlot && input.chosenSlot && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: chosenSlotNotice(input.chosenSlot) },
+        );
+        continue;
+      }
+      if (skipsChosenSlot) logger.debug('La respuesta no reservó el horario que eligió la clienta');
+      if (missesPayment) logger.debug('La respuesta no trae los datos para pagar la seña');
       // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
       if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');
       break;
@@ -379,6 +445,7 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     );
     executedTools.push(...response.toolCalls.slice(0, room).map((call) => call.name));
     changedAppointment ||= executed.some((call) => call.changedAppointment);
+    for (const call of executed) if (call.mustMention) requiredMentions.add(call.mustMention);
 
     messages.push(
       { role: 'assistant_turn', turn: response.assistantTurn },

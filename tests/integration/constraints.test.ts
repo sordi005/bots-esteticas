@@ -93,6 +93,7 @@ describe('reglas que protege la base', () => {
         tenantId: fixture.tenantId,
         appointmentId: fixture.appointmentId,
         amountCents: 540_000,
+        method: 'transfer',
         status: 'in_review',
         expiresAt: FIXTURE_APPOINTMENT_RANGE.start,
       }),

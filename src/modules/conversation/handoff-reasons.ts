@@ -48,6 +48,12 @@ export const MODEL_HANDOFF_REASONS = {
 
 export type ModelHandoffReason = keyof typeof MODEL_HANDOFF_REASONS;
 
+/**
+ * Los motivos que usa solo el código: el modelo no los ve ni los puede elegir. `payment_issue`:
+ * un problema con la seña que no resuelve el asistente (4.5, 4.8).
+ */
+export const CODE_ONLY_HANDOFF_REASONS = ['payment_issue'] as const satisfies readonly HandoffReason[];
+
 export const MODEL_HANDOFF_REASON_NAMES = Object.keys(MODEL_HANDOFF_REASONS) as [
   ModelHandoffReason,
   ...ModelHandoffReason[],

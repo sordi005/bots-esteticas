@@ -19,7 +19,9 @@ import {
   verifyHandoff,
   verifyHandoffSummaryWithout,
   verifyMovedOrDerived,
+  verifyNoFalseConfirmation,
   verifyNotHandedOff,
+  verifyReplied,
 } from './state-checks.js';
 
 export type { EvalCase } from './evaluate.js';
@@ -188,8 +190,8 @@ export const evalCases: EvalCase[] = [
     preparar: { nombre: CLIENT_NAME },
     espera: {
       herramientas: ['crear_reserva'],
-      menciona: ['5.400'],
-      noMenciona: ['estetica.ejemplo'],
+      // Desde H9 los datos para pagar salen en la misma respuesta que la reserva (4.5).
+      menciona: ['5.400', 'estetica.ejemplo', 'comprobante'],
       verifica: (resultado) =>
         verifyAppointmentsOf(resultado, 'clienta', [
           { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT' },
@@ -586,6 +588,139 @@ export const evalCases: EvalCase[] = [
     espera: {
       verifica: (resultado) =>
         combineChecks(verifyHandoff(resultado, 'requires_consultation'), verifyAppointmentsOf(resultado, 'clienta', [])),
+    },
+  },
+  {
+    // H9, 4.5: pide de nuevo los datos para pagar la seña de su turno pendiente.
+    nombre: 'sena_pide_datos_de_nuevo',
+    mensajes: ['me pasás de nuevo el alias para pagar la seña?'],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      herramientas: ['generar_pago_sena'],
+      menciona: ['estetica.ejemplo', '5.400'],
+      verifica: (resultado) =>
+        combineChecks(verifyReplied(resultado), verifyNotHandedOff(resultado), verifyNoFalseConfirmation(resultado)),
+    },
+  },
+  {
+    // H9, 4.5 y 5.3: la foto del comprobante con la seña pendiente la registra el código. El asistente dice que la
+    // recibió, no la deriva y no dice que la seña llegó.
+    nombre: 'sena_comprobante',
+    mensajes: [{ imagen: null }],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      menciona: ['recib'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'martes', { estado: 'DEPOSIT_REVIEW' }),
+          verifyNotHandedOff(resultado),
+          verifyNoFalseConfirmation(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // Igual, con lo que escribió la clienta junto con la foto.
+    nombre: 'sena_comprobante_con_texto',
+    mensajes: [{ imagen: 'listo, ahí te mandé la seña' }],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'martes', { estado: 'DEPOSIT_REVIEW' }),
+          verifyNotHandedOff(resultado),
+          verifyNoFalseConfirmation(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // H9, 4.5: dice que ya transfirió pero no mandó la foto: se la pide, sin darla por paga.
+    nombre: 'sena_ya_transferi_sin_foto',
+    mensajes: ['ya te transferí la seña'],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      menciona: ['comprobante'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'martes', { estado: 'PENDING_DEPOSIT' }),
+          verifyNotHandedOff(resultado),
+          verifyNoFalseConfirmation(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // H9, 4.5: pregunta si llegó la seña con el comprobante en verificación: todavía lo ve una persona.
+    nombre: 'sena_en_verificacion_pregunta',
+    mensajes: ['ya les llegó la seña?'],
+    preparar: { nombre: CLIENT_NAME, turnos: [{ ...TUESDAY_APPOINTMENT, comprobante: true }] },
+    espera: {
+      menciona: ['verific'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'martes', { estado: 'DEPOSIT_REVIEW' }),
+          verifyNotHandedOff(resultado),
+          verifyNoFalseConfirmation(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // H9: un turno confirmado desde antes se describe como confirmado sin que el control de cambios lo frene.
+    nombre: 'sena_turno_ya_confirmado',
+    mensajes: ['mi turno del martes está confirmado?'],
+    preparar: { nombre: CLIENT_NAME, turnos: [{ ...TUESDAY_APPOINTMENT, senaAprobada: true }] },
+    espera: {
+      menciona: ['confirmado'],
+      verifica: (resultado) => combineChecks(verifyReplied(resultado), verifyNotHandedOff(resultado)),
+    },
+  },
+  {
+    // H9, 4.5: una foto con dos señas pendientes: el código no adivina de qué turno es y deriva con «pago».
+    nombre: 'sena_comprobante_dos_senas',
+    mensajes: [{ imagen: null }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [TUESDAY_APPOINTMENT, { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-15 10:00' }],
+    },
+    espera: {
+      sinHerramientas: true,
+      verifica: (resultado) => verifyHandoff(resultado, 'payment_issue'),
+    },
+  },
+  {
+    // Prueba manual de H9: con un turno ya confirmado (seña aprobada) y la charla sobre sus turnos en el historial, pidió
+    // otro turno y tocó un horario libre. El modelo contestó «no pude confirmar todavía… no quedó reservado» sin llamar a
+    // crear_reserva. Elegir es la confirmación (5.3): tiene que reservarlo, y el turno anterior sigue como estaba.
+    nombre: 'reserva_otro_turno_con_sena_aprobada',
+    mensajes: [
+      {
+        eleccion: { tipo: 'horario', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 10:00' },
+        titulo: 'mié 14/10 10:00',
+      },
+    ],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [{ ...TUESDAY_APPOINTMENT, senaAprobada: true }],
+      historial: [
+        { clienta: 'que turnos tengo reservado?' },
+        { asistente: 'Tenés el martes 13/10 a las 17:00, Esmaltado semipermanente con Mica: está confirmado.' },
+        { clienta: 'quiero sacar otro turno, para el miércoles que tenés?' },
+        {
+          asistente: 'Para el miércoles 14/10 Mica tiene estos horarios:',
+          botones: ['mié 14/10 10:00', 'mié 14/10 15:30', 'mié 14/10 17:00'],
+        },
+      ],
+    },
+    espera: {
+      herramientas: ['crear_reserva'],
+      menciona: ['estetica.ejemplo'],
+      verifica: (resultado) =>
+        verifyAppointmentsOf(resultado, 'clienta', [
+          { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-13 17:00', estado: 'CONFIRMED' },
+          { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 10:00', estado: 'PENDING_DEPOSIT' },
+        ]),
     },
   },
   {

@@ -70,17 +70,24 @@ describe('consultationTools: las herramientas de consulta de H7', () => {
 });
 
 describe('agentTools: las herramientas que usa el agente', () => {
-  it('son las de consulta y las de turnos (H8), con los nombres de la especificación (6.4): derivar no es una herramienta', () => {
+  it('son las de consulta, las de turnos (H8) y la de la seña (H9), con los nombres de la especificación (6.4): derivar no es una herramienta', () => {
     expect(agentTools.map((tool) => tool.name)).toEqual([
       ...consultationTools.map((tool) => tool.name),
       'consultar_horarios_para_reprogramar',
       'consultar_hora',
       'consultar_hora_para_reprogramar',
       'crear_reserva',
+      'generar_pago_sena',
       'listar_turnos_de_la_clienta',
       'reprogramar_turno',
       'cancelar_turno',
     ]);
+  });
+
+  it('los nombres cumplen el formato de la API del modelo: sin tildes ni ñ (lo mostraron las evaluaciones de H9)', () => {
+    // La API de Anthropic rechaza toda la llamada (400) si un nombre no cumple ^[a-zA-Z0-9_-]{1,128}$:
+    // con «generar_pago_seña» el asistente no contestaba nada.
+    for (const tool of agentTools) expect(tool.name, tool.name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
   });
 
   it('todas tienen una descripción para el modelo y cada parámetro le explica qué es', () => {

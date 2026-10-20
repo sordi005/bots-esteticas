@@ -61,8 +61,16 @@ describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)',
 
     for (const tool of agentTools) expect(prompt).toContain(tool.name);
     expect([...mentioned].sort()).toEqual(agentTools.map((tool) => tool.name).sort());
-    // generar_pago_seña llega en H9: hasta entonces el prompt no puede prometerla.
-    expect(prompt).not.toContain('generar_pago_seña');
+  });
+
+  it('la seña (H9, 4.5): pasa los datos de pago, el comprobante no se deriva y nunca da la seña por confirmada', () => {
+    const prompt = buildSystemPrompt(example);
+
+    expect(prompt).toMatch(/datos de «pago» tal cual/);
+    expect(prompt).toMatch(/generar_pago_sena/);
+    expect(prompt).toMatch(/\[Comprobante de la seña\][^\n]*no se deriva/);
+    expect(prompt).toMatch(/Nunca digas que la seña llegó, que se acreditó o que el turno quedó confirmado/);
+    expect(prompt).not.toMatch(/regla temporal/);
   });
 
   it('ante un precio inventado por la clienta, pide decir el precio real buscándolo con la herramienta', () => {
@@ -261,10 +269,16 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
     expect(booking).toMatch(/se ocupó[^.]*volvé a consultar[^.]*ofrecele otros/is);
   });
 
-  it('seña: el monto y el plazo tal cual los escribe la herramienta, y una persona le pasa los datos por el chat; no inventa datos de pago', () => {
-    expect(booking).toMatch(/pendiente de seña[^.]*monto[^.]*hasta cuándo/is);
-    expect(booking).toMatch(/una persona del equipo le pasa por este mismo chat los datos para pagarla/);
-    expect(booking).toMatch(/no inventes alias, cbu, links ni datos de pago/i);
+  it('seña (H9): los datos de «pago» en la misma respuesta que la reserva, y pide la foto del comprobante; no inventa datos de pago', () => {
+    expect(booking).toMatch(/pendiente de seña, en esa misma respuesta pasale los datos de «pago» tal cual/);
+    expect(booking).toMatch(/monto, hasta cuándo, alias o CBU y titular/);
+    expect(booking).toMatch(/foto del comprobante/);
+    expect(booking).toMatch(/nunca inventes alias, cbu, links ni datos de pago/i);
+  });
+
+  it('seña (H9): si ya pagó sin mandar la foto, se la pide; si la herramienta derivó, no inventa datos', () => {
+    expect(booking).toMatch(/ya pagó pero no mandó la foto, pedile la foto del comprobante/);
+    expect(booking).toMatch(/derivada=true por la seña[^\n]*«derivar» va null/);
   });
 
   it('cancelar: identifica el turno, pide confirmación con confirmada=false y cancela solo cuando la clienta confirmó', () => {

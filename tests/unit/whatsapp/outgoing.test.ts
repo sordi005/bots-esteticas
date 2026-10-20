@@ -52,6 +52,38 @@ describe('toGraphPayload: el formato exacto de la API de Meta', () => {
     });
   });
 
+  it('botones con una imagen de encabezado, por su id de Meta (el aviso de un comprobante, 8.2)', () => {
+    const payload = toGraphPayload(TO, {
+      type: 'buttons',
+      header: { type: 'image', imageId: '1037543291543636' },
+      body: '¿Llegó la transferencia?',
+      buttons: [
+        { id: 'si', title: 'Recibida' },
+        { id: 'no', title: 'No llegó' },
+      ],
+    });
+
+    expect(payload).toMatchObject({
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        header: { type: 'image', image: { id: '1037543291543636' } },
+        body: { text: '¿Llegó la transferencia?' },
+      },
+    });
+  });
+
+  it('una imagen de encabezado sin id no se envía', () => {
+    expect(() =>
+      toGraphPayload(TO, {
+        type: 'buttons',
+        header: { type: 'image', imageId: '' },
+        body: '¿Llegó?',
+        buttons: [{ id: 'si', title: 'Recibida' }],
+      }),
+    ).toThrow();
+  });
+
   it('una lista con secciones', () => {
     const message: OutgoingMessage = {
       type: 'list',

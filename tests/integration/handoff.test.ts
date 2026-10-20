@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 import { HANDOFF_PAUSE_MS, handOff, SENSITIVE_TOPIC_SUMMARY } from '../../src/modules/conversation/handoff.js';
 import { conversations, handoffs } from '../../src/modules/conversation/schema.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
 import { tenants, tenantSettings, type AttentionHoursBlock } from '../../src/modules/tenants/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { testDatabaseUrl } from './support/database.js';
@@ -231,6 +232,89 @@ describe('handOff: derivar a una persona (4.8)', () => {
       await derive(f, now);
 
       expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(1);
+    });
+  });
+
+  describe('el aviso a la dueña (4.8, H9)', () => {
+    const noticesOf = (tenantId: string) =>
+      db.select().from(notifications).where(eq(notifications.tenantId, tenantId));
+
+    it('se guarda junto con la derivación, con el botón «Ya la atendí»', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+
+      const { handoffId } = await handOff(db, {
+        tenantId: f.tenantId,
+        conversationId: f.conversationId,
+        reason: 'complaint',
+        summary: 'Se quejó del turno de ayer',
+        now: mendoza('2026-10-09', '10:00'),
+      });
+
+      const [notice] = await noticesOf(f.tenantId);
+      expect(notice).toMatchObject({
+        recipient: 'owner',
+        kind: 'handoff',
+        handoffId,
+        customerId: f.customerId,
+        status: 'pending',
+        message: {
+          type: 'buttons',
+          buttons: [{ id: `aviso:${notice?.id ?? ''}:atendida`, title: 'Ya la atendí' }],
+        },
+      });
+      expect(notice?.message.body).toContain('Caro Pérez');
+      expect(notice?.message.body).toContain('Se quejó del turno de ayer');
+      // Pausado hasta las 22:00 del mismo viernes (12 horas).
+      expect(notice?.message.body).toContain('viernes 9/10 22:00');
+    });
+
+    it('con un tema sensible, el aviso lleva el resumen fijo y nunca el detalle (regla 9)', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+
+      await handOff(db, {
+        tenantId: f.tenantId,
+        conversationId: f.conversationId,
+        reason: 'sensitive_topic',
+        summary: 'Está embarazada de tres meses',
+        now: mendoza('2026-10-09', '10:00'),
+      });
+
+      const [notice] = await noticesOf(f.tenantId);
+      expect(notice?.message.body).toContain(SENSITIVE_TOPIC_SUMMARY);
+      expect(notice?.message.body).not.toMatch(/embarazada/);
+    });
+
+    it('una derivación repetida en la misma pausa no manda otro aviso', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+      const derive = () =>
+        handOff(db, {
+          tenantId: f.tenantId,
+          conversationId: f.conversationId,
+          reason: 'complaint',
+          summary: 'Se quejó del turno de ayer',
+          now: mendoza('2026-10-09', '10:00'),
+        });
+
+      await derive();
+      await derive();
+
+      expect(await noticesOf(f.tenantId)).toHaveLength(1);
+    });
+
+    it('sin aviso cuando quien deriva ya sabe (la dueña acaba de tocar «No llegó»)', async () => {
+      const f = await tenantWithHours(WEEKDAYS);
+
+      await handOff(db, {
+        tenantId: f.tenantId,
+        conversationId: f.conversationId,
+        reason: 'payment_issue',
+        summary: 'La transferencia de la seña no llegó',
+        now: mendoza('2026-10-09', '10:00'),
+        notifyOwner: false,
+      });
+
+      expect(await handoffsOf(f.tenantId, f.conversationId)).toHaveLength(1);
+      expect(await noticesOf(f.tenantId)).toEqual([]);
     });
   });
 

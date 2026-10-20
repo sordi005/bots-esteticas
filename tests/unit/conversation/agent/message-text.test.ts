@@ -51,6 +51,16 @@ describe('describeInbound: lo que dijo la clienta, como texto para el modelo', (
     ).toBe('[Imagen] «Quiero este diseño»');
   });
 
+  it('una imagen que el código registró como comprobante llega como tal, no como una imagen para derivar (4.5)', () => {
+    const receipts = new Set(['1']);
+
+    expect(describeInbound('image', { type: 'image', image: { id: '1' } }, receipts).text).toBe('[Comprobante de la seña]');
+    expect(describeInbound('image', { type: 'image', image: { id: '1', caption: 'ahí va' } }, receipts).text).toBe(
+      '[Comprobante de la seña] «ahí va»',
+    );
+    expect(describeInbound('image', { type: 'image', image: { id: '2' } }, receipts).text).toBe('[Imagen]');
+  });
+
   it('un texto con la forma rota no rompe: llega como mensaje que no se puede leer', () => {
     expect(describeInbound('text', { type: 'text' }).text).toBe('[Mensaje que no se puede leer]');
   });

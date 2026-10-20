@@ -61,6 +61,15 @@ const envSchema = z
         .regex(/^[1-9][0-9]{7,14}$/, 'Solo dígitos, como figura en la lista de prueba de Meta')
         .optional(),
     ),
+    /**
+     * Número de avisos del servicio (8.2): de ahí salen los avisos a las dueñas. Es del servicio, no
+     * de un negocio. Sin configurar, salen del número de cada negocio (la demo de la fase 0).
+     */
+    NOTIFICATIONS_PHONE_NUMBER_ID: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().regex(/^\d+$/, 'Solo dígitos, como lo da Meta').optional(),
+    ),
+    NOTIFICATIONS_ACCESS_TOKEN: optionalSecret,
     /** Clave de la API de Claude (sección 8.5). Secreta: nunca en logs. */
     ANTHROPIC_API_KEY: optionalSecret,
     ANTHROPIC_MODEL: z.preprocess(
@@ -74,6 +83,13 @@ const envSchema = z
         code: 'custom',
         path: [env.WHATSAPP_APP_SECRET ? 'WHATSAPP_VERIFY_TOKEN' : 'WHATSAPP_APP_SECRET'],
         message: 'El secreto de la app y el token de verificación se configuran juntos',
+      });
+    }
+    if (Boolean(env.NOTIFICATIONS_PHONE_NUMBER_ID) !== Boolean(env.NOTIFICATIONS_ACCESS_TOKEN)) {
+      context.addIssue({
+        code: 'custom',
+        path: [env.NOTIFICATIONS_PHONE_NUMBER_ID ? 'NOTIFICATIONS_ACCESS_TOKEN' : 'NOTIFICATIONS_PHONE_NUMBER_ID'],
+        message: 'El número de avisos y su token se configuran juntos',
       });
     }
     if (env.NODE_ENV !== 'production') return;
@@ -112,6 +128,8 @@ export interface Config {
   whatsapp: { appSecret: string; verifyToken: string; graphApiVersion: string } | null;
   /** Solo en desarrollo: todo envío de WhatsApp va a este número (sección 8.1). */
   whatsappTestRecipient: string | null;
+  /** Null: los avisos a la dueña salen del número de cada negocio (fase 0, sección 8.2). */
+  notificationsNumber: { phoneNumberId: string; accessToken: string } | null;
   /** Null: sin clave el worker no contesta conversaciones (sección 8.5). En producción es obligatoria. */
   anthropicApiKey: string | null;
   anthropicModel: string;
@@ -151,6 +169,10 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
           }
         : null,
     whatsappTestRecipient: data.WHATSAPP_TEST_RECIPIENT ?? null,
+    notificationsNumber:
+      data.NOTIFICATIONS_PHONE_NUMBER_ID && data.NOTIFICATIONS_ACCESS_TOKEN
+        ? { phoneNumberId: data.NOTIFICATIONS_PHONE_NUMBER_ID, accessToken: data.NOTIFICATIONS_ACCESS_TOKEN }
+        : null,
     anthropicApiKey: data.ANTHROPIC_API_KEY ?? null,
     anthropicModel: data.ANTHROPIC_MODEL,
   };

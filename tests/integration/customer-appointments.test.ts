@@ -75,7 +75,7 @@ describe('findCustomerAppointment: un turno de esta clienta', () => {
       serviceName: 'Esmaltado semipermanente',
       professionalId: f.mica,
       professionalName: 'Mica',
-      deposit: { amountCents: 540_000, status: 'pending', expiresAt: at('2026-10-04', '10:00') },
+      deposit: { amountCents: 540_000, status: 'pending', method: 'transfer', expiresAt: at('2026-10-04', '10:00') },
     });
   });
 

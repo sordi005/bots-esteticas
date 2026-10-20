@@ -94,6 +94,8 @@ export interface EvalAppointmentSetup {
   otraClienta?: string;
   /** La seña ya está paga: el turno queda confirmado. */
   senaAprobada?: boolean;
+  /** Ya mandó el comprobante: la seña queda en verificación (H9, 4.5). */
+  comprobante?: boolean;
   /**
    * Los inicios anteriores del turno, del primero al último: se reservó en el primero y se
    * reprogramó a cada uno de los siguientes hasta `inicio`. Cada uno es una reprogramación usada.
@@ -158,7 +160,8 @@ function visibleText(result: EvalResult): string {
 }
 
 /** Resultados con los que la clienta recibió una respuesta del agente (aunque sea una a medias). */
-const ANSWERED: AgentOutcome[] = ['replied', 'tool_limit'];
+/** Contestó: el modelo, o el código con un texto fijo que es la respuesta correcta (varias señas pendientes, H9). */
+const ANSWERED: AgentOutcome[] = ['replied', 'tool_limit', 'handoff_payment_issue'];
 
 export function evaluateCase(evalCase: EvalCase, result: EvalResult): Evaluation {
   const { espera } = evalCase;

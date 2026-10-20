@@ -1,0 +1,1 @@
+ALTER TYPE "public"."agent_outcome" ADD VALUE 'handoff_payment_issue';

@@ -29,6 +29,7 @@ const whatsappWebhook: WhatsAppWebhookOptions | undefined = config.whatsapp
       onEvents: async (events, log) => {
         const { failedDeliveries, ...counts } = await recordWebhookEvents(database.db, events, {
           now: new Date(),
+          ...(config.notificationsNumber ? { notificationsPhoneNumberId: config.notificationsNumber.phoneNumberId } : {}),
         });
         log[counts.unknownNumber > 0 ? 'warn' : 'info'](counts, 'Webhook de WhatsApp guardado');
         for (const failure of failedDeliveries) {
@@ -40,6 +41,13 @@ const whatsappWebhook: WhatsAppWebhookOptions | undefined = config.whatsapp
 if (!whatsappWebhook) {
   logger.warn('WhatsApp no está configurado: el webhook no se registra');
 }
+
+// Un solo cliente de WhatsApp para contestar y para los avisos. En desarrollo, con el número de
+// prueba de Meta, todo envío va al número de la lista de permitidos (8.1).
+const whatsappClient = withRecipientOverride(
+  createWhatsAppClient({ graphApiVersion: config.whatsapp?.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION }),
+  config.whatsappTestRecipient ?? undefined,
+);
 
 // Worker de tareas programadas, en el mismo proceso (sección 6.7). Las conversaciones las contesta
 // el agente (8.5), también en producción desde H8; en desarrollo, solo con las claves puestas.
@@ -57,11 +65,8 @@ switch (conversationMode.kind) {
     }
     break;
   case 'agent': {
-    const client = createWhatsAppClient({
-      graphApiVersion: config.whatsapp?.graphApiVersion ?? DEFAULT_GRAPH_API_VERSION,
-    });
     conversations = {
-      client: withRecipientOverride(client, config.whatsappTestRecipient ?? undefined),
+      client: whatsappClient,
       credentialsKey: conversationMode.credentialsKey,
       respond: createAgentResponder({
         db: database.db,
@@ -80,10 +85,31 @@ switch (conversationMode.kind) {
     break;
   }
 }
+
+// Avisos a la dueña y a la clienta (6.7, 8.2): sin la clave de cifrado no hay cómo leer el token del negocio.
+const notifications: WorkerDependencies['notifications'] = config.credentialsKey
+  ? {
+      client: whatsappClient,
+      credentialsKey: config.credentialsKey,
+      ...(config.notificationsNumber ? { notificationsNumber: config.notificationsNumber } : {}),
+    }
+  : undefined;
+if (notifications) {
+  logger.info(
+    { notificationsNumber: config.notificationsNumber !== null },
+    config.notificationsNumber
+      ? 'Los avisos a las dueñas salen del número de avisos'
+      : 'Los avisos a las dueñas salen del número de cada negocio (fase 0)',
+  );
+} else {
+  logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY los avisos no se envían');
+}
+
 const worker = buildWorker({
   db: database.db,
   logger,
   ...(conversations ? { conversations } : {}),
+  ...(notifications ? { notifications } : {}),
 });
 
 const server = buildServer({

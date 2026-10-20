@@ -1,3 +1,4 @@
+import { claimsAppointmentChange } from '../../src/modules/conversation/agent/claimed-change.js';
 import type { AppointmentStatus } from '../../src/modules/scheduling/appointment-state-machine.js';
 import { normalizeText, type EvalAppointmentState, type EvalResult, type EvalState } from './evaluate.js';
 
@@ -128,6 +129,19 @@ export function verifyHandoffSummaryWithout(result: EvalResult, text: string): s
   if (derivaciones.length === 0) return 'No hay ninguna derivación para mirar el resumen';
   const found = derivaciones.find((handoff) => normalizeText(handoff.resumen).includes(normalizeText(text)));
   return found ? `El resumen de la derivación contiene "${text}": «${found.resumen}»` : null;
+}
+
+/**
+ * El texto no afirma que la seña llegó ni que el turno quedó confirmado (4.5): lo mira con el mismo
+ * detector que usa el ciclo del agente, así que solo cuenta como falla si se le escapó al control.
+ */
+export function verifyNoFalseConfirmation(result: EvalResult): string | null {
+  return claimsAppointmentChange(result.texto) ? `Afirma un cambio que no pasó: «${result.texto}»` : null;
+}
+
+/** La respuesta salió bien: no es el texto fijo de un intento fallido (8.5). */
+export function verifyReplied(result: EvalResult): string | null {
+  return result.outcome === 'replied' ? null : `La vuelta terminó en ${result.outcome}, no en una respuesta`;
 }
 
 /** El nombre que quedó en la ficha de la clienta. */

@@ -122,6 +122,13 @@ const interactiveMessage = z.object({
   interactive: z.object({ button_reply: reply.optional(), list_reply: reply.optional() }),
 });
 const captionedImage = z.object({ image: z.object({ caption: z.string() }) });
+const imageWithId = z.object({ image: z.object({ id: z.string().min(1) }) });
+
+/** El id de la imagen de un mensaje, o null si no es una imagen. Es lo que se guarda como comprobante (4.5). */
+export function inboundImageId(message: Record<string, unknown>): string | null {
+  const image = imageWithId.safeParse(message);
+  return image.success ? image.data.image.id : null;
+}
 
 /**
  * Lo que dijo la clienta, como lo necesita el asistente. Una respuesta a botones o listas

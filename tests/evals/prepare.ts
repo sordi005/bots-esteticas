@@ -8,7 +8,12 @@ import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { resolveChoice } from '../../src/modules/conversation/tools/choices.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
-import { bookAppointment, changeAppointmentStatus, rescheduleAppointment } from '../../src/modules/scheduling/booking.js';
+import {
+  bookAppointment,
+  changeAppointmentStatus,
+  rescheduleAppointment,
+  submitTransferReceipt,
+} from '../../src/modules/scheduling/booking.js';
 import { outgoingMessageSchema, type OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { EVAL_TIME_ZONE } from './clock.js';
 import type { EvalAppointmentSetup, EvalCase, EvalChoice, EvalHistoryEntry, EvalInbound } from './evaluate.js';
@@ -282,6 +287,17 @@ async function createAppointment(input: {
       .update(deposits)
       .set({ status: 'approved' })
       .where(and(eq(deposits.tenantId, tenantId), eq(deposits.appointmentId, booked.appointmentId)));
+  }
+
+  if (appointment.comprobante) {
+    if (!booked.deposit) throw fail(`${describe} no lleva seña: no puede tener comprobante`);
+    const receipt = await submitTransferReceipt(db, {
+      tenantId,
+      depositId: booked.deposit.id,
+      mediaId: `eval-comprobante-previo-${randomUUID()}`,
+      now: bookedAt,
+    });
+    if (!receipt.ok) throw fail(`${describe} no pudo quedar con el comprobante en verificación (${receipt.reason})`);
   }
 
   for (const start of starts.slice(1)) {

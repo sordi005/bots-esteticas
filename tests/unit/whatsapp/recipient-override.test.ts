@@ -30,6 +30,15 @@ describe('withRecipientOverride', () => {
     expect(sent).toEqual([{ ...INPUT, to: '54261155550000' }]);
   });
 
+  it('conserva los demás métodos del cliente (las imágenes no tienen destinataria)', async () => {
+    const { client } = recordingClient();
+    const withMedia = { ...client, uploadMedia: () => Promise.resolve({ mediaId: 'media-1' }) };
+
+    const overridden = withRecipientOverride(withMedia, '54261155550000');
+
+    expect(await overridden.uploadMedia()).toEqual({ mediaId: 'media-1' });
+  });
+
   it('sin número, devuelve el mismo cliente', async () => {
     const { client, sent } = recordingClient();
 
