@@ -121,6 +121,8 @@ const reply = z.object({ id: z.string(), title: z.string() });
 const interactiveMessage = z.object({
   interactive: z.object({ button_reply: reply.optional(), list_reply: reply.optional() }),
 });
+/** El botón de una plantilla (8.1): llega como tipo `button`, con el dato que se fijó al enviar. */
+const templateButton = z.object({ button: z.object({ payload: z.string().min(1), text: z.string() }) });
 const captionedImage = z.object({ image: z.object({ caption: z.string() }) });
 const imageWithId = z.object({ image: z.object({ id: z.string().min(1) }) });
 
@@ -131,8 +133,9 @@ export function inboundImageId(message: Record<string, unknown>): string | null 
 }
 
 /**
- * Lo que dijo la clienta, como lo necesita el asistente. Una respuesta a botones o listas
- * trae el `replyId` de la opción elegida: se procesa sin pasar por la IA (sección 5.3).
+ * Lo que dijo la clienta, como lo necesita el asistente. Una respuesta a botones o listas (también
+ * el botón de una plantilla) trae el `replyId` de la opción elegida: se procesa sin pasar por la IA
+ * (sección 5.3).
  */
 export function inboundContent(message: Record<string, unknown>): {
   text: string | null;
@@ -146,6 +149,9 @@ export function inboundContent(message: Record<string, unknown>): {
     ? (interactive.data.interactive.button_reply ?? interactive.data.interactive.list_reply)
     : undefined;
   if (choice) return { text: choice.title, replyId: choice.id };
+
+  const button = templateButton.safeParse(message);
+  if (button.success) return { text: button.data.button.text, replyId: button.data.button.payload };
 
   const image = captionedImage.safeParse(message);
   return { text: image.success ? image.data.image.caption : null, replyId: null };
