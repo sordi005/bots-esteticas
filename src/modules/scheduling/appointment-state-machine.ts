@@ -68,6 +68,12 @@ const SCHEDULE_OCCUPYING_STATUSES: readonly AppointmentStatus[] = [
   'CONFIRMED',
 ];
 
+/**
+ * Los turnos que reciben el recordatorio y en los que la clienta confirma que va (4.7): confirmados,
+ * o con la seña pagada esperando que la dueña la verifique. Uno pendiente de seña todavía no se pagó.
+ */
+const REMINDED_STATUSES: readonly AppointmentStatus[] = ['CONFIRMED', 'DEPOSIT_REVIEW'];
+
 export function canTransition(
   from: AppointmentStatus | null,
   to: AppointmentStatus,
@@ -86,12 +92,16 @@ export function occupiesSchedule(status: AppointmentStatus): boolean {
   return SCHEDULE_OCCUPYING_STATUSES.includes(status);
 }
 
+export function receivesReminder(status: AppointmentStatus): boolean {
+  return REMINDED_STATUSES.includes(status);
+}
+
 export class InvalidTransitionError extends Error {
   override name = 'InvalidTransitionError';
 }
 
-/** Un evento cambia el estado del turno o, sin cambiarlo, su horario. */
-export const APPOINTMENT_EVENT_KINDS = ['status_change', 'rescheduled'] as const;
+/** Un evento cambia el estado del turno o, sin cambiarlo, su horario o la confirmación de la clienta. */
+export const APPOINTMENT_EVENT_KINDS = ['status_change', 'rescheduled', 'attendance_confirmed'] as const;
 
 export type AppointmentEventKind = (typeof APPOINTMENT_EVENT_KINDS)[number];
 
@@ -154,6 +164,26 @@ export function rescheduleEvent(input: {
     actor,
     reason: reason ?? null,
     previousTimeRange,
+    occurredAt: at,
+  };
+}
+
+/**
+ * La clienta tocó "Confirmo" en el recordatorio (4.7): no cambia el estado, queda como evento. El aviso
+ * diario (H16) lo usa para mostrar los turnos sin confirmar. Lo registra el asistente.
+ */
+export function attendanceConfirmedEvent(input: { status: AppointmentStatus; at: Date }): AppointmentEvent {
+  const { status, at } = input;
+  if (!receivesReminder(status)) {
+    throw new InvalidTransitionError(`Confirmación de asistencia no permitida: ${status}`);
+  }
+  return {
+    kind: 'attendance_confirmed',
+    fromStatus: status,
+    toStatus: status,
+    actor: 'assistant',
+    reason: null,
+    previousTimeRange: null,
     occurredAt: at,
   };
 }

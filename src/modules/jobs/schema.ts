@@ -10,6 +10,9 @@ export const jobKind = pgEnum('job_kind', [
   'send_notification',
   'process_owner_reply',
   'remind_deposit_receipt',
+  // Recordatorios y vencimiento de reservas provisorias (H10).
+  'send_appointment_reminder',
+  'expire_reservation',
 ]);
 
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);
