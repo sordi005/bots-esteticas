@@ -11,6 +11,9 @@
  *                       `horario:` solo reserva y `reprogramar:` solo reprograma.
  *   mas_reprogramar:<turno>:<inicio ISO del último horario ofrecido>
  *                       "Ver otros horarios" de una reprogramación: sigue en modo reprogramar.
+ *   recordatorio:<turno>:confirmar|reprogramar|cancelar
+ *                       los botones del recordatorio del día anterior (4.7, H10): van en una plantilla y
+ *                       vuelven como el dato del botón.
  *
  * Cuando la clienta elige, WhatsApp devuelve el id tal cual. Nunca se confía en él: se lee
  * con `parseChoiceId` y se vuelve a validar contra la base (`resolveChoice`).
@@ -26,7 +29,21 @@ const APPOINTMENT_ID = new RegExp(`^turno:(${UUID})$`);
 const CANCEL_ID = new RegExp(`^cancelar:(${UUID})$`);
 const RESCHEDULE_ID = new RegExp(`^reprogramar:(${UUID}):(${INSTANT})$`);
 const MORE_RESCHEDULE_ID = new RegExp(`^mas_reprogramar:(${UUID}):(${INSTANT})$`);
+const REMINDER_ID = new RegExp(`^recordatorio:(${UUID}):(confirmar|reprogramar|cancelar)$`);
 const BARE_UUID = new RegExp(`^${UUID}$`);
+
+/** Lo que pide la clienta desde el recordatorio: confirmar que va, reprogramar o cancelar (4.7). */
+export type ReminderAction = 'confirm' | 'reschedule' | 'cancel';
+
+const REMINDER_CODES = {
+  confirm: 'confirmar',
+  reschedule: 'reprogramar',
+  cancel: 'cancelar',
+} as const satisfies Record<ReminderAction, string>;
+
+const REMINDER_ACTIONS = new Map<string, ReminderAction>(
+  Object.entries(REMINDER_CODES).map(([action, code]) => [code, action as ReminderAction]),
+);
 
 export const choiceIds = {
   service: (serviceId: string) => `servicio:${serviceId}`,
@@ -38,6 +55,7 @@ export const choiceIds = {
   cancel: (appointmentId: string) => `cancelar:${appointmentId}`,
   reschedule: (appointmentId: string, start: Date) => `reprogramar:${appointmentId}:${start.toISOString()}`,
   moreReschedule: (appointmentId: string, after: Date) => `mas_reprogramar:${appointmentId}:${after.toISOString()}`,
+  reminder: (appointmentId: string, action: ReminderAction) => `recordatorio:${appointmentId}:${REMINDER_CODES[action]}`,
 };
 
 export type ParsedChoiceId =
@@ -47,7 +65,8 @@ export type ParsedChoiceId =
   | { kind: 'appointment'; appointmentId: string }
   | { kind: 'cancel'; appointmentId: string }
   | { kind: 'reschedule'; appointmentId: string; start: Date }
-  | { kind: 'more_reschedule'; appointmentId: string; after: Date };
+  | { kind: 'more_reschedule'; appointmentId: string; after: Date }
+  | { kind: 'reminder'; appointmentId: string; action: ReminderAction };
 
 /** Una fecha con la forma exacta de `toISOString()`, o null si no existe en el calendario. */
 function parseInstant(text: string): Date | null {
@@ -90,6 +109,10 @@ export function parseChoiceId(id: string): ParsedChoiceId | null {
     const after = parseInstant(moreReschedule[2]);
     return after ? { kind: 'more_reschedule', appointmentId: moreReschedule[1], after } : null;
   }
+
+  const reminder = REMINDER_ID.exec(id);
+  const action = reminder?.[2] ? REMINDER_ACTIONS.get(reminder[2]) : undefined;
+  if (reminder?.[1] && action) return { kind: 'reminder', appointmentId: reminder[1], action };
 
   return null;
 }

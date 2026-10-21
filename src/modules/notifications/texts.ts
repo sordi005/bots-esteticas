@@ -1,7 +1,11 @@
 import type { AppointmentStatus } from '../scheduling/appointment-state-machine.js';
 import type { handoffReason } from '../conversation/schema.js';
 import type { depositStatus } from '../payments/schema.js';
-import { formatLocalSlot, formatPesos } from '../conversation/format.js';
+import { formatClockTime, formatLocalSlot, formatPesos } from '../conversation/format.js';
+import { choiceIds } from '../conversation/tools/choice-ids.js';
+import type { TemplateMessage } from '../whatsapp/outgoing.js';
+import { renderTemplate, templateMessage } from '../whatsapp/templates.js';
+import { instantToLocal } from '../../shared/time-zone.js';
 import { ownerButtonId } from './owner-buttons.js';
 
 /**
@@ -84,6 +88,24 @@ export function depositReceiptNotice(input: {
   };
 }
 
+/**
+ * La versión con plantilla de cada aviso (8.1, H10): sale si Meta rechaza el mensaje libre por estar
+ * fuera de la ventana de 24 horas. Los botones llevan los mismos ids que los del mensaje libre.
+ */
+
+/** El comprobante con plantilla. La imagen del encabezado se fija al enviar (8.2). */
+export function depositReceiptTemplate(input: {
+  notificationId: string;
+  appointment: NoticeAppointment;
+  amountCents: number;
+}): TemplateMessage {
+  const { notificationId, appointment } = input;
+  return templateMessage('aviso_comprobante', {
+    params: { clienta: who(appointment), monto: formatPesos(input.amountCents), turno: describeAppointment(appointment) },
+    buttonPayloads: [ownerButtonId(notificationId, 'deposit_received'), ownerButtonId(notificationId, 'deposit_not_received')],
+  });
+}
+
 /** Una derivación (4.8), con "Ya la atendí". */
 export function handoffNotice(input: {
   notificationId: string;
@@ -105,6 +127,26 @@ export function handoffNotice(input: {
   };
 }
 
+/** La derivación con plantilla, con "Ya la atendí". */
+export function handoffTemplate(input: {
+  notificationId: string;
+  appointment: NoticeCustomer;
+  reason: HandoffReason;
+  summary: string;
+  pausedUntil: Date;
+}): TemplateMessage {
+  const { appointment } = input;
+  return templateMessage('aviso_derivacion', {
+    params: {
+      clienta: who(appointment),
+      motivo: REASON_LABELS[input.reason],
+      resumen: input.summary,
+      hasta: formatLocalSlot(input.pausedUntil, appointment.timeZone),
+    },
+    buttonPayloads: [ownerButtonId(input.notificationId, 'handoff_attended')],
+  });
+}
+
 /** El asistente canceló un turno (4.6). Si había seña pagada o en verificación, la devolución la decide ella. */
 export function cancellationNotice(input: {
   appointment: NoticeAppointment;
@@ -122,6 +164,34 @@ export function cancellationNotice(input: {
   return text(`*Cancelación*\n${appointment.customerName} canceló su turno: ${describeAppointment(appointment)}.${depositLine}`);
 }
 
+/** El estado de la seña en la plantilla de la cancelación: la variable no puede ir vacía. */
+function depositState(deposit: { status: DepositStatus; amountCents: number } | null): string {
+  const amount = deposit ? formatPesos(deposit.amountCents) : '';
+  switch (deposit?.status) {
+    case 'approved':
+      return `pagada (${amount}): la devolución o el traspaso los decidís vos`;
+    case 'in_review':
+      return `en verificación (${amount}): si la transferencia llegó, la devolución o el traspaso los decidís vos`;
+    case 'pending':
+      return 'sin pagar';
+    case 'rejected':
+    case 'expired':
+    case undefined:
+      return 'no llevaba';
+  }
+}
+
+/** La cancelación con plantilla. */
+export function cancellationTemplate(input: {
+  appointment: NoticeAppointment;
+  deposit: { status: DepositStatus; amountCents: number } | null;
+}): TemplateMessage {
+  const { appointment } = input;
+  return templateMessage('aviso_cancelacion', {
+    params: { clienta: appointment.customerName, turno: describeAppointment(appointment), sena: depositState(input.deposit) },
+  });
+}
+
 /** El asistente reprogramó un turno (4.6). */
 export function rescheduleNotice(input: { appointment: NoticeAppointment; previousStart: Date }): TextMessage {
   const { appointment } = input;
@@ -129,6 +199,20 @@ export function rescheduleNotice(input: { appointment: NoticeAppointment; previo
     `*Reprogramación*\n${appointment.customerName} pasó su turno de ${appointment.serviceName} con ` +
       `${appointment.professionalName} del ${when(appointment, input.previousStart)} al ${when(appointment)}.`,
   );
+}
+
+/** La reprogramación con plantilla. */
+export function rescheduleTemplate(input: { appointment: NoticeAppointment; previousStart: Date }): TemplateMessage {
+  const { appointment } = input;
+  return templateMessage('aviso_reprogramacion', {
+    params: {
+      clienta: appointment.customerName,
+      servicio: appointment.serviceName,
+      profesional: appointment.professionalName,
+      antes: when(appointment, input.previousStart),
+      despues: when(appointment),
+    },
+  });
 }
 
 /** Qué pasó con el botón del comprobante que tocó la dueña. */
@@ -183,17 +267,71 @@ export function handoffAttendedAck(input: {
   }
 }
 
+/**
+ * Los avisos a la clienta tienen el mismo texto como mensaje libre y como plantilla (4.5, 8.1): el libre
+ * es la plantilla con sus variables. Así lo que lee la clienta no depende de por dónde salió.
+ */
+function asText(template: TemplateMessage): TextMessage {
+  const body = renderTemplate(template);
+  if (!body) throw new Error(`El código no conoce la plantilla ${template.name}`);
+  return text(body);
+}
+
+/** A la clienta, con plantilla: la dueña confirmó la transferencia (4.5). */
+export function customerDepositConfirmedTemplate(appointment: NoticeAppointment): TemplateMessage {
+  return templateMessage('sena_confirmada', {
+    params: { servicio: appointment.serviceName, profesional: appointment.professionalName, fecha_hora: when(appointment) },
+  });
+}
+
 /** A la clienta: la dueña confirmó la transferencia (4.5). */
 export function customerDepositConfirmed(appointment: NoticeAppointment): TextMessage {
-  return text(
-    `¡Seña recibida! Tu turno quedó confirmado: ${when(appointment)}, ${appointment.serviceName} con ${appointment.professionalName}.`,
-  );
+  return asText(customerDepositConfirmedTemplate(appointment));
+}
+
+/** A la clienta, con plantilla: la transferencia no llegó (4.5). */
+export function customerDepositRejectedTemplate(appointment: NoticeAppointment): TemplateMessage {
+  return templateMessage('sena_rechazada', { params: { fecha_hora: when(appointment) } });
 }
 
 /** A la clienta: la transferencia no llegó (4.5). */
 export function customerDepositRejected(appointment: NoticeAppointment): TextMessage {
-  return text(
-    `No pudimos verificar la transferencia de la seña, así que el turno del ${when(appointment)} quedó sin reservar. ` +
-      'Si ya la hiciste, una persona del equipo te escribe por acá.',
-  );
+  return asText(customerDepositRejectedTemplate(appointment));
+}
+
+/** A la clienta, con plantilla: venció su reserva provisoria (4.5, H10). */
+export function reservationExpiredTemplate(appointment: NoticeAppointment): TemplateMessage {
+  return templateMessage('reserva_vencida', {
+    params: { servicio: appointment.serviceName, fecha_hora: when(appointment) },
+  });
+}
+
+/** A la clienta: venció su reserva provisoria, y se le ofrece otro horario (4.5, H10). */
+export function reservationExpired(appointment: NoticeAppointment): TextMessage {
+  return asText(reservationExpiredTemplate(appointment));
+}
+
+/** El recordatorio del día anterior (4.7): siempre con plantilla, con "Confirmo", "Reprogramar" y "Cancelar". */
+export function appointmentReminder(input: { appointmentId: string; appointment: NoticeAppointment }): TemplateMessage {
+  const { appointmentId, appointment } = input;
+  return templateMessage('recordatorio_turno', {
+    params: { servicio: appointment.serviceName, profesional: appointment.professionalName, fecha_hora: when(appointment) },
+    buttonPayloads: [
+      choiceIds.reminder(appointmentId, 'confirm'),
+      choiceIds.reminder(appointmentId, 'reschedule'),
+      choiceIds.reminder(appointmentId, 'cancel'),
+    ],
+  });
+}
+
+/** El recordatorio corto (4.7): la hora y la dirección, sin botones. */
+export function shortAppointmentReminder(input: { appointment: NoticeAppointment; address: string }): TemplateMessage {
+  const { appointment } = input;
+  return templateMessage('recordatorio_turno_corto', {
+    params: {
+      hora: formatClockTime(instantToLocal(appointment.start, appointment.timeZone).time),
+      servicio: appointment.serviceName,
+      direccion: input.address,
+    },
+  });
 }

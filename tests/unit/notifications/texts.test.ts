@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appointmentReminder,
   cancellationNotice,
+  cancellationTemplate,
   customerDepositConfirmed,
+  customerDepositConfirmedTemplate,
   customerDepositRejected,
+  customerDepositRejectedTemplate,
   depositReceiptNotice,
+  depositReceiptTemplate,
   depositReviewAck,
   handoffAttendedAck,
   handoffNotice,
+  handoffTemplate,
+  reservationExpired,
+  reservationExpiredTemplate,
   rescheduleNotice,
+  rescheduleTemplate,
+  shortAppointmentReminder,
   type NoticeAppointment,
 } from '../../../src/modules/notifications/texts.js';
+import { renderTemplate } from '../../../src/modules/whatsapp/templates.js';
 import { freeFormMessageSchema, type FreeFormMessage } from '../../../src/modules/whatsapp/outgoing.js';
 import { localDateTimeToInstant } from '../../../src/shared/time-zone.js';
 
@@ -162,15 +173,126 @@ describe('respuestas a la dueña después de tocar un botón', () => {
 });
 
 describe('avisos a la clienta (4.5)', () => {
-  it('seña confirmada: el texto fijo con el turno', () => {
+  it('seña confirmada: el texto fijo con el turno, el mismo que su plantilla', () => {
+    const template = customerDepositConfirmedTemplate(appointment);
+
     expect(customerDepositConfirmed(appointment).body).toBe(
-      '¡Seña recibida! Tu turno quedó confirmado: lunes 5/10 10:00, Esmaltado semipermanente con Mica.',
+      '¡Seña recibida! Tu turno de Esmaltado semipermanente con Mica del lunes 5/10 10:00 quedó confirmado. ¡Te esperamos!',
     );
+    expect(template).toMatchObject({ type: 'template', name: 'sena_confirmada' });
+    expect(renderTemplate(template)).toBe(customerDepositConfirmed(appointment).body);
+  });
+
+  it('seña rechazada: el texto de su plantilla es el mismo', () => {
+    expect(renderTemplate(customerDepositRejectedTemplate(appointment))).toBe(customerDepositRejected(appointment).body);
+  });
+
+  it('reserva vencida: ofrece otro horario, con el mismo texto que su plantilla (H10)', () => {
+    const template = reservationExpiredTemplate(appointment);
+
+    expect(reservationExpired(appointment).body).toBe(
+      'Tu reserva de Esmaltado semipermanente del lunes 5/10 10:00 se liberó porque no nos llegó la seña a tiempo. ' +
+        'Si querés otro horario, respondé este mensaje y te ayudamos.',
+    );
+    expect(template.name).toBe('reserva_vencida');
+    expect(renderTemplate(template)).toBe(reservationExpired(appointment).body);
   });
 
   it('seña rechazada: el texto fijo, sin discutir el pago', () => {
     expect(customerDepositRejected(appointment).body).toBe(
       'No pudimos verificar la transferencia de la seña, así que el turno del lunes 5/10 10:00 quedó sin reservar. Si ya la hiciste, una persona del equipo te escribe por acá.',
     );
+  });
+});
+
+const APPOINTMENT_ID = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+
+describe('recordatorios a la clienta (4.7, H10)', () => {
+  it('el del día anterior: plantilla con el turno y los tres botones con su intención', () => {
+    expect(appointmentReminder({ appointmentId: APPOINTMENT_ID, appointment })).toEqual({
+      type: 'template',
+      name: 'recordatorio_turno',
+      language: 'es_AR',
+      params: { servicio: 'Esmaltado semipermanente', profesional: 'Mica', fecha_hora: 'lunes 5/10 10:00' },
+      buttonPayloads: [
+        `recordatorio:${APPOINTMENT_ID}:confirmar`,
+        `recordatorio:${APPOINTMENT_ID}:reprogramar`,
+        `recordatorio:${APPOINTMENT_ID}:cancelar`,
+      ],
+    });
+  });
+
+  it('el corto: la hora y la dirección en una sola línea', () => {
+    const message = shortAppointmentReminder({ appointment, address: 'San Martín 1234\nPlanta alta' });
+
+    expect(message).toMatchObject({
+      name: 'recordatorio_turno_corto',
+      params: { hora: '10:00', servicio: 'Esmaltado semipermanente', direccion: 'San Martín 1234 Planta alta' },
+    });
+  });
+});
+
+describe('la versión con plantilla de los avisos a la dueña (8.2, H10)', () => {
+  it('el comprobante: quién, cuánto y qué turno, con los mismos botones', () => {
+    expect(depositReceiptTemplate({ notificationId: NOTICE, appointment, amountCents: 540_000 })).toMatchObject({
+      name: 'aviso_comprobante',
+      params: {
+        clienta: 'Caro Pérez (+5492614000001)',
+        monto: '$5.400',
+        turno: 'Esmaltado semipermanente con Mica, lunes 5/10 10:00',
+      },
+      buttonPayloads: [`aviso:${NOTICE}:recibida`, `aviso:${NOTICE}:no_llego`],
+    });
+  });
+
+  it('la derivación: motivo, resumen y hasta cuándo, con «Ya la atendí»', () => {
+    const template = handoffTemplate({
+      notificationId: NOTICE,
+      appointment,
+      reason: 'complaint',
+      summary: 'Se quejó del turno de ayer',
+      pausedUntil: localDateTimeToInstant('2026-10-05', '22:00', ZONE),
+    });
+
+    expect(template).toMatchObject({
+      name: 'aviso_derivacion',
+      params: {
+        clienta: 'Caro Pérez (+5492614000001)',
+        motivo: 'queja o reclamo',
+        resumen: 'Se quejó del turno de ayer',
+        hasta: 'lunes 5/10 22:00',
+      },
+      buttonPayloads: [`aviso:${NOTICE}:atendida`],
+    });
+  });
+
+  it.each([
+    [{ status: 'approved' as const, amountCents: 540_000 }, 'pagada ($5.400): la devolución o el traspaso los decidís vos'],
+    [
+      { status: 'in_review' as const, amountCents: 540_000 },
+      'en verificación ($5.400): si la transferencia llegó, la devolución o el traspaso los decidís vos',
+    ],
+    [{ status: 'pending' as const, amountCents: 540_000 }, 'sin pagar'],
+    [null, 'no llevaba'],
+  ])('la cancelación dice el estado de la seña (%o)', (deposit, sena) => {
+    expect(cancellationTemplate({ appointment, deposit })).toMatchObject({
+      name: 'aviso_cancelacion',
+      params: { clienta: 'Caro Pérez', turno: 'Esmaltado semipermanente con Mica, lunes 5/10 10:00', sena },
+    });
+  });
+
+  it('la reprogramación: el horario anterior y el nuevo', () => {
+    expect(
+      rescheduleTemplate({ appointment, previousStart: localDateTimeToInstant('2026-10-02', '15:00', ZONE) }),
+    ).toMatchObject({
+      name: 'aviso_reprogramacion',
+      params: {
+        clienta: 'Caro Pérez',
+        servicio: 'Esmaltado semipermanente',
+        profesional: 'Mica',
+        antes: 'viernes 2/10 15:00',
+        despues: 'lunes 5/10 10:00',
+      },
+    });
   });
 });

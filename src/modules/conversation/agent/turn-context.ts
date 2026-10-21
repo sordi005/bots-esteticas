@@ -38,6 +38,31 @@ export interface TurnContextInput {
   receipt?: string;
 }
 
+/** Un botón del recordatorio (4.7). «Cancelar» no es la confirmación: un toque sin querer cuesta caro. */
+function describeReminderChoice(choice: Extract<ResolvedChoice, { tipo: 'recordatorio' }>): string {
+  const turn = `${choice.texto} (${choice.servicioNombre} con ${choice.profesionalNombre}, ${choice.estado}), turno_id=${choiceIds.appointment(choice.turnoId)}`;
+  const inactive = choice.ocupaHorario ? '' : ` Ojo: ese turno ya no está activo (${choice.estado}).`;
+  switch (choice.accion) {
+    case 'confirmar':
+      // Lo registró el código (4.7): el modelo solo contesta.
+      return choice.asistencia === 'confirmada'
+        ? `Tocó «Confirmo» en el recordatorio de su turno del ${turn}: el sistema ya registró que viene. ` +
+            'Agradecele y decile que la esperamos; no hace falta ninguna herramienta.'
+        : `Tocó «Confirmo» en el recordatorio de su turno del ${turn}, pero ese turno ya no se puede confirmar: ` +
+            'no se registró nada. Contale cómo está su turno (listar_turnos_de_la_clienta) sin decir que quedó confirmado.';
+    case 'reprogramar':
+      return (
+        `Tocó «Reprogramar» en el recordatorio de su turno del ${turn}: consultá los horarios con ` +
+        `consultar_horarios_para_reprogramar y ese turno_id, y ofrecéselos.${inactive}`
+      );
+    case 'cancelar':
+      return (
+        `Tocó «Cancelar» en el recordatorio de su turno del ${turn}: llamá a cancelar_turno con ese turno_id y ` +
+        `confirmada=false, para que lo confirme con el botón «Sí, cancelar».${inactive}`
+      );
+  }
+}
+
 /** Cómo se le cuenta al modelo una elección ya resuelta: nunca ve el título del botón. */
 export function describeChoice(choice: ResolvedChoice, timeZone: string): string {
   switch (choice.tipo) {
@@ -66,6 +91,8 @@ export function describeChoice(choice: ResolvedChoice, timeZone: string): string
         `seguí con lo que venía pidiendo (cancelar o reprogramar ese turno; para reprogramar, consultá los horarios con consultar_horarios_para_reprogramar y ese turno_id).${inactive}`
       );
     }
+    case 'recordatorio':
+      return describeReminderChoice(choice);
     case 'reprogramar': {
       // Elegir el horario nuevo ya es la confirmación (principio 5): no se le pide otra.
       const slotId = choiceIds.reschedule(choice.turnoId, new Date(choice.inicio));

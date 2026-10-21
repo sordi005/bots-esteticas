@@ -120,6 +120,29 @@ describe('parseChoiceId: lee un id sin confiar en él', () => {
   });
 });
 
+describe('los botones del recordatorio (4.7, H10)', () => {
+  it.each([
+    ['confirm', 'confirmar'],
+    ['reschedule', 'reprogramar'],
+    ['cancel', 'cancelar'],
+  ] as const)('%s va como recordatorio:<turno>:%s y se lee igual', (action, code) => {
+    const id = choiceIds.reminder(APPOINTMENT, action);
+
+    expect(id).toBe(`recordatorio:${APPOINTMENT}:${code}`);
+    expect(parseChoiceId(id)).toEqual({ kind: 'reminder', appointmentId: APPOINTMENT, action });
+  });
+
+  it.each([
+    [`recordatorio:${APPOINTMENT}:borrar`],
+    [`recordatorio:no-es-un-uuid:confirmar`],
+    [`recordatorio:${APPOINTMENT}`],
+    [`recordatorio:${APPOINTMENT}:confirmar:extra`],
+    ['Confirmo'],
+  ])('rechaza %s', (id) => {
+    expect(parseChoiceId(id)).toBeNull();
+  });
+});
+
 describe('parseAppointmentRef: el turno que nombra el modelo, con o sin el prefijo', () => {
   it('acepta turno:<uuid> y el uuid solo', () => {
     expect(parseAppointmentRef(`turno:${APPOINTMENT}`)).toBe(APPOINTMENT);
