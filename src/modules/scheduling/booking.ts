@@ -14,6 +14,7 @@ import {
   type Actor,
   type AppointmentStatus,
 } from './appointment-state-machine.js';
+import { scheduleReminders, scheduleReservationExpiry } from './appointment-jobs.js';
 import {
   loadAvailabilityContext,
   loadRescheduleContext,
@@ -261,6 +262,15 @@ export async function bookAppointment(
       if (!appointment) throw new Error('La base no devolvió el turno creado');
 
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId: appointment.id, ...creation });
+      // Los recordatorios y el vencimiento quedan programados con la reserva (4.5, 4.7).
+      await scheduleReminders(tx, {
+        tenantId,
+        appointmentId: appointment.id,
+        start,
+        bookedAt: now,
+        timeZone: context.query.timeZone,
+        settings,
+      });
 
       if (depositCents === null) {
         return { ok: true, appointmentId: appointment.id, status, deposit: null } as const;
@@ -279,6 +289,7 @@ export async function bookAppointment(
         })
         .returning({ id: deposits.id });
       if (!deposit) throw new Error('La base no devolvió la seña creada');
+      await scheduleReservationExpiry(tx, { tenantId, appointmentId: appointment.id, expiresAt });
 
       return {
         ok: true,
@@ -561,6 +572,15 @@ export async function rescheduleAppointment(
       });
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
+      // Para los recordatorios, el turno se reservó ahora: la clienta acaba de elegir el horario (4.7).
+      await scheduleReminders(tx, {
+        tenantId,
+        appointmentId,
+        start: newStart,
+        bookedAt: now,
+        timeZone: context.query.timeZone,
+        settings: context.settings,
+      });
       await inTransaction?.(tx, { appointmentId, previousStart: locked.timeRange.start, newStart });
       return { ok: true } as const;
     }));
