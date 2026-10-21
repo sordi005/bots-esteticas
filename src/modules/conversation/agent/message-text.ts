@@ -1,4 +1,5 @@
 import { outgoingMessageSchema } from '../../whatsapp/outgoing.js';
+import { renderTemplate } from '../../whatsapp/templates.js';
 import { inboundContent, inboundImageId } from '../../whatsapp/webhook-payload.js';
 
 /**
@@ -86,5 +87,7 @@ export function outgoingToText(content: Record<string, unknown>): string | null 
       const titles = data.sections.flatMap((section) => section.rows.map((row) => row.title));
       return `${data.body}\n[Opciones: ${titles.join(' | ')}]`;
     }
+    case 'template':
+      return renderTemplate(data);
   }
 }

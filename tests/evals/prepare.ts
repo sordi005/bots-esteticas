@@ -14,7 +14,7 @@ import {
   rescheduleAppointment,
   submitTransferReceipt,
 } from '../../src/modules/scheduling/booking.js';
-import { outgoingMessageSchema, type OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
+import { freeFormMessageSchema, type FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { EVAL_TIME_ZONE } from './clock.js';
 import type { EvalAppointmentSetup, EvalCase, EvalChoice, EvalHistoryEntry, EvalInbound } from './evaluate.js';
 import { buildInboundMessage } from './inbound.js';
@@ -344,7 +344,7 @@ async function insertInbound(
 }
 
 /** Un mensaje del asistente en el historial: texto, o con botones (hasta 3) o una lista con los títulos de las opciones. */
-function outgoingOf(entry: Extract<EvalHistoryEntry, { asistente: string }>): OutgoingMessage {
+function outgoingOf(entry: Extract<EvalHistoryEntry, { asistente: string }>): FreeFormMessage {
   const titles = entry.botones ?? [];
   if (titles.length === 0) return { type: 'text', body: entry.asistente };
   if (titles.length <= 3) {
@@ -372,7 +372,7 @@ async function insertOutbound(
     fail: (message: string) => EvalPreparationError;
   },
 ): Promise<void> {
-  const outgoing = outgoingMessageSchema.safeParse(outgoingOf(input.entry));
+  const outgoing = freeFormMessageSchema.safeParse(outgoingOf(input.entry));
   if (!outgoing.success) {
     throw input.fail(`el mensaje del asistente «${input.entry.asistente}» no es válido para WhatsApp: ${outgoing.error.message}`);
   }

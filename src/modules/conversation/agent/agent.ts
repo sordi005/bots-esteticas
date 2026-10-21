@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import { z } from 'zod';
-import { outgoingMessageSchema, type OutgoingMessage } from '../../whatsapp/outgoing.js';
+import { freeFormMessageSchema, type FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { truncateText } from '../format.js';
 import type { HandoffReason } from '../handoff.js';
 import {
@@ -207,7 +207,7 @@ export interface AgentHandoff {
 }
 
 export interface AgentResult {
-  message: OutgoingMessage;
+  message: FreeFormMessage;
   /** Si la respuesta pidió derivar. El ciclo no conoce la base: quien lo llama registra la derivación. */
   handoff: AgentHandoff | null;
   run: AgentRun;
@@ -270,9 +270,9 @@ function missesRequiredMention(text: string, required: ReadonlySet<string>): boo
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
-function buildOutgoingMessage(texto: string, options: OfferableOption[]): OutgoingMessage {
+function buildFreeFormMessage(texto: string, options: OfferableOption[]): FreeFormMessage {
   const body = texto.slice(0, MAX_TEXT_LENGTH);
-  const textOnly: OutgoingMessage = { type: 'text', body };
+  const textOnly: FreeFormMessage = { type: 'text', body };
   if (options.length === 0) return textOnly;
 
   const fitsButtons =
@@ -280,7 +280,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
     texto.length <= MAX_BUTTON_BODY_LENGTH &&
     options.every((option) => option.title.length <= MAX_OPTION_TITLE_LENGTH);
 
-  const candidate: OutgoingMessage = fitsButtons
+  const candidate: FreeFormMessage = fitsButtons
     ? { type: 'buttons', body: texto, buttons: options.map(({ id, title }) => ({ id, title })) }
     : {
         type: 'list',
@@ -298,7 +298,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
       };
 
   // Un mensaje que WhatsApp rechazaría (ids muy largos, por ejemplo) nunca llega a la API: se contesta solo con el texto.
-  return outgoingMessageSchema.safeParse(candidate).success ? candidate : textOnly;
+  return freeFormMessageSchema.safeParse(candidate).success ? candidate : textOnly;
 }
 
 /** Interpreta la salida final del modelo: null si no tiene la forma pedida. */
@@ -453,7 +453,7 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     );
   }
 
-  const finish = (message: OutgoingMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
+  const finish = (message: FreeFormMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
     message,
     handoff,
     run: {
@@ -495,5 +495,5 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   const handoff: AgentHandoff | null = answer.derivar
     ? { reason: MODEL_HANDOFF_REASONS[answer.derivar.motivo].reason, summary: answer.derivar.resumen }
     : null;
-  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
+  return finish(buildFreeFormMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
 }

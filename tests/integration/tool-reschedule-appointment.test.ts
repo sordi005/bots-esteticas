@@ -11,6 +11,7 @@ import { bookAppointment, changeAppointmentStatus } from '../../src/modules/sche
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
+import { noticeBody } from './support/notices.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
 import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
@@ -183,7 +184,7 @@ describe('reprogramar_turno: le avisa a la dueña (4.6)', () => {
 
     const [notice] = await noticesOf(f);
     expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, status: 'pending' });
-    expect(notice?.message.body).toContain('del martes 6/10 10:00 al miércoles 7/10 10:00');
+    expect(noticeBody(notice?.message)).toContain('del martes 6/10 10:00 al miércoles 7/10 10:00');
   });
 
   it('si la clienta no eligió el horario no se movió nada: no avisa', async () => {

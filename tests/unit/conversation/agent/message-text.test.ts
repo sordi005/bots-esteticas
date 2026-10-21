@@ -102,4 +102,19 @@ describe('outgoingToText: lo que dijo el asistente antes, como texto para el mod
     expect(outgoingToText({ type: 'plantilla' })).toBeNull();
     expect(outgoingToText({})).toBeNull();
   });
+
+  it('una plantilla muestra su texto con las variables (H10)', () => {
+    expect(
+      outgoingToText({
+        type: 'template',
+        name: 'reserva_vencida',
+        language: 'es_AR',
+        params: { servicio: 'Semi', fecha_hora: 'viernes 9/10 10:00' },
+      }),
+    ).toContain('Tu reserva de Semi del viernes 9/10 10:00 se liberó');
+  });
+
+  it('una plantilla que el código no conoce no se muestra', () => {
+    expect(outgoingToText({ type: 'template', name: 'hello_world', language: 'en_US', params: {} })).toBeNull();
+  });
 });

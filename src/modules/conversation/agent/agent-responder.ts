@@ -8,7 +8,7 @@ import { notifications } from '../../notifications/schema.js';
 import { deposits } from '../../payments/schema.js';
 import { appointments } from '../../scheduling/schema.js';
 import { tenants } from '../../tenants/schema.js';
-import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { inboundImageId } from '../../whatsapp/webhook-payload.js';
 import { registerTransferReceipt } from '../deposit-receipts.js';
 import { formatLocalSlot } from '../format.js';
@@ -83,7 +83,7 @@ export interface AgentResponderDependencies {
 export function createAgentResponder(deps: AgentResponderDependencies): Responder {
   const { db, llm, now, tools = agentTools } = deps;
 
-  return async (turn: ConversationTurn, { signal }): Promise<OutgoingMessage | null> => {
+  return async (turn: ConversationTurn, { signal }): Promise<FreeFormMessage | null> => {
     const { tenantId, conversationId, customerId } = turn;
     const at = now();
     const logger = deps.logger.child({ tenant_id: tenantId, conversation_id: conversationId });

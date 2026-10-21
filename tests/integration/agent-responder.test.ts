@@ -20,7 +20,7 @@ import { notifications } from '../../src/modules/notifications/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
-import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
@@ -85,7 +85,7 @@ async function addInbound(
   return { id: row.id, type, content, occurredAt: row.occurredAt };
 }
 
-async function addOutbound(f: Fixture, message: OutgoingMessage, sentAt: Date) {
+async function addOutbound(f: Fixture, message: FreeFormMessage, sentAt: Date) {
   await db.insert(messages).values({
     tenantId: f.tenantId,
     conversationId: f.conversationId,

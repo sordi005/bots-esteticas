@@ -11,6 +11,7 @@ import { bookAppointment, changeAppointmentStatus } from '../../src/modules/sche
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
+import { noticeBody } from './support/notices.js';
 import { testDatabaseUrl } from './support/database.js';
 import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
 import { single } from './support/fixtures.js';
@@ -198,8 +199,8 @@ describe('cancelar_turno: le avisa a la dueña (4.6)', () => {
 
     const [notice] = await noticesOf(f, 'appointment_cancelled');
     expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, customerId: f.customerId, status: 'pending' });
-    expect(notice?.message.body).toContain('martes 6/10 10:00');
-    expect(notice?.message.body).toMatch(/devolución/);
+    expect(noticeBody(notice?.message)).toContain('martes 6/10 10:00');
+    expect(noticeBody(notice?.message)).toMatch(/devolución/);
   });
 
   it('pedir la confirmación no avisa: todavía no se canceló nada', async () => {

@@ -60,7 +60,7 @@ export async function sendWhatsAppMessage(
     tenantId,
     conversationId: conversation.id,
     direction: 'outbound',
-    type: message.type === 'text' ? 'text' : 'interactive',
+    type: message.type === 'text' || message.type === 'template' ? message.type : 'interactive',
     content: message,
     whatsappMessageId: messageId,
     occurredAt: now,

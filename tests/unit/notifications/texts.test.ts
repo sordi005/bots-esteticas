@@ -10,7 +10,7 @@ import {
   rescheduleNotice,
   type NoticeAppointment,
 } from '../../../src/modules/notifications/texts.js';
-import { outgoingMessageSchema, type OutgoingMessage } from '../../../src/modules/whatsapp/outgoing.js';
+import { freeFormMessageSchema, type FreeFormMessage } from '../../../src/modules/whatsapp/outgoing.js';
 import { localDateTimeToInstant } from '../../../src/shared/time-zone.js';
 
 /**
@@ -30,8 +30,8 @@ const appointment: NoticeAppointment = {
   timeZone: ZONE,
 };
 
-function bodyOf(message: OutgoingMessage): string {
-  expect(outgoingMessageSchema.safeParse(message).success).toBe(true);
+function bodyOf(message: FreeFormMessage): string {
+  expect(freeFormMessageSchema.safeParse(message).success).toBe(true);
   return message.body;
 }
 
