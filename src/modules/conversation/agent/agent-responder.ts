@@ -30,6 +30,7 @@ import type { LlmClient, LlmMessage } from './llm-client.js';
 import {
   describeInbound,
   outgoingToText,
+  CONVERSATION_STARTED_BY_NOTICE,
   SYSTEM_NOTICE_LABELS,
   type InboundDescription,
   type SystemNoticeKind,
@@ -343,7 +344,7 @@ async function loadHistory(
     rows.flatMap((row) => (row.direction === 'outbound' && row.whatsappMessageId ? [row.whatsappMessageId] : [])),
   );
 
-  const history: LlmMessage[] = [];
+  const history: { role: 'user' | 'assistant'; text: string; notice?: true }[] = [];
   for (const row of rows.reverse()) {
     if (row.direction === 'inbound') {
       const described = describeInbound(row.type, row.content, receiptMediaIds);
@@ -351,12 +352,16 @@ async function loadHistory(
     } else {
       const text = outgoingToText(row.content);
       const notice = row.whatsappMessageId ? notices.get(row.whatsappMessageId) : undefined;
-      if (text) history.push({ role: 'assistant', text: notice ? `${SYSTEM_NOTICE_LABELS[notice]} ${text}` : text });
+      if (!text) continue;
+      history.push(notice ? { role: 'assistant', text: `${SYSTEM_NOTICE_LABELS[notice]} ${text}`, notice: true } : { role: 'assistant', text });
     }
   }
-  // La API exige que la conversación empiece con la clienta.
-  while (history[0]?.role === 'assistant') history.shift();
-  return history;
+  // La API exige que la conversación empiece con la clienta. Una respuesta del asistente que quedó sin
+  // su pregunta (el corte de 20 mensajes) se descarta; un aviso del sistema no: un recordatorio suele
+  // abrir el historial, y sin él el modelo no sabe de qué turno le habla la clienta (H10).
+  while (history[0]?.role === 'assistant' && !history[0].notice) history.shift();
+  if (history[0]?.role === 'assistant') history.unshift({ role: 'user', text: CONVERSATION_STARTED_BY_NOTICE });
+  return history.map(({ role, text }) => ({ role, text }));
 }
 
 /**

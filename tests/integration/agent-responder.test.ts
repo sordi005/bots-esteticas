@@ -10,7 +10,11 @@ import {
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
 import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
-import { CHOICE_MARKER, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
+import {
+  CHOICE_MARKER,
+  CONVERSATION_STARTED_BY_NOTICE,
+  SYSTEM_NOTICE_LABELS,
+} from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
@@ -21,6 +25,7 @@ import { bookAppointment } from '../../src/modules/scheduling/booking.js';
 import { appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
 import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
+import { renderTemplate, templateMessage } from '../../src/modules/whatsapp/templates.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
@@ -1139,6 +1144,57 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
       'user: hola',
     ]);
     expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
+  });
+
+  it.each([
+    [
+      'appointment_reminder',
+      templateMessage('recordatorio_turno', {
+        params: { servicio: 'Esmaltado semipermanente', profesional: 'Mica', fecha_hora: 'martes 6/10 15:30' },
+        buttonPayloads: ['recordatorio:a:confirmar', 'recordatorio:a:reprogramar', 'recordatorio:a:cancelar'],
+      }),
+    ],
+    [
+      'reservation_expired',
+      templateMessage('reserva_vencida', { params: { servicio: 'Esmaltado semipermanente', fecha_hora: 'martes 6/10 15:30' } }),
+    ],
+  ] as const)('en el historial, el %s (una plantilla) se ve con su texto, como aviso del sistema (H10)', async (kind, template) => {
+    const f = await setup('Caro Pérez');
+    const appointmentId = await pendingDeposit(f);
+    const whatsappMessageId = `wamid.${randomUUID()}`;
+    await db.insert(messages).values({
+      tenantId: f.tenantId,
+      conversationId: f.conversationId,
+      direction: 'outbound',
+      type: 'template',
+      content: template,
+      whatsappMessageId,
+      occurredAt: minutesAgo(20),
+    });
+    await db.insert(notifications).values({
+      tenantId: f.tenantId,
+      recipient: 'customer',
+      kind,
+      customerId: f.customerId,
+      appointmentId,
+      appointmentStart: at('2026-10-06', '15:30'),
+      message: template,
+      status: 'sent',
+      whatsappMessageId,
+      sentAt: minutesAgo(20),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('¡Hola!')]);
+    await result;
+
+    // La clienta no escribió en las últimas 24 horas: el aviso abre el historial y no se descarta, aunque la API
+    // exija empezar con ella. Sin esto, a un «no voy a poder ir» el modelo no sabía de qué recordatorio hablaba.
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      `user: ${CONVERSATION_STARTED_BY_NOTICE}`,
+      `assistant: ${SYSTEM_NOTICE_LABELS[kind]} ${renderTemplate(template) ?? ''}`,
+      'user: hola',
+    ]);
+    expect(SYSTEM_NOTICE_LABELS[kind]).toMatch(/no lo escribiste vos/);
   });
 
   it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
