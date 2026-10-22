@@ -201,6 +201,8 @@ describe('cancelar_turno: le avisa a la dueña (4.6)', () => {
     expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, customerId: f.customerId, status: 'pending' });
     expect(noticeBody(notice?.message)).toContain('martes 6/10 10:00');
     expect(noticeBody(notice?.message)).toMatch(/devolución/);
+    expect(notice?.template).toMatchObject({ name: 'aviso_cancelacion' });
+    expect(notice?.template?.params.sena).toMatch(/devolución/);
   });
 
   it('pedir la confirmación no avisa: todavía no se canceló nada', async () => {

@@ -185,6 +185,10 @@ describe('reprogramar_turno: le avisa a la dueña (4.6)', () => {
     const [notice] = await noticesOf(f);
     expect(notice).toMatchObject({ recipient: 'owner', appointmentId: id, status: 'pending' });
     expect(noticeBody(notice?.message)).toContain('del martes 6/10 10:00 al miércoles 7/10 10:00');
+    expect(notice?.template).toMatchObject({
+      name: 'aviso_reprogramacion',
+      params: { antes: 'martes 6/10 10:00', despues: 'miércoles 7/10 10:00' },
+    });
   });
 
   it('si la clienta no eligió el horario no se movió nada: no avisa', async () => {

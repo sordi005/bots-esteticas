@@ -267,6 +267,10 @@ describe('handOff: derivar a una persona (4.8)', () => {
       expect(noticeBody(notice?.message)).toContain('Se quejó del turno de ayer');
       // Pausado hasta las 22:00 del mismo viernes (12 horas).
       expect(noticeBody(notice?.message)).toContain('viernes 9/10 22:00');
+      expect(notice?.template).toMatchObject({
+        name: 'aviso_derivacion',
+        params: { resumen: 'Se quejó del turno de ayer', hasta: 'viernes 9/10 22:00' },
+      });
     });
 
     it('con un tema sensible, el aviso lleva el resumen fijo y nunca el detalle (regla 9)', async () => {
@@ -283,6 +287,8 @@ describe('handOff: derivar a una persona (4.8)', () => {
       const [notice] = await noticesOf(f.tenantId);
       expect(noticeBody(notice?.message)).toContain(SENSITIVE_TOPIC_SUMMARY);
       expect(noticeBody(notice?.message)).not.toMatch(/embarazada/);
+      // La plantilla tampoco lleva el detalle de salud (regla 9).
+      expect(notice?.template?.params.resumen).toBe(SENSITIVE_TOPIC_SUMMARY);
     });
 
     it('una derivación repetida en la misma pausa no manda otro aviso', async () => {

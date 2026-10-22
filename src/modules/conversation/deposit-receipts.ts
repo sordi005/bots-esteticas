@@ -9,7 +9,7 @@ import type { JobHandler } from '../jobs/runner.js';
 import { loadNoticeAppointment } from '../notifications/notice-data.js';
 import { enqueueNotification } from '../notifications/outbox.js';
 import { notifications } from '../notifications/schema.js';
-import { depositReceiptNotice } from '../notifications/texts.js';
+import { depositReceiptNotice, depositReceiptTemplate } from '../notifications/texts.js';
 import { deposits } from '../payments/schema.js';
 import { submitTransferReceipt } from '../scheduling/booking.js';
 import { appointments } from '../scheduling/schema.js';
@@ -68,6 +68,7 @@ async function enqueueReceiptNotice(
     depositId,
     receiptMediaId: input.mediaId,
     message: depositReceiptNotice({ notificationId, appointment, amountCents: deposit.amountCents, reminder: input.reminder }),
+    template: depositReceiptTemplate({ notificationId, appointment, amountCents: deposit.amountCents }),
     now,
   });
 }

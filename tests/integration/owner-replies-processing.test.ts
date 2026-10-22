@@ -117,6 +117,9 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
     );
     expect(notices).toHaveLength(2);
     expect(noticeBody(notices.find((n) => n.kind === 'deposit_confirmed')?.message)).toMatch(/^¡Seña recibida!/);
+    expect(notices.find((n) => n.kind === 'deposit_confirmed')?.template).toMatchObject({ name: 'sena_confirmada' });
+    // Lo que se le contesta a la dueña sale justo después de su toque, que le abre la ventana: sin plantilla.
+    expect(notices.find((n) => n.kind === 'owner_reply_ack')?.template).toBeNull();
     expect(await processedAt(id)).toEqual(NOW);
   });
 
@@ -130,6 +133,7 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
     const notices = await noticesAfter(t.tenantId);
     expect(notices.map((n) => n.kind).sort()).toEqual(['deposit_rejected', 'owner_reply_ack']);
     expect(noticeBody(notices.find((n) => n.kind === 'owner_reply_ack')?.message)).toMatch(/pausa/);
+    expect(notices.find((n) => n.kind === 'deposit_rejected')?.template).toMatchObject({ name: 'sena_rechazada' });
     const conversation = single(await db.select().from(conversations).where(eq(conversations.id, t.conversationId)));
     expect(conversation.assistantStatus).toBe('paused');
     expect(
