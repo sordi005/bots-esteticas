@@ -1183,6 +1183,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
 | Lista oficial de feriados nacionales 2027 (todavía no publicada al 30/09/2026) | Diciembre de 2026 |
+| Meta clasificó la plantilla `reserva_vencida` como marketing, no como utilidad (8.1), seguramente por la invitación a pedir otro horario: sale más cara y tiene límites de envío por persona. Casi nunca se usa, porque la clienta reservó por chat hace menos de una hora y el aviso entra como mensaje libre; solo saldría con un plazo de seña de casi un día. Decidido en H10: queda así. Revisar con un negocio real si usa plazos largos | Piloto |
 | Mensajes que Meta entrega con demora. Si el servidor no respondió, Meta reintenta el webhook más tarde, y el mensaje puede llegar después de otros más nuevos que ya se contestaron. En la prueba manual de H9, un «quiero reservar un turno» llegó 6 minutos tarde, después de la reserva, y el asistente lo contestó como un pedido nuevo. Propuesta: avisarle al modelo en el historial que ese mensaje llegó con demora y es anterior a su última respuesta. No se descarta, porque puede traer una pregunta real | Piloto |
 
 ---
