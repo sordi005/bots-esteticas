@@ -61,9 +61,10 @@ pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + s
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
+pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
 ```
 
-Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba.
+Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba. Como la dueña y la clienta son el mismo celular, el 131047 no se da solo: para probar los avisos con plantilla, `WHATSAPP_PREFER_TEMPLATES=true` (solo desarrollo).
 
 Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una terminal aparte y con el `PORT` de tu `.env` (el dominio es fijo y ya está registrado en Meta):
 
@@ -71,7 +72,7 @@ Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una ter
 ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
 ```
 
-Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (un aviso fuera de la ventana de 24 horas falla con 131047 hasta que lleguen las plantillas en H10). Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
+Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (fuera de la ventana de 24 horas sale su plantilla; si la plantilla no está aprobada, falla con el código 132xxx: `pnpm whatsapp:templates` dice cuál). Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
 
 El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
 
@@ -128,7 +129,9 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - El webhook solo valida la firma, guarda y responde: nunca contesta ni llama a la IA (regla 6). Al guardar un mensaje nuevo, el inbox programa la vuelta de su conversación; contestar es del worker.
 - Los formatos de Meta se toman de la documentación oficial, no de memoria. Un tipo de mensaje nuevo entra con su ejemplo oficial en `tests/contracts/whatsapp/`.
 - Para enviar: `sendWhatsAppMessage` de `modules/conversation/outbox.ts`. Valida los límites de Meta, usa el token cifrado del negocio y registra el mensaje.
-- Un aviso (a la dueña, o a la clienta fuera de la respuesta del asistente) nunca se envía en el momento: `enqueueNotification` de `modules/notifications/outbox.ts`, **dentro de la transacción del cambio** que lo origina (las funciones de `booking.ts` aceptan `inTransaction` para eso). Lo envía la tarea `send_notification`. Los textos los escribe el código (`notifications/texts.ts`).
+- Un aviso (a la dueña, o a la clienta fuera de la respuesta del asistente) nunca se envía en el momento: `enqueueNotification` de `modules/notifications/outbox.ts`, **dentro de la transacción del cambio** que lo origina (las funciones de `booking.ts` aceptan `inTransaction` para eso). Lo envía la tarea `send_notification`. Los textos los escribe el código (`notifications/texts.ts`), cada uno con su versión con plantilla (`template`): si Meta rechaza el mensaje libre con 131047, la misma tarea manda la plantilla.
+- Las plantillas las define el código (`whatsapp/templates.ts`), con el texto idéntico al aprobado en Meta: el historial del modelo se arma con él. Cambiar un texto es cambiarlo también en Meta (y que lo vuelva a aprobar). Una variable no abre ni cierra el texto; el botón de una plantilla llega al webhook como tipo `button`.
+- Un aviso a la clienta que manda el código se marca en el historial del modelo como aviso del sistema (`SYSTEM_NOTICE_LABELS`). Si es nuevo, sumale su etiqueta: suele abrir el historial (fuera de las 24 horas) y el modelo tiene que verlo.
 - Los botones de la dueña son `aviso:<id del aviso>:<acción>`. El inbox los guarda en `owner_replies` (no en `messages`) y los procesa la tarea `process_owner_reply`. En la fase 0 los avisos salen del número del negocio: ahí es de la dueña solo un botón `aviso:` que toca `tenants.owner_phone` (6.5).
 - Qué imagen es un comprobante lo decide el código (`conversation/deposit-receipts.ts`) antes de llamar al modelo, nunca el modelo.
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
@@ -142,6 +145,8 @@ El detalle está en la sección 6.7 de la especificación.
 - Programar algo: solo con `scheduleJob` de `modules/jobs/queue.ts`. Hay una fila por negocio, tipo y clave: programar de nuevo actualiza la fila, nunca crea otra. Elegí la clave para que una tarea repetida sea la misma fila (la de una conversación es su id).
 - Si se programa algo junto con otro cambio, hacelo en la misma transacción (el inbox programa la conversación al guardar el mensaje).
 - Un tipo de tarea nuevo: valor en el enum `job_kind` (con su migración) y su handler en `src/worker.ts`. El worker solo toma los tipos que tienen handler.
+- Un valor nuevo de un enum no se puede usar en la misma transacción que lo agrega, y Drizzle corre todas las migraciones pendientes en una sola: en un `check`, compará el valor como texto (`kind::text in (…)`). En el predicado de un índice ni eso (no es inmutable): filtrá por otra columna.
+- Los recordatorios y el vencimiento de un turno los programa `booking.ts` al reservar y al reprogramar (`scheduling/appointment-jobs.ts`): ninguna forma de reservar se los olvida. Cada recordatorio guarda el inicio para el que se calculó; si el turno se movió, la tarea no envía nada.
 - Un handler puede correr más de una vez (reintentos, plazo vencido): antes de actuar, verifica que la acción siga siendo válida (regla 7). Recibe un `signal` que se cancela a los 60 s.
 - La cola recibe la hora por parámetro: en los tests se mueve el reloj, no se espera.
 - Los tests que toman tareas borran `scheduled_jobs` en `beforeEach`: la cola es una sola para todos los negocios y un claim tomaría las de otro test.
