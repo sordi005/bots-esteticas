@@ -23,7 +23,10 @@ export interface WorkerDependencies {
    * Sin esto los avisos quedan pendientes: no se envían (6.7, 8.2). `notificationsNumber`: el número de
    * avisos del servicio; sin él, los avisos a la dueña salen del número de cada negocio (fase 0).
    */
-  notifications?: Pick<NotificationSenderDependencies, 'client' | 'credentialsKey' | 'notificationsNumber'>;
+  notifications?: Pick<
+    NotificationSenderDependencies,
+    'client' | 'credentialsKey' | 'notificationsNumber' | 'preferTemplates'
+  >;
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
     JobRunnerOptions,

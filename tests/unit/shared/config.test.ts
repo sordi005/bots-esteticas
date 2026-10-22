@@ -35,6 +35,7 @@ describe('loadConfig', () => {
       credentialsKey: null,
       whatsapp: null,
       whatsappTestRecipient: null,
+      preferTemplates: false,
       notificationsNumber: null,
       anthropicApiKey: null,
       anthropicModel: 'claude-haiku-5-5',
@@ -53,6 +54,7 @@ describe('loadConfig', () => {
       credentialsKey: Buffer.from(KEY, 'base64'),
       whatsapp: { appSecret: 'secreto-de-la-app', verifyToken: 'token-de-verificacion', graphApiVersion: 'v26.0' },
       whatsappTestRecipient: null,
+      preferTemplates: false,
       notificationsNumber: null,
       anthropicApiKey: 'sk-ant-clave-de-prueba',
       anthropicModel: 'claude-haiku-5-5',
@@ -79,6 +81,24 @@ describe('loadConfig', () => {
     );
 
     expect(error.message).toContain('WHATSAPP_TEST_RECIPIENT');
+  });
+
+  it('en desarrollo se pueden preferir las plantillas para probarlas (8.1, H10); por defecto no', () => {
+    expect(loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_PREFER_TEMPLATES: 'true' }).preferTemplates).toBe(true);
+    expect(loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_PREFER_TEMPLATES: '' }).preferTemplates).toBe(false);
+    expect(loadConfig({ DATABASE_URL: databaseUrl }).preferTemplates).toBe(false);
+  });
+
+  it('preferir plantillas acepta solo true o false', () => {
+    const error = captureError(() => loadConfig({ DATABASE_URL: databaseUrl, WHATSAPP_PREFER_TEMPLATES: 'si' }));
+
+    expect(error.message).toContain('WHATSAPP_PREFER_TEMPLATES');
+  });
+
+  it('en producción no se aceptan las plantillas preferidas: es una herramienta de la prueba manual', () => {
+    const error = captureError(() => loadConfig({ ...PRODUCTION, WHATSAPP_PREFER_TEMPLATES: 'true' }));
+
+    expect(error.message).toContain('WHATSAPP_PREFER_TEMPLATES');
   });
 
   it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY', 'ANTHROPIC_API_KEY'])(

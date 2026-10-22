@@ -15,9 +15,12 @@ import {
   type WhatsAppClient,
   type WhatsAppMediaClient,
 } from '../../src/modules/whatsapp/client.js';
+import type { TemplateMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createDatabase } from '../../src/shared/db.js';
+import { UNIQUE_VIOLATION } from '../../src/shared/postgres-errors.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, FIXTURE_CUSTOMER_PHONE, single } from './support/fixtures.js';
+import { expectConstraintViolation } from './support/postgres-errors.js';
 import { connectWhatsApp } from './support/whatsapp.js';
 
 /**
@@ -34,13 +37,15 @@ const logger = pino({ level: 'silent' });
 
 afterAll(() => database.close());
 
-function fakeClient(options: { fail?: () => Error } = {}) {
+/** `fail` decide por mensaje: así un test puede rechazar el mensaje libre y aceptar la plantilla. */
+function fakeClient(options: { fail?: (input: SendMessageInput) => Error | undefined } = {}) {
   const sent: SendMessageInput[] = [];
   const downloads: { mediaId: string; accessToken: string }[] = [];
   const uploads: { phoneNumberId: string; accessToken: string; mimeType: string }[] = [];
   const client: WhatsAppClient & WhatsAppMediaClient = {
     sendMessage: (input) => {
-      if (options.fail) return Promise.reject(options.fail());
+      const error = options.fail?.(input);
+      if (error) return Promise.reject(error);
       sent.push(input);
       return Promise.resolve({ messageId: `wamid.${randomUUID()}` });
     },
@@ -71,7 +76,16 @@ async function readyTenant(options: { ownerPhone?: string | null } = {}) {
 
 type Tenant = Awaited<ReturnType<typeof readyTenant>>;
 
-function ownerNotice(tenant: Tenant) {
+const outsideWindow = () => new WhatsAppApiError('Meta rechazó el mensaje: Re-engagement message', 400, 131047);
+
+const CANCELLATION_TEMPLATE: TemplateMessage = {
+  type: 'template',
+  name: 'aviso_cancelacion',
+  language: 'es_AR',
+  params: { clienta: 'Caro', turno: 'Semi con Mica, lunes 5/10 10:00', sena: 'sin pagar' },
+};
+
+function ownerNotice(tenant: Tenant, template?: TemplateMessage) {
   return enqueueNotification(db, {
     tenantId: tenant.tenantId,
     recipient: 'owner',
@@ -79,11 +93,12 @@ function ownerNotice(tenant: Tenant) {
     customerId: tenant.customerId,
     appointmentId: tenant.appointmentId,
     message: { type: 'text', body: 'Caro canceló su turno' },
+    ...(template ? { template } : {}),
     now: NOW,
   });
 }
 
-async function receiptNotice(tenant: Tenant) {
+async function receiptNotice(tenant: Tenant, template?: TemplateMessage) {
   const [deposit] = await db
     .insert(deposits)
     .values({
@@ -105,6 +120,7 @@ async function receiptNotice(tenant: Tenant) {
     depositId: deposit?.id ?? '',
     receiptMediaId: 'media-del-negocio',
     message: { type: 'buttons', body: '¿Llegó?', buttons: [{ id: 'si', title: 'Recibida' }] },
+    ...(template ? { template } : {}),
     now: NOW,
   });
 }
@@ -114,9 +130,18 @@ function send(
   notificationId: string,
   client: WhatsAppClient & WhatsAppMediaClient,
   notificationsNumber?: { phoneNumberId: string; accessToken: string },
+  preferTemplates = false,
 ) {
   return sendNotification(
-    { db, logger, client, credentialsKey, now: () => NOW, ...(notificationsNumber ? { notificationsNumber } : {}) },
+    {
+      db,
+      logger,
+      client,
+      credentialsKey,
+      now: () => NOW,
+      preferTemplates,
+      ...(notificationsNumber ? { notificationsNumber } : {}),
+    },
     { tenantId: tenant.tenantId, notificationId },
   );
 }
@@ -216,16 +241,83 @@ describe('sendNotification: avisos a la dueña (8.2)', () => {
     expect(await notificationRow(id)).toMatchObject({ status: 'failed', lastError: expect.stringMatching(/teléfono/) as unknown });
   });
 
-  it('fuera de la ventana de 24 horas (131047) queda fallido sin reintentar: las plantillas llegan en H10', async () => {
+  it('fuera de la ventana de 24 horas (131047), un aviso sin plantilla queda fallido sin reintentar', async () => {
     const tenant = await readyTenant();
     const id = await ownerNotice(tenant);
-    const { client } = fakeClient({
-      fail: () => new WhatsAppApiError('Meta rechazó el mensaje: Re-engagement message', 400, 131047),
-    });
+    const { client } = fakeClient({ fail: () => outsideWindow() });
 
     expect(await send(tenant, id, client)).toBe('failed');
 
     expect(await notificationRow(id)).toMatchObject({ status: 'failed', lastError: expect.stringMatching(/131047/) as unknown });
+  });
+
+  it('fuera de la ventana de 24 horas, en la misma ejecución sale su plantilla (8.2, H10)', async () => {
+    const tenant = await readyTenant();
+    const id = await ownerNotice(tenant, CANCELLATION_TEMPLATE);
+    const { client, sent } = fakeClient({ fail: ({ message }) => (message.type === 'template' ? undefined : outsideWindow()) });
+
+    expect(await send(tenant, id, client)).toBe('sent');
+
+    expect(sent).toEqual([expect.objectContaining({ to: OWNER_PHONE, message: CANCELLATION_TEMPLATE }) as unknown]);
+    expect(await notificationRow(id)).toMatchObject({ status: 'sent', lastError: null });
+  });
+
+  it('el comprobante con plantilla también lleva la imagen como encabezado, subida una sola vez', async () => {
+    const tenant = await readyTenant();
+    const template = {
+      type: 'template' as const,
+      name: 'aviso_comprobante',
+      language: 'es_AR',
+      params: { clienta: 'Caro', monto: '$5.400', turno: 'Semi' },
+      buttonPayloads: ['aviso:1:recibida', 'aviso:1:no_llego'],
+    };
+    const id = await receiptNotice(tenant, template);
+    const { client, sent, uploads } = fakeClient({
+      fail: ({ message }) => (message.type === 'template' ? undefined : outsideWindow()),
+    });
+
+    expect(await send(tenant, id, client)).toBe('sent');
+
+    expect(uploads).toHaveLength(1);
+    expect(sent[0]?.message).toEqual({ ...template, header: { type: 'image', imageId: 'media-subida' } });
+  });
+
+  it('una plantilla que Meta no acepta (no está aprobada, está pausada) queda fallida con su error, sin reintentar', async () => {
+    const tenant = await readyTenant();
+    const id = await ownerNotice(tenant, CANCELLATION_TEMPLATE);
+    const { client } = fakeClient({
+      fail: ({ message }) =>
+        message.type === 'template'
+          ? new WhatsAppApiError('Meta rechazó el mensaje: Template name does not exist in the translation', 404, 132001)
+          : outsideWindow(),
+    });
+
+    expect(await send(tenant, id, client)).toBe('failed');
+
+    expect(await notificationRow(id)).toMatchObject({
+      status: 'failed',
+      lastError: expect.stringMatching(/aviso_cancelacion.*132001/) as unknown,
+    });
+  });
+
+  it('con preferTemplates (solo desarrollo) sale directo la plantilla, sin probar el mensaje libre', async () => {
+    const tenant = await readyTenant();
+    const id = await ownerNotice(tenant, CANCELLATION_TEMPLATE);
+    const { client, sent } = fakeClient();
+
+    await send(tenant, id, client, undefined, true);
+
+    expect(sent.map((input) => input.message)).toEqual([CANCELLATION_TEMPLATE]);
+  });
+
+  it('con preferTemplates, un aviso sin plantilla sale como mensaje libre', async () => {
+    const tenant = await readyTenant();
+    const id = await ownerNotice(tenant);
+    const { client, sent } = fakeClient();
+
+    await send(tenant, id, client, undefined, true);
+
+    expect(sent.map((input) => input.message.type)).toEqual(['text']);
   });
 
   it('otro error de Meta sube, para que la tarea reintente, y el aviso queda pendiente', async () => {
@@ -287,5 +379,101 @@ describe('sendNotification: avisos a la clienta (4.5)', () => {
       await db.select().from(messages).where(eq(messages.whatsappMessageId, row.whatsappMessageId ?? '')),
     );
     expect(recorded).toMatchObject({ conversationId: tenant.conversationId, direction: 'outbound' });
+  });
+});
+
+describe('avisos a la clienta con plantilla (4.5, 4.7, H10)', () => {
+  const confirmedTemplate: TemplateMessage = {
+    type: 'template',
+    name: 'sena_confirmada',
+    language: 'es_AR',
+    params: { servicio: 'Semi', profesional: 'Mica', fecha_hora: 'lunes 5/10 10:00' },
+  };
+
+  it('guarda la versión con plantilla y el inicio del turno junto con el aviso', async () => {
+    const tenant = await readyTenant();
+    const start = new Date('2026-10-06T13:00:00.000Z');
+
+    const id = await enqueueNotification(db, {
+      tenantId: tenant.tenantId,
+      recipient: 'customer',
+      kind: 'reservation_expired',
+      customerId: tenant.customerId,
+      appointmentId: tenant.appointmentId,
+      appointmentStart: start,
+      message: { type: 'text', body: 'Tu reserva se liberó' },
+      template: { ...confirmedTemplate, name: 'reserva_vencida' },
+      now: NOW,
+    });
+
+    expect(await notificationRow(id)).toMatchObject({ appointmentStart: start, template: { name: 'reserva_vencida' } });
+  });
+
+  it('fuera de la ventana sale la plantilla por el número del negocio y queda en la conversación como plantilla', async () => {
+    const tenant = await readyTenant();
+    const id = await enqueueNotification(db, {
+      tenantId: tenant.tenantId,
+      recipient: 'customer',
+      kind: 'deposit_confirmed',
+      customerId: tenant.customerId,
+      appointmentId: tenant.appointmentId,
+      message: { type: 'text', body: '¡Seña recibida!' },
+      template: confirmedTemplate,
+      now: NOW,
+    });
+    const { client, sent } = fakeClient({ fail: ({ message }) => (message.type === 'template' ? undefined : outsideWindow()) });
+
+    expect(await send(tenant, id, client)).toBe('sent');
+
+    expect(sent).toEqual([
+      expect.objectContaining({ phoneNumberId: tenant.phoneNumberId, to: FIXTURE_CUSTOMER_PHONE, message: confirmedTemplate }) as unknown,
+    ]);
+    const recorded = single(
+      await db.select().from(messages).where(eq(messages.whatsappMessageId, (await notificationRow(id)).whatsappMessageId ?? '')),
+    );
+    expect(recorded).toMatchObject({ type: 'template', content: confirmedTemplate });
+  });
+
+  it('un recordatorio ya es una plantilla: sale tal cual', async () => {
+    const tenant = await readyTenant();
+    const reminder: TemplateMessage = {
+      type: 'template',
+      name: 'recordatorio_turno',
+      language: 'es_AR',
+      params: { servicio: 'Semi', profesional: 'Mica', fecha_hora: 'martes 6/10 10:00' },
+      buttonPayloads: ['recordatorio:a:confirmar', 'recordatorio:a:reprogramar', 'recordatorio:a:cancelar'],
+    };
+    const id = await enqueueNotification(db, {
+      tenantId: tenant.tenantId,
+      recipient: 'customer',
+      kind: 'appointment_reminder',
+      customerId: tenant.customerId,
+      appointmentId: tenant.appointmentId,
+      appointmentStart: new Date('2026-10-06T13:00:00.000Z'),
+      message: reminder,
+      now: NOW,
+    });
+    const { client, sent } = fakeClient();
+
+    expect(await send(tenant, id, client)).toBe('sent');
+
+    expect(sent.map((input) => input.message)).toEqual([reminder]);
+  });
+
+  it('dos recordatorios del mismo turno e inicio no pueden existir: lo impide la base', async () => {
+    const tenant = await readyTenant();
+    const reminder = {
+      tenantId: tenant.tenantId,
+      recipient: 'customer' as const,
+      kind: 'appointment_reminder' as const,
+      customerId: tenant.customerId,
+      appointmentId: tenant.appointmentId,
+      appointmentStart: new Date('2026-10-06T13:00:00.000Z'),
+      message: { type: 'text' as const, body: 'Recordatorio' },
+      now: NOW,
+    };
+    await enqueueNotification(db, reminder);
+
+    await expectConstraintViolation(enqueueNotification(db, reminder), UNIQUE_VIOLATION, 'notifications_once_per_appointment_key');
   });
 });

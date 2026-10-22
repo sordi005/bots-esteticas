@@ -15,7 +15,12 @@ import {
   type WhatsAppClient,
   type WhatsAppMediaClient,
 } from '../whatsapp/client.js';
-import { outgoingMessageSchema, type OutgoingMessage } from '../whatsapp/outgoing.js';
+import {
+  outgoingMessageSchema,
+  templateMessageSchema,
+  type OutgoingMessage,
+  type TemplateMessage,
+} from '../whatsapp/outgoing.js';
 import { notifications, type notificationKind, type notificationRecipient } from './schema.js';
 
 /**
@@ -38,6 +43,10 @@ export interface NewNotification {
   depositId?: string;
   handoffId?: string;
   message: OutgoingMessage;
+  /** La versión con plantilla, por si el mensaje libre cae fuera de la ventana de 24 horas (H10). */
+  template?: TemplateMessage;
+  /** El inicio del turno de un recordatorio o un vencimiento: salen una vez por turno e inicio. */
+  appointmentStart?: Date;
   /** El comprobante: la imagen en el número del negocio. */
   receiptMediaId?: string;
   now: Date;
@@ -67,7 +76,15 @@ export interface NotificationSenderDependencies {
   now: () => Date;
   /** El número de avisos del servicio (8.2). Sin él, los avisos a la dueña salen del número del negocio (fase 0). */
   notificationsNumber?: { phoneNumberId: string; accessToken: string };
+  /**
+   * Solo en desarrollo (8.1): manda con plantilla todo aviso que la tenga, sin probar antes el mensaje
+   * libre. En la demo la dueña y la clienta son el mismo celular, y el 131047 nunca se da solo.
+   */
+  preferTemplates?: boolean;
 }
+
+/** Errores de Meta con la plantilla (no existe, no está aprobada, está pausada, variables que no coinciden). */
+const isTemplateError = (code: number | null) => code !== null && code >= 132_000 && code < 133_000;
 
 export type SendNotificationResult = 'sent' | 'failed' | 'already_handled' | 'not_found';
 
@@ -96,8 +113,10 @@ async function businessChannel(deps: NotificationSenderDependencies, tenantId: s
  *   del número del negocio y se sube al que envía, como encabezado (8.2).
  * - A la clienta: por el número del negocio, y queda en su conversación (el asistente lo ve).
  *
- * Fuera de la ventana de 24 horas (131047) o sin teléfono de la dueña, queda fallido sin
- * reintentar. Cualquier otro error sube, para que la tarea reintente.
+ * Primero sale el mensaje libre; si Meta lo rechaza por estar fuera de la ventana de 24 horas
+ * (131047), en la misma ejecución sale su plantilla (6.7, H10). Sin plantilla, sin teléfono de la
+ * dueña o con una plantilla que Meta no acepta, queda fallido sin reintentar. Cualquier otro error
+ * sube, para que la tarea reintente.
  */
 export async function sendNotification(
   deps: NotificationSenderDependencies,
@@ -123,42 +142,67 @@ export async function sendNotification(
   };
 
   const message = outgoingMessageSchema.parse(notification.message);
-  let messageId: string;
-  try {
-    if (notification.recipient === 'customer') {
+  const template = notification.template ? templateMessageSchema.parse(notification.template) : null;
+
+  /** Envía una versión del aviso: devuelve el id de WhatsApp o, si no se puede enviar, el motivo. */
+  let send: (version: OutgoingMessage) => Promise<{ messageId: string } | { failure: string }>;
+  if (notification.recipient === 'customer') {
+    send = async (version) => {
       const sent = await sendWhatsAppMessage(
         { db, client: deps.client, credentialsKey: deps.credentialsKey, now: deps.now() },
-        { tenantId, customerId: notification.customerId, message },
+        { tenantId, customerId: notification.customerId, message: version },
       );
-      if (!sent.ok) return await markFailed(`No se pudo enviar a la clienta: ${sent.reason}`);
-      messageId = sent.messageId;
-    } else {
-      const [tenant] = await db.select({ ownerPhone: tenants.ownerPhone }).from(tenants).where(eq(tenants.id, tenantId));
-      if (!tenant?.ownerPhone) return await markFailed('El negocio no tiene cargado el teléfono de la dueña');
+      return sent.ok ? { messageId: sent.messageId } : { failure: `No se pudo enviar a la clienta: ${sent.reason}` };
+    };
+  } else {
+    const [tenant] = await db.select({ ownerPhone: tenants.ownerPhone }).from(tenants).where(eq(tenants.id, tenantId));
+    const ownerPhone = tenant?.ownerPhone;
+    if (!ownerPhone) return await markFailed('El negocio no tiene cargado el teléfono de la dueña');
 
-      const business = await businessChannel(deps, tenantId);
-      const channel = deps.notificationsNumber ?? business;
-      if (!channel) return await markFailed('El negocio no tiene WhatsApp conectado');
+    const business = await businessChannel(deps, tenantId);
+    const channel = deps.notificationsNumber ?? business;
+    if (!channel) return await markFailed('El negocio no tiene WhatsApp conectado');
 
-      let toSend = message;
-      if (notification.receiptMediaId && message.type === 'buttons') {
-        if (!business) return await markFailed('El negocio no tiene WhatsApp conectado para bajar el comprobante');
-        const image = await deps.client.downloadMedia({
-          mediaId: notification.receiptMediaId,
-          accessToken: business.accessToken,
-        });
-        const { mediaId } = await deps.client.uploadMedia({ ...channel, ...image });
-        toSend = { ...message, header: { type: 'image', imageId: mediaId } };
+    // La imagen del comprobante se sube una sola vez, aunque salgan las dos versiones.
+    let uploadedImageId: string | undefined;
+    const receiptMediaId = notification.receiptMediaId;
+    send = async (version) => {
+      let toSend = version;
+      if (receiptMediaId && (version.type === 'buttons' || version.type === 'template')) {
+        if (!business) return { failure: 'El negocio no tiene WhatsApp conectado para bajar el comprobante' };
+        if (!uploadedImageId) {
+          const image = await deps.client.downloadMedia({ mediaId: receiptMediaId, accessToken: business.accessToken });
+          ({ mediaId: uploadedImageId } = await deps.client.uploadMedia({ ...channel, ...image }));
+        }
+        toSend = { ...version, header: { type: 'image', imageId: uploadedImageId } };
       }
-
-      ({ messageId } = await deps.client.sendMessage({ ...channel, to: tenant.ownerPhone, message: toSend }));
-    }
-  } catch (error) {
-    if (error instanceof WhatsAppApiError && error.code === OUTSIDE_SERVICE_WINDOW) {
-      return markFailed(`Fuera de la ventana de 24 horas (${String(OUTSIDE_SERVICE_WINDOW)})`);
-    }
-    throw error;
+      return deps.client.sendMessage({ ...channel, to: ownerPhone, message: toSend });
+    };
   }
+
+  const versions: OutgoingMessage[] =
+    deps.preferTemplates && template ? [template] : [message, ...(template ? [template] : [])];
+  let messageId: string | undefined;
+  for (const [index, version] of versions.entries()) {
+    try {
+      const result = await send(version);
+      if ('failure' in result) return await markFailed(result.failure);
+      messageId = result.messageId;
+      break;
+    } catch (error) {
+      if (!(error instanceof WhatsAppApiError)) throw error;
+      const hasFallback = index < versions.length - 1;
+      if (error.code === OUTSIDE_SERVICE_WINDOW && hasFallback) continue;
+      if (error.code === OUTSIDE_SERVICE_WINDOW) {
+        return await markFailed(`Fuera de la ventana de 24 horas (${String(OUTSIDE_SERVICE_WINDOW)})`);
+      }
+      if (version.type === 'template' && isTemplateError(error.code)) {
+        return await markFailed(`La plantilla ${version.name} no se pudo enviar (${String(error.code)})`);
+      }
+      throw error;
+    }
+  }
+  if (!messageId) throw new Error('El aviso no tenía ninguna versión para enviar');
 
   await db
     .update(notifications)

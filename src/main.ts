@@ -91,9 +91,13 @@ const notifications: WorkerDependencies['notifications'] = config.credentialsKey
   ? {
       client: whatsappClient,
       credentialsKey: config.credentialsKey,
+      preferTemplates: config.preferTemplates,
       ...(config.notificationsNumber ? { notificationsNumber: config.notificationsNumber } : {}),
     }
   : undefined;
+if (notifications && config.preferTemplates) {
+  logger.warn('WHATSAPP_PREFER_TEMPLATES: los avisos salen directo con su plantilla (solo desarrollo)');
+}
 if (notifications) {
   logger.info(
     { notificationsNumber: config.notificationsNumber !== null },
