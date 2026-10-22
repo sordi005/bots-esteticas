@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayBeforeReminderAt, shortReminderAt } from '../../../src/modules/scheduling/reminders.js';
+import { dayBeforeReminderAt, isWithinReminderWindow, shortReminderAt } from '../../../src/modules/scheduling/reminders.js';
 import { localDateTimeToInstant } from '../../../src/shared/time-zone.js';
 
 const MENDOZA = 'America/Argentina/Mendoza';
@@ -69,5 +69,26 @@ describe('shortReminderAt (sección 4.7, opcional)', () => {
 
   it('se omite si el turno se reservó hace menos de 2 horas', () => {
     expect(remind(at('2026-10-06', '15:30'), at('2026-10-06', '14:00'))).toBeNull();
+  });
+});
+
+describe('isWithinReminderWindow: una tarea atrasada no envía fuera del horario (4.7, H10)', () => {
+  const inside = (now: Date, timeZone = MENDOZA) => isWithinReminderWindow({ now, timeZone, window: WINDOW });
+
+  it.each([
+    ['09:00', true],
+    ['15:30', true],
+    ['21:00', true],
+    ['08:59', false],
+    ['21:01', false],
+    ['02:00', false],
+  ])('a las %s locales: %s', (time, expected) => {
+    expect(inside(at('2026-10-05', time))).toBe(expected);
+  });
+
+  it('se mide en la hora del negocio, no en UTC', () => {
+    // 22:30 en Mendoza es 01:30 UTC del día siguiente; y 22:30 en Madrid, otra hora.
+    expect(inside(at('2026-10-05', '22:30'))).toBe(false);
+    expect(inside(at('2026-10-05', '20:30', MADRID), MADRID)).toBe(true);
   });
 });
