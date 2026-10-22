@@ -9,6 +9,7 @@ import { tenants } from '../tenants/schema.js';
 import type { WhatsAppClient } from '../whatsapp/client.js';
 import { freeFormMessageSchema, type FreeFormMessage } from '../whatsapp/outgoing.js';
 import { registerReceiptWhilePaused } from './deposit-receipts.js';
+import { registerReminderConfirmations } from './reminder-confirmations.js';
 import { sendWhatsAppMessage } from './outbox.js';
 import { conversations, messages } from './schema.js';
 
@@ -259,6 +260,9 @@ export async function processConversation(
       // El comprobante de una seña se registra igual (4.5): sin él, el turno se vencería aunque la clienta pagó.
       const receipt = await registerReceiptWhilePaused(db, { tenantId, customerId, messages: pending, now: deps.now() });
       if (receipt) target.logger.info({ receipt: receipt.kind }, 'Imagen con el asistente pausado');
+      // Lo mismo el «Confirmo» del recordatorio (4.7): es un dato, no habla con la clienta.
+      const confirmations = await registerReminderConfirmations(db, { tenantId, customerId, messages: pending, now: deps.now() });
+      if (confirmations.size > 0) target.logger.info({ confirmations: confirmations.size }, '«Confirmo» con el asistente pausado');
       await markProcessed(db);
       return 'paused';
     }

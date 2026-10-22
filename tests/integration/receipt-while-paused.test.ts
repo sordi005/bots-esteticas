@@ -7,7 +7,7 @@ import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { notifications } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
 import { bookAppointment } from '../../src/modules/scheduling/booking.js';
-import { appointments } from '../../src/modules/scheduling/schema.js';
+import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import type { WhatsAppClient } from '../../src/modules/whatsapp/client.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
@@ -36,8 +36,8 @@ const NOW = at('2026-10-05', '10:00');
 
 type Fixture = BookableFixture & { conversationId: string };
 
-async function pausedConversation(): Promise<Fixture> {
-  const fixture = await createBookableFixture(db);
+async function pausedConversation(settings: Parameters<typeof createBookableFixture>[1] = {}): Promise<Fixture> {
+  const fixture = await createBookableFixture(db, settings);
   const { id: conversationId } = single(
     await db
       .insert(conversations)
@@ -183,5 +183,25 @@ describe('comprobante con el asistente pausado (4.5, 4.8)', () => {
       .where(eq(deposits.tenantId, f.tenantId));
     expect(deposit?.receiptMediaId).toBeNull();
     expect(await ownerNoticesOf(f)).toEqual([]);
+  });
+});
+
+describe('«Confirmo» del recordatorio con el asistente pausado (4.7, H10)', () => {
+  it('se registra igual, sin llamar al modelo ni contestar: lo atiende una persona', async () => {
+    const f = await pausedConversation({ settings: { depositRequirement: 'never' } });
+    const appointmentId = await book(f, '2026-10-06', '10:00');
+    await receive(f, {
+      type: 'button',
+      content: { type: 'button', button: { payload: `recordatorio:${appointmentId}:confirmar`, text: 'Confirmo' } },
+    });
+
+    const { result, respond, sendMessage } = process(f);
+
+    expect(await result).toBe('paused');
+    expect(respond).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    const events = await db.select().from(appointmentEvents).where(eq(appointmentEvents.appointmentId, appointmentId));
+    expect(events.map((event) => event.kind)).toContain('attendance_confirmed');
+    expect(await unprocessedOf(f)).toEqual([]);
   });
 });

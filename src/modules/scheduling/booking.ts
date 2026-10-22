@@ -429,16 +429,17 @@ export type AttendanceResult =
  */
 export async function confirmAttendance(
   db: NodePgDatabase,
-  input: { tenantId: string; appointmentId: string; now: Date },
+  input: { tenantId: string; customerId: string; appointmentId: string; now: Date },
 ): Promise<AttendanceResult> {
-  const { tenantId, appointmentId, now } = input;
+  const { tenantId, customerId, appointmentId, now } = input;
   const ofThisAppointment = and(eq(appointmentEvents.tenantId, tenantId), eq(appointmentEvents.appointmentId, appointmentId));
 
   return db.transaction(async (tx) => {
     const [current] = await tx
       .select({ status: appointments.status, timeRange: appointments.timeRange })
       .from(appointments)
-      .where(and(eq(appointments.tenantId, tenantId), eq(appointments.id, appointmentId)))
+      // El id viene del botón: el turno tiene que ser de ESTA clienta (regla 2).
+      .where(and(eq(appointments.tenantId, tenantId), eq(appointments.customerId, customerId), eq(appointments.id, appointmentId)))
       .for('update');
     if (!current) return { ok: false, reason: 'not_found' } as const;
     if (!receivesReminder(current.status)) {

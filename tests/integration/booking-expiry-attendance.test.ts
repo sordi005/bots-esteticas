@@ -150,8 +150,12 @@ describe('expireReservation: la tarea vence la reserva provisoria (4.5)', () => 
 });
 
 describe('confirmAttendance: la clienta toca «Confirmo» (4.7)', () => {
-  const confirm = (fixture: BookableFixture, appointmentId: string, now = at('2026-10-04', '10:30')) =>
-    confirmAttendance(db, { tenantId: fixture.tenantId, appointmentId, now });
+  const confirm = (
+    fixture: BookableFixture,
+    appointmentId: string,
+    now = at('2026-10-04', '10:30'),
+    customerId = fixture.customerId,
+  ) => confirmAttendance(db, { tenantId: fixture.tenantId, customerId, appointmentId, now });
 
   async function confirmedAppointment() {
     const fixture = await createBookableFixture(db, { settings: { depositRequirement: 'never' } });
@@ -211,6 +215,13 @@ describe('confirmAttendance: la clienta toca «Confirmo» (4.7)', () => {
     const { fixture, appointmentId } = await confirmedAppointment();
 
     expect(await confirm(fixture, appointmentId, MONDAY_10)).toEqual({ ok: false, reason: 'already_started' });
+  });
+
+  it('el turno de otra clienta no se confirma: el id viene de un botón y nunca se confía en él', async () => {
+    const { fixture, appointmentId } = await confirmedAppointment();
+    const other = await createCustomer(db, fixture.tenantId);
+
+    expect(await confirm(fixture, appointmentId, at('2026-10-04', '10:30'), other)).toEqual({ ok: false, reason: 'not_found' });
   });
 
   it('un turno de otro negocio no se encuentra', async () => {

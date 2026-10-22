@@ -11,6 +11,7 @@ import { tenants } from '../../tenants/schema.js';
 import type { FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { inboundImageId } from '../../whatsapp/webhook-payload.js';
 import { registerTransferReceipt } from '../deposit-receipts.js';
+import { registerReminderConfirmations } from '../reminder-confirmations.js';
 import { formatLocalSlot } from '../format.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
@@ -194,6 +195,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
 
     // Lo que la clienta tocó en botones o listas se resuelve y se vuelve a validar acá: el modelo
     // recibe la elección ya resuelta y nunca interpreta el título del botón (5.3).
+    // «Confirmo» del recordatorio: lo registra el código antes de llamar al modelo (4.7, decisión 37).
+    const confirmations = await registerReminderConfirmations(db, { tenantId, customerId, messages: turn.messages, now: at });
     const choices: ResolvedChoice[] = [];
     const pendingMessages: LlmMessage[] = [];
     const chosenOptionIds = new Set<string>();
@@ -202,7 +205,9 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       pendingMessages.push({ role: 'user', text: described.text });
       if (described.replyId) {
         chosenOptionIds.add(described.replyId);
-        choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
+        const choice = await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId);
+        const confirmedNow = choice.tipo === 'recordatorio' && choice.accion === 'confirmar';
+        choices.push(confirmedNow ? { ...choice, asistencia: confirmations.get(choice.turnoId) ?? 'no_corresponde' } : choice);
       }
     }
     const chosenSlot = slotToActOn(choices, customer.name !== null);

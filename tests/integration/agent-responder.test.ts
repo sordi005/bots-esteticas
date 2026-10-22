@@ -21,8 +21,8 @@ import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { notifications } from '../../src/modules/notifications/schema.js';
-import { bookAppointment } from '../../src/modules/scheduling/booking.js';
-import { appointments } from '../../src/modules/scheduling/schema.js';
+import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
+import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
 import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { renderTemplate, templateMessage } from '../../src/modules/whatsapp/templates.js';
@@ -1706,5 +1706,81 @@ describe('createAgentResponder: el historial arranca en la reanudación (4.8)', 
 
     expect((await sentToTheModel(reused))?.turnContext).toMatch(/Conversación nueva: no/);
     expect((await sentToTheModel(stale))?.turnContext).toMatch(/Conversación nueva: sí/);
+  });
+});
+
+describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => {
+  async function confirmedAppointment(f: Fixture) {
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start: at('2026-10-06', '15:30'),
+      actor: 'assistant',
+      now: hoursAgo(30),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    return booked.appointmentId;
+  }
+
+  const tapReminder = (f: Fixture, appointmentId: string, code: 'confirmar' | 'reprogramar' | 'cancelar', text: string) =>
+    addInbound(f, {
+      type: 'button',
+      content: { type: 'button', button: { payload: `recordatorio:${appointmentId}:${code}`, text } },
+      at: minutesAgo(0.1),
+      processed: false,
+    });
+
+  const attendanceEvents = async (appointmentId: string) =>
+    (await db.select().from(appointmentEvents).where(eq(appointmentEvents.appointmentId, appointmentId))).filter(
+      (event) => event.kind === 'attendance_confirmed',
+    );
+
+  it('«Confirmo» lo registra el código antes de llamar al modelo, y el contexto se lo dice', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'confirmar', 'Confirmo')], [
+      finalAnswer('¡Gracias, Caro! Te esperamos el martes.'),
+    ]);
+    await result;
+
+    expect(await attendanceEvents(appointmentId)).toHaveLength(1);
+    expect(requests[0]?.turnContext).toContain('Tocó «Confirmo» en el recordatorio de su turno del martes 6/10 15:30');
+    expect(requests[0]?.turnContext).toContain('el sistema ya registró que viene');
+  });
+
+  it('«Confirmo» sobre un turno cancelado no registra nada y el contexto lo dice', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    await changeAppointmentStatus(db, {
+      tenantId: f.tenantId,
+      appointmentId,
+      to: 'CANCELLED_BY_CUSTOMER',
+      actor: 'assistant',
+      now: hoursAgo(2),
+    });
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'confirmar', 'Confirmo')], [
+      finalAnswer('Ese turno ya estaba cancelado.'),
+    ]);
+    await result;
+
+    expect(await attendanceEvents(appointmentId)).toEqual([]);
+    expect(requests[0]?.turnContext).toContain('no se registró nada');
+  });
+
+  it('«Cancelar» no cancela nada: el contexto le pide la confirmación con «Sí, cancelar»', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], [
+      finalAnswer('¿Querés cancelar tu turno del martes?'),
+    ]);
+    await result;
+
+    expect(requests[0]?.turnContext).toContain('confirmada=false');
+    expect(await attendanceEvents(appointmentId)).toEqual([]);
   });
 });
