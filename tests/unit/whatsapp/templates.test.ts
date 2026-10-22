@@ -3,9 +3,11 @@ import { toGraphPayload } from '../../../src/modules/whatsapp/outgoing.js';
 import {
   TEMPLATE_LANGUAGE,
   TEMPLATES,
+  checkTemplates,
   renderTemplate,
   templateMessage,
   templateVariables,
+  type MetaTemplate,
   type TemplateDefinition,
   type TemplateName,
 } from '../../../src/modules/whatsapp/templates.js';
@@ -131,5 +133,93 @@ describe('el catálogo cumple las reglas de Meta', () => {
 
     expect(buttons.length).toBeLessThanOrEqual(10);
     for (const title of buttons) expect(title.length).toBeLessThanOrEqual(25);
+  });
+});
+
+describe('checkTemplates: las plantillas de Meta contra las del código (pnpm whatsapp:templates)', () => {
+  /** Una plantilla como la devuelve Meta, idéntica a la del código. */
+  function fromMeta(name: TemplateName, overrides: Partial<MetaTemplate> = {}): MetaTemplate {
+    const definition: TemplateDefinition = TEMPLATES[name];
+    return {
+      name,
+      status: 'APPROVED',
+      category: 'UTILITY',
+      language: 'es_AR',
+      components: [
+        ...(definition.header ? [{ type: 'HEADER', format: 'IMAGE' }] : []),
+        { type: 'BODY', text: definition.body },
+        ...(definition.buttons
+          ? [{ type: 'BUTTONS', buttons: definition.buttons.map((text) => ({ type: 'QUICK_REPLY', text })) }]
+          : []),
+      ],
+      ...overrides,
+    };
+  }
+
+  const all = () => (Object.keys(TEMPLATES) as TemplateName[]).map((name) => fromMeta(name));
+
+  it('todas aprobadas e iguales: ningún problema', () => {
+    const report = checkTemplates(all());
+
+    expect(report).toHaveLength(Object.keys(TEMPLATES).length);
+    expect(report.every((row) => row.status === 'APPROVED' && row.problems.length === 0)).toBe(true);
+  });
+
+  it('una que falta en Meta se marca como faltante', () => {
+    const report = checkTemplates(all().filter((template) => template.name !== 'reserva_vencida'));
+
+    expect(report.find((row) => row.name === 'reserva_vencida')).toEqual({ name: 'reserva_vencida', status: 'MISSING', problems: [] });
+  });
+
+  it('dice el estado que informa Meta (pendiente, rechazada, pausada)', () => {
+    const report = checkTemplates([
+      fromMeta('recordatorio_turno', { status: 'PENDING' }),
+      fromMeta('sena_confirmada', { status: 'REJECTED' }),
+    ]);
+
+    expect(report.find((row) => row.name === 'recordatorio_turno')?.status).toBe('PENDING');
+    expect(report.find((row) => row.name === 'sena_confirmada')?.status).toBe('REJECTED');
+  });
+
+  it('un texto distinto al del código es un problema: el historial mostraría otra cosa', () => {
+    const report = checkTemplates([
+      fromMeta('reserva_vencida', {
+        components: [{ type: 'BODY', text: 'Tu reserva de {{servicio}} del {{fecha_hora}} venció. ¡Escribinos!' }],
+      }),
+    ]);
+
+    expect(report.find((row) => row.name === 'reserva_vencida')?.problems).toEqual(['el texto no coincide con el del código']);
+  });
+
+  it('botones distintos, la imagen que falta y otra categoría también', () => {
+    const report = checkTemplates([
+      fromMeta('recordatorio_turno', {
+        components: [
+          { type: 'BODY', text: TEMPLATES.recordatorio_turno.body },
+          { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Confirmo' }, { type: 'QUICK_REPLY', text: 'Cancelo' }] },
+        ],
+      }),
+      fromMeta('aviso_comprobante', {
+        category: 'MARKETING',
+        components: [
+          { type: 'BODY', text: TEMPLATES.aviso_comprobante.body },
+          { type: 'BUTTONS', buttons: TEMPLATES.aviso_comprobante.buttons.map((text) => ({ type: 'QUICK_REPLY', text })) },
+        ],
+      }),
+    ]);
+
+    expect(report.find((row) => row.name === 'recordatorio_turno')?.problems).toEqual([
+      'los botones no coinciden: Confirmo | Cancelo',
+    ]);
+    expect(report.find((row) => row.name === 'aviso_comprobante')?.problems).toEqual([
+      'Meta la clasificó como MARKETING, no como utilidad',
+      'le falta la imagen del encabezado',
+    ]);
+  });
+
+  it('solo cuenta las del idioma del código', () => {
+    const report = checkTemplates([fromMeta('reserva_vencida', { language: 'es' })]);
+
+    expect(report.find((row) => row.name === 'reserva_vencida')?.status).toBe('MISSING');
   });
 });

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { TemplateMessage } from './outgoing.js';
 
 /**
@@ -140,4 +141,59 @@ export function renderTemplate(message: TemplateMessage): string | null {
   const definition: TemplateDefinition = TEMPLATES[message.name];
   const text = definition.body.replace(VARIABLE, (whole, variable: string) => message.params[variable] ?? whole);
   return definition.buttons ? `${text}\n[Botones: ${definition.buttons.join(' | ')}]` : text;
+}
+
+/** Una plantilla como la devuelve Meta (GET /{waba-id}/message_templates). */
+export const metaTemplateSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  category: z.string(),
+  language: z.string(),
+  components: z.array(
+    z.object({
+      type: z.string(),
+      text: z.string().optional(),
+      format: z.string().optional(),
+      buttons: z.array(z.object({ type: z.string(), text: z.string() })).optional(),
+    }),
+  ),
+});
+
+export type MetaTemplate = z.infer<typeof metaTemplateSchema>;
+
+export interface TemplateCheck {
+  name: TemplateName;
+  /** El estado que informa Meta (APPROVED, PENDING, REJECTED, PAUSED…), o MISSING si no está creada. */
+  status: string;
+  problems: string[];
+}
+
+/**
+ * Compara las plantillas de la cuenta con las del código (8.1): el texto tiene que ser idéntico,
+ * porque con él se muestra en el historial lo que se envió.
+ */
+export function checkTemplates(fromMeta: MetaTemplate[]): TemplateCheck[] {
+  return (Object.keys(TEMPLATES) as TemplateName[]).map((name) => {
+    const definition: TemplateDefinition = TEMPLATES[name];
+    const template = fromMeta.find((candidate) => candidate.name === name && candidate.language === TEMPLATE_LANGUAGE);
+    if (!template) return { name, status: 'MISSING', problems: [] };
+
+    const problems: string[] = [];
+    if (template.category !== 'UTILITY') problems.push(`Meta la clasificó como ${template.category}, no como utilidad`);
+
+    const body = template.components.find((component) => component.type === 'BODY');
+    if (body?.text !== definition.body) problems.push('el texto no coincide con el del código');
+
+    const buttons = template.components.find((component) => component.type === 'BUTTONS')?.buttons ?? [];
+    const titles = buttons.map((button) => button.text);
+    if (titles.join('|') !== (definition.buttons ?? []).join('|')) {
+      problems.push(`los botones no coinciden: ${titles.join(' | ') || 'ninguno'}`);
+    }
+
+    const image = template.components.some((component) => component.type === 'HEADER' && component.format === 'IMAGE');
+    if (definition.header === 'image' && !image) problems.push('le falta la imagen del encabezado');
+    if (definition.header !== 'image' && image) problems.push('tiene una imagen de encabezado que el código no manda');
+
+    return { name, status: template.status, problems };
+  });
 }
