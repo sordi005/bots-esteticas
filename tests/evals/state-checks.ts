@@ -150,3 +150,13 @@ export function verifyCustomerName(result: EvalResult, expected: string): string
   if (nombreClienta === expected) return null;
   return `El nombre guardado es ${nombreClienta === null ? 'ninguno' : `«${nombreClienta}»`} y se esperaba «${expected}»`;
 }
+
+/** La clienta confirmó (o no) que va, con el botón del recordatorio (4.7, H10): lo registra el código. */
+export function verifyAttendanceConfirmed(result: EvalResult, clave: string, expected: boolean): string | null {
+  const found = result.estado.turnos.find((appointment) => appointment.clave === clave);
+  if (!found) return `No está el turno «${clave}» entre los que preparó el caso`;
+  if (found.asistenciaConfirmada === expected) return null;
+  return expected
+    ? `La confirmación de asistencia del turno «${clave}» no quedó registrada`
+    : `La confirmación de asistencia del turno «${clave}» quedó registrada y no correspondía`;
+}

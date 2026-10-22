@@ -15,6 +15,7 @@ import {
   combineChecks,
   verifyAppointment,
   verifyAppointmentsOf,
+  verifyAttendanceConfirmed,
   verifyCustomerName,
   verifyHandoff,
   verifyHandoffSummaryWithout,
@@ -95,6 +96,22 @@ const FRIDAY_AFTERNOON_HISTORY: EvalHistoryEntry[] = [
     botones: ['vie 9/10 15:00', 'vie 9/10 16:30', 'vie 9/10 18:00'],
   },
 ];
+
+/**
+ * Su turno del viernes 9/10 a las 15:00 con Mica, confirmado (seña pagada): el del recordatorio de H10. Mañana, y
+ * a más de 24 horas, así que cancelar o reprogramar están dentro del plazo (4.6).
+ */
+const FRIDAY_CONFIRMED_APPOINTMENT: EvalAppointmentSetup = {
+  clave: 'viernes',
+  servicio: SEMI,
+  profesional: 'Mica',
+  inicio: '2026-10-09 15:00',
+  senaAprobada: true,
+};
+
+/** El turno del recordatorio sigue igual: confirmado y en su horario. */
+const verifyFridayUnchanged = (resultado: Parameters<typeof verifyAppointment>[0]) =>
+  verifyAppointment(resultado, 'viernes', { estado: 'CONFIRMED', inicio: '2026-10-09 15:00' });
 
 export const evalCases: EvalCase[] = [
   {
@@ -731,6 +748,111 @@ export const evalCases: EvalCase[] = [
     espera: {
       menciona: ['9/10', '9:00'],
       verifica: (resultado) => verifyHandoff(resultado, 'customer_request'),
+    },
+  },
+  {
+    // H10, 4.7: «Confirmo» lo registra el código antes de llamar al modelo (decisión 37). El modelo solo agradece:
+    // no cancela, no mueve ni reserva nada, y no deriva.
+    nombre: 'recordatorio_confirma',
+    mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'confirmar' }, titulo: 'Confirmo' }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
+    },
+    espera: {
+      noLlama: ['cancelar_turno', 'reprogramar_turno', 'crear_reserva'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAttendanceConfirmed(resultado, 'viernes', true),
+          verifyFridayUnchanged(resultado),
+          verifyNotHandedOff(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // H10, 4.7: «Reprogramar» es elegir ese turno para moverlo: ofrece los horarios para reprogramar, sin tocar el turno.
+    nombre: 'recordatorio_reprogramar',
+    mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'reprogramar' }, titulo: 'Reprogramar' }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
+    },
+    espera: {
+      herramientas: ['consultar_horarios_para_reprogramar'],
+      noLlama: ['crear_reserva', 'cancelar_turno'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
+          verifyFridayUnchanged(resultado),
+          verifyAttendanceConfirmed(resultado, 'viernes', false),
+          verifyNotHandedOff(resultado),
+        ),
+    },
+  },
+  {
+    // H10, 4.7 y 4.6: «Cancelar» no cancela: pide la confirmación con el botón «Sí, cancelar». Un toque sin querer
+    // cuesta caro.
+    nombre: 'recordatorio_cancelar',
+    mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'cancelar' }, titulo: 'Cancelar' }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
+    },
+    espera: {
+      herramientas: ['cancelar_turno'],
+      verifica: (resultado) =>
+        combineChecks(verifyCancelButtonOffered(resultado), verifyFridayUnchanged(resultado), verifyNotHandedOff(resultado)),
+    },
+  },
+  {
+    // H10, 4.7: contesta el recordatorio escribiendo, sin tocar un botón. El modelo ve el recordatorio en el historial
+    // aunque lo abra (la clienta no escribió en 24 horas): no cancela sin confirmación ni deriva.
+    nombre: 'recordatorio_no_puedo_ir',
+    mensajes: ['no voy a poder ir mañana, se me complicó'],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
+    },
+    espera: {
+      noLlama: ['crear_reserva'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyFridayUnchanged(resultado),
+          verifyAttendanceConfirmed(resultado, 'viernes', false),
+          verifyNotHandedOff(resultado),
+          verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // H10, 4.5: venció su reserva provisoria (el aviso del sistema está en el historial) y pide otro horario. Ofrece
+    // horarios libres para reservar de nuevo; el turno vencido queda vencido y no se reserva nada sin que elija.
+    nombre: 'reserva_vencida_otro_horario',
+    mensajes: ['uh, se me pasó. tenés otro horario el martes?'],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [{ ...TUESDAY_APPOINTMENT, vencido: true }],
+      historial: [
+        { clienta: 'quiero turno de semi el martes 13 a las 17 con Mica' },
+        { aviso: 'reserva_vencida', turno: 'martes' },
+      ],
+    },
+    espera: {
+      herramientas: ['consultar_disponibilidad'],
+      noLlama: ['crear_reserva'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyOffersFreeSlots(resultado, EVAL_TIME_ZONE),
+          verifyAppointmentsOf(resultado, 'clienta', [
+            { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-13 17:00', estado: 'EXPIRED' },
+          ]),
+          verifyNotHandedOff(resultado),
+        ),
     },
   },
 ];

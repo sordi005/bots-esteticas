@@ -32,6 +32,8 @@ export interface EvalAppointmentState {
   /** Inicio en hora local del negocio, "AAAA-MM-DD HH:MM". */
   inicio: string;
   estado: AppointmentStatus;
+  /** La clienta confirmó que va con el botón del recordatorio (4.7, H10). */
+  asistenciaConfirmada: boolean;
 }
 
 /** Lo que quedó en la base después de la vuelta, para los chequeos con `verifica`. */
@@ -70,7 +72,9 @@ export type EvalChoice =
    * Un horario nuevo para MOVER uno de sus turnos (decisión 28): id `reprogramar:`. El turno por su
    * `clave`; el inicio, en hora local "AAAA-MM-DD HH:MM".
    */
-  | { tipo: 'reprogramar'; turno: string; inicio: string };
+  | { tipo: 'reprogramar'; turno: string; inicio: string }
+  /** Un botón del recordatorio del día anterior de uno de sus turnos (4.7, H10): llega como botón de plantilla. */
+  | { tipo: 'recordatorio'; turno: string; accion: 'confirmar' | 'reprogramar' | 'cancelar' };
 
 /** Un mensaje de la clienta: texto, una opción tocada (con el título del botón) o una imagen (con texto opcional). */
 export type EvalInbound =
@@ -79,7 +83,14 @@ export type EvalInbound =
   | { imagen: string | null };
 
 /** Un mensaje anterior a la vuelta: de la clienta o del asistente (texto, con los títulos de sus botones si ofreció). */
-export type EvalHistoryEntry = { clienta: EvalInbound } | { asistente: string; botones?: string[] };
+export type EvalHistoryEntry =
+  | { clienta: EvalInbound }
+  | { asistente: string; botones?: string[] }
+  /**
+   * Un aviso del sistema sobre uno de sus turnos (H10): el recordatorio del día anterior (con plantilla) o el
+   * de la reserva vencida. Se guarda como lo deja `send_notification`, así el historial lo marca como aviso.
+   */
+  | { aviso: 'recordatorio' | 'reserva_vencida'; turno: string };
 
 /** Un turno que existe antes de la vuelta. Se crea con `booking.ts`, como en producción. */
 export interface EvalAppointmentSetup {
@@ -96,6 +107,8 @@ export interface EvalAppointmentSetup {
   senaAprobada?: boolean;
   /** Ya mandó el comprobante: la seña queda en verificación (H9, 4.5). */
   comprobante?: boolean;
+  /** La reserva provisoria venció (H10, 4.5): se reservó dos horas antes y la venció la tarea. */
+  vencido?: boolean;
   /**
    * Los inicios anteriores del turno, del primero al último: se reservó en el primero y se
    * reprogramó a cada uno de los siguientes hasta `inicio`. Cada uno es una reprogramación usada.

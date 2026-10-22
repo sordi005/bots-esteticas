@@ -3,6 +3,7 @@ import type { EvalAppointmentState, EvalResult, EvalState } from '../../evals/ev
 import {
   combineChecks,
   verifyAppointment,
+  verifyAttendanceConfirmed,
   verifyAppointmentsOf,
   verifyCustomerName,
   verifyHandoff,
@@ -21,6 +22,7 @@ function appointment(overrides: Partial<EvalAppointmentState> = {}): EvalAppoint
     profesional: 'Mica',
     inicio: '2026-10-09 15:00',
     estado: 'PENDING_DEPOSIT',
+    asistenciaConfirmada: false,
     ...overrides,
   };
 }
@@ -271,5 +273,23 @@ describe('combineChecks', () => {
   it('no repite un motivo que dos chequeos dan igual', () => {
     expect(combineChecks('No ofreció ningún horario', 'No ofreció ningún horario')).toBe('No ofreció ningún horario');
     expect(combineChecks('a', 'b', 'a')).toBe('a | b');
+  });
+});
+
+describe('verifyAttendanceConfirmed: el «Confirmo» del recordatorio quedó registrado (4.7, H10)', () => {
+  const tuesday = (asistenciaConfirmada: boolean) => appointment({ clave: 'martes', asistenciaConfirmada });
+
+  it('pasa si quedó como se esperaba', () => {
+    expect(verifyAttendanceConfirmed(result({ turnos: [tuesday(true)] }), 'martes', true)).toBeNull();
+    expect(verifyAttendanceConfirmed(result({ turnos: [tuesday(false)] }), 'martes', false)).toBeNull();
+  });
+
+  it('falla si no se registró, o si se registró sin que correspondiera', () => {
+    expect(verifyAttendanceConfirmed(result({ turnos: [tuesday(false)] }), 'martes', true)).toMatch(/no quedó registrada/);
+    expect(verifyAttendanceConfirmed(result({ turnos: [tuesday(true)] }), 'martes', false)).toMatch(/quedó registrada/);
+  });
+
+  it('falla si el turno no está', () => {
+    expect(verifyAttendanceConfirmed(result(), 'martes', true)).toMatch(/No está el turno «martes»/);
   });
 });

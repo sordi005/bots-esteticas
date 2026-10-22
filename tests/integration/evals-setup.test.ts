@@ -115,7 +115,7 @@ describe('preparar: los turnos', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: 'martes', de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: TUESDAY, estado: 'PENDING_DEPOSIT' },
+      { clave: 'martes', de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: TUESDAY, estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     const listed = lastToolOutputs(request(requests, 1))[0] as { turnos: Record<string, unknown>[] };
     expect(listed.turnos).toHaveLength(1);
@@ -133,7 +133,7 @@ describe('preparar: los turnos', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: 'maria', de: 'otra', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 11:00', estado: 'PENDING_DEPOSIT' },
+      { clave: 'maria', de: 'otra', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 11:00', estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     expect(lastToolOutputs(request(requests, 1))[0]).toMatchObject({ turnos: [] });
   });
@@ -448,7 +448,7 @@ describe('el estado que queda en la base', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: null, de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT' },
+      { clave: null, de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     expect(evaluated.estado.nombreClienta).toBe('Caro Pérez');
     expect(evaluated.estado.derivaciones).toEqual([]);

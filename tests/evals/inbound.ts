@@ -28,6 +28,10 @@ export function buildInboundMessage(
   }
 
   const reply = { id: resolveChoiceId(inbound.eleccion), title: inbound.titulo };
+  // Los botones del recordatorio van en una plantilla: Meta los manda como tipo `button` (8.1).
+  if (inbound.eleccion.tipo === 'recordatorio') {
+    return { type: 'button', content: { type: 'button', button: { payload: reply.id, text: reply.title } } };
+  }
   // «Sí, cancelar» llega de un botón; los horarios y los turnos, de una lista (5.3).
   const interactive =
     inbound.eleccion.tipo === 'cancelar'

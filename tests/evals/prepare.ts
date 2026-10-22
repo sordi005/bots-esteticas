@@ -8,13 +8,17 @@ import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { resolveChoice } from '../../src/modules/conversation/tools/choices.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
+import { loadNoticeAppointment } from '../../src/modules/notifications/notice-data.js';
+import { notifications } from '../../src/modules/notifications/schema.js';
+import { appointmentReminder, reservationExpired } from '../../src/modules/notifications/texts.js';
 import {
   bookAppointment,
   changeAppointmentStatus,
+  expireReservation,
   rescheduleAppointment,
   submitTransferReceipt,
 } from '../../src/modules/scheduling/booking.js';
-import { freeFormMessageSchema, type FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
+import { freeFormMessageSchema, type FreeFormMessage, type OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { EVAL_TIME_ZONE } from './clock.js';
 import type { EvalAppointmentSetup, EvalCase, EvalChoice, EvalHistoryEntry, EvalInbound } from './evaluate.js';
 import { buildInboundMessage } from './inbound.js';
@@ -38,6 +42,8 @@ export const PREPARED_BOOKING_AGE_MS = 10 * 60_000;
 /** El historial termina unos minutos antes del primer mensaje de la vuelta. */
 const HISTORY_LEAD_MINUTES = 3;
 const MINUTE_MS = 60_000;
+/** Un turno vencido se reserva dos horas antes de la vuelta: su seña de 60 minutos ya venció (H10). */
+const EXPIRED_BOOKING_AGE_MS = 2 * 60 * MINUTE_MS;
 const SECOND_MS = 1_000;
 
 export interface PrepareDependencies {
@@ -173,7 +179,13 @@ async function prepareRest(input: {
 
   for (const appointment of setup.turnos ?? []) {
     const customerId = await customerOf(appointment.otraClienta);
-    const id = await createAppointment({ db, tenantId, customerId, appointment, bookedAt, serviceId, professionalId, parseStart, fail });
+    const reservedAt = appointment.vencido ? new Date(now.getTime() - EXPIRED_BOOKING_AGE_MS) : bookedAt;
+    const id = await createAppointment({ db, tenantId, customerId, appointment, bookedAt: reservedAt, serviceId, professionalId, parseStart, fail });
+    if (appointment.vencido) {
+      // Lo vence la misma función que usa la tarea (4.5), un minuto después del plazo.
+      const expired = await expireReservation(db, { tenantId, appointmentId: id, now: new Date(reservedAt.getTime() + 61 * MINUTE_MS) });
+      if (!expired.ok) throw fail(`el turno de ${appointment.servicio} el ${appointment.inicio} no pudo vencer (${expired.reason})`);
+    }
     // La clave es solo de los turnos que el caso nombra; los demás figuran sin clave en el estado.
     if (appointment.clave !== undefined) {
       prepared.appointmentKeys.set(id, appointment.clave);
@@ -197,6 +209,8 @@ async function prepareRest(input: {
         return choiceIds.cancel(appointment.id);
       case 'reprogramar':
         return choiceIds.reschedule(appointment.id, parseStart(choice.inicio));
+      case 'recordatorio':
+        return choiceIds.reminder(appointment.id, REMINDER_ACTIONS[choice.accion]);
     }
   };
 
@@ -219,6 +233,10 @@ async function prepareRest(input: {
     const occurredAt = new Date(now.getTime() - (HISTORY_LEAD_MINUTES + history.length - 1 - index) * MINUTE_MS);
     if ('asistente' in entry) {
       await insertOutbound(db, { tenantId, conversationId: prepared.conversationId, entry, occurredAt, fail });
+    } else if ('aviso' in entry) {
+      const appointment = byKey.get(entry.turno);
+      if (!appointment) throw fail(`el aviso nombra el turno «${entry.turno}», que el caso no preparó`);
+      await insertNotice(db, { tenantId, conversationId: prepared.conversationId, appointmentId: appointment.id, aviso: entry.aviso, occurredAt });
     } else {
       await insertInbound(db, { tenantId, conversationId: prepared.conversationId, inbound: entry.clienta, occurredAt, processed: true, resolveChoiceId });
     }
@@ -341,6 +359,52 @@ async function insertInbound(
     .returning({ id: messages.id });
   if (!row) throw new Error('No se guardó un mensaje de la evaluación');
   return { id: row.id, type, content, occurredAt: input.occurredAt };
+}
+
+const REMINDER_ACTIONS = { confirmar: 'confirm', reprogramar: 'reschedule', cancelar: 'cancel' } as const;
+
+/**
+ * Un aviso del sistema en el historial (H10), guardado como lo deja `send_notification`: el mensaje
+ * saliente y el aviso enviado con el mismo id de WhatsApp. Así el historial lo marca como aviso.
+ */
+async function insertNotice(
+  db: NodePgDatabase,
+  input: {
+    tenantId: string;
+    conversationId: string;
+    appointmentId: string;
+    aviso: 'recordatorio' | 'reserva_vencida';
+    occurredAt: Date;
+  },
+): Promise<void> {
+  const { tenantId, appointmentId, occurredAt } = input;
+  const appointment = await loadNoticeAppointment(db, { tenantId, appointmentId });
+  const message: OutgoingMessage =
+    input.aviso === 'recordatorio' ? appointmentReminder({ appointmentId, appointment }) : reservationExpired(appointment);
+  const whatsappMessageId = `wamid.eval.${randomUUID()}`;
+
+  await db.insert(messages).values({
+    tenantId,
+    conversationId: input.conversationId,
+    direction: 'outbound',
+    type: message.type,
+    content: message,
+    whatsappMessageId,
+    occurredAt,
+  });
+  await db.insert(notifications).values({
+    tenantId,
+    recipient: 'customer',
+    kind: input.aviso === 'recordatorio' ? 'appointment_reminder' : 'reservation_expired',
+    customerId: appointment.customerId,
+    appointmentId,
+    appointmentStart: appointment.start,
+    message,
+    status: 'sent',
+    whatsappMessageId,
+    sentAt: occurredAt,
+    createdAt: occurredAt,
+  });
 }
 
 /** Un mensaje del asistente en el historial: texto, o con botones (hasta 3) o una lista con los títulos de las opciones. */

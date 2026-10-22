@@ -147,6 +147,7 @@ describe('formatReport', () => {
                   profesional: 'Mica',
                   inicio: '2026-10-13 17:00',
                   estado: 'PENDING_DEPOSIT',
+                  asistenciaConfirmada: false,
                 },
                 {
                   clave: null,
@@ -155,6 +156,7 @@ describe('formatReport', () => {
                   profesional: 'Sofi',
                   inicio: '2026-10-14 11:00',
                   estado: 'CONFIRMED',
+                  asistenciaConfirmada: false,
                 },
               ],
               derivaciones: [{ motivo: 'policy_exception', resumen: 'Pide cancelar fuera de plazo' }],
