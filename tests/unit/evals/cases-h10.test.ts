@@ -86,6 +86,25 @@ describe('los casos del recordatorio parten del aviso en el historial y su turno
   );
 });
 
+describe('las fallas de la prueba manual: los botones después de otro intercambio', () => {
+  it('cancelar después de confirmar: el historial tiene el recordatorio, el «Confirmo» y la respuesta', () => {
+    const { preparar, espera } = byName('recordatorio_cancelar_despues_de_confirmar');
+
+    expect(preparar?.historial?.map((entry) => Object.keys(entry)[0])).toEqual(['aviso', 'clienta', 'asistente']);
+    expect(espera.herramientas).toEqual(['cancelar_turno']);
+    expect(check('recordatorio_cancelar_despues_de_confirmar', withState({ turnos: [friday()] }, [cancelButton]))).toBeNull();
+    expect(check('recordatorio_cancelar_despues_de_confirmar', withState({ turnos: [friday()] }))).toMatch(/Sí, cancelar/);
+  });
+
+  it('reprogramar después de cancelar: tiene que consultar horarios, no cancelar', () => {
+    const { espera } = byName('recordatorio_reprogramar_despues_de_cancelar');
+
+    expect(espera.herramientas).toEqual(['consultar_horarios_para_reprogramar']);
+    expect(espera.noLlama).toContain('cancelar_turno');
+    expect(check('recordatorio_reprogramar_despues_de_cancelar', withState({ turnos: [friday()] }))).toMatch(/No ofreció/);
+  });
+});
+
 describe('recordatorio_confirma', () => {
   it('pasa con la asistencia registrada y el turno igual', () => {
     expect(check('recordatorio_confirma', withState({ turnos: [friday({ asistenciaConfirmada: true })] }))).toBeNull();

@@ -9,7 +9,7 @@ import {
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
-import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
+import { chosenSlotNotice, reminderActionNotice } from '../../src/modules/conversation/agent/agent.js';
 import {
   CHOICE_MARKER,
   CONVERSATION_STARTED_BY_NOTICE,
@@ -1732,6 +1732,9 @@ describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => 
       processed: false,
     });
 
+  const statusOfAppointment = async (appointmentId: string) =>
+    single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
+
   const attendanceEvents = async (appointmentId: string) =>
     (await db.select().from(appointmentEvents).where(eq(appointmentEvents.appointmentId, appointmentId))).filter(
       (event) => event.kind === 'attendance_confirmed',
@@ -1771,16 +1774,61 @@ describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => 
     expect(requests[0]?.turnContext).toContain('no se registró nada');
   });
 
+  it('«Cancelar» sin llamar a cancelar_turno: el código se lo marca y la respuesta ofrece «Sí, cancelar»', async () => {
+    // Prueba manual de H10: después del «Confirmo», tocó «Cancelar» y el modelo contestó «respondeme que sí» sin
+    // llamar a cancelar_turno. El contexto le decía qué hacer: lo verifica el código.
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    const turnoId = `turno:${appointmentId}`;
+    const skipped = finalAnswer('¿Querés cancelar tu turno? Respondeme que sí y lo cancelo.');
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], [
+      skipped,
+      callTools([{ name: 'cancelar_turno', input: { turno_id: turnoId, confirmada: false } }]),
+      finalAnswer('¿Confirmás que querés cancelar tu turno del martes?', [choiceIds.cancel(appointmentId)]),
+    ]);
+    const answer = await result;
+
+    expect(requests[1]?.messages.at(-1)).toEqual({
+      role: 'system_note',
+      text: reminderActionNotice({ tool: 'cancelar_turno', turnoId }),
+    });
+    expect(answer).toMatchObject({ type: 'buttons', buttons: [{ id: choiceIds.cancel(appointmentId) }] });
+    expect(await attendanceEvents(appointmentId)).toEqual([]);
+  });
+
+  it('«Reprogramar» sin consultar horarios: el código se lo marca', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    const turnoId = `turno:${appointmentId}`;
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], [
+      finalAnswer('No me llegó el texto de tu elección. ¿Querés reprogramar o cancelar?'),
+      callTools([{ name: 'consultar_horarios_para_reprogramar', input: { turno_id: turnoId } }]),
+      finalAnswer('Tengo estos horarios para pasar tu turno.'),
+    ]);
+    await result;
+
+    expect(requests[1]?.messages.at(-1)).toEqual({
+      role: 'system_note',
+      text: reminderActionNotice({ tool: 'consultar_horarios_para_reprogramar', turnoId }),
+    });
+  });
+
   it('«Cancelar» no cancela nada: el contexto le pide la confirmación con «Sí, cancelar»', async () => {
     const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
     const appointmentId = await confirmedAppointment(f);
 
     const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], [
-      finalAnswer('¿Querés cancelar tu turno del martes?'),
+      callTools([{ name: 'cancelar_turno', input: { turno_id: `turno:${appointmentId}`, confirmada: false } }]),
+      finalAnswer('¿Querés cancelar tu turno del martes?', [choiceIds.cancel(appointmentId)]),
     ]);
     await result;
 
     expect(requests[0]?.turnContext).toContain('confirmada=false');
+    // Con la herramienta llamada no hay nada que marcarle: dos llamadas al modelo, no tres.
+    expect(requests).toHaveLength(2);
+    expect(await statusOfAppointment(appointmentId)).toBe('CONFIRMED');
     expect(await attendanceEvents(appointmentId)).toEqual([]);
   });
 });

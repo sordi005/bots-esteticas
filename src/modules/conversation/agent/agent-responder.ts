@@ -26,6 +26,7 @@ import {
   runAgent,
   type AgentRun,
   type ChosenSlot,
+  type ReminderAction,
 } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
 import {
@@ -211,6 +212,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       }
     }
     const chosenSlot = slotToActOn(choices, customer.name !== null);
+    const reminderAction = reminderActionOf(choices);
     // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
 
@@ -245,6 +247,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           signal,
         },
         ...(chosenSlot ? { chosenSlot } : {}),
+        ...(reminderAction ? { reminderAction } : {}),
       },
     );
 
@@ -440,6 +443,18 @@ function slotToActOn(choices: ResolvedChoice[], hasBookingName: boolean): Chosen
       : undefined;
   }
   return { tool: 'reprogramar_turno', slotId: choiceIds.reschedule(last.turnoId, new Date(last.inicio)) };
+}
+
+/**
+ * El botón del recordatorio que tocó en esta vuelta y la herramienta que pide (4.7): «Cancelar», cancelar_turno (que
+ * ofrece «Sí, cancelar») y «Reprogramar», la consulta de horarios. Un turno que ya no está activo no pide nada: la
+ * herramienta igual lo rechazaría.
+ */
+function reminderActionOf(choices: ResolvedChoice[]): ReminderAction | undefined {
+  const last = choices.findLast((choice) => choice.tipo === 'recordatorio');
+  if (last?.tipo !== 'recordatorio' || !last.ocupaHorario || last.accion === 'confirmar') return undefined;
+  const tool = last.accion === 'cancelar' ? 'cancelar_turno' : 'consultar_horarios_para_reprogramar';
+  return { tool, turnoId: choiceIds.appointment(last.turnoId) };
 }
 
 /**

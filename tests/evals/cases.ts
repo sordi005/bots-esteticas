@@ -109,6 +109,16 @@ const FRIDAY_CONFIRMED_APPOINTMENT: EvalAppointmentSetup = {
   senaAprobada: true,
 };
 
+/**
+ * Lo que pasó en la prueba manual de H10 antes de tocar otro botón: el recordatorio, «Confirmo» y la respuesta. Con
+ * ese intercambio en el historial, el modelo contestaba los botones siguientes sin llamar a ninguna herramienta.
+ */
+const CONFIRMED_REMINDER_HISTORY: EvalHistoryEntry[] = [
+  { aviso: 'recordatorio', turno: 'viernes' },
+  { clienta: { eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'confirmar' }, titulo: 'Confirmo' } },
+  { asistente: 'Genial, Caro, quedó registrado que venís. Te esperamos el viernes 9/10 a las 15:00. ¡Nos vemos!' },
+];
+
 /** El turno del recordatorio sigue igual: confirmado y en su horario. */
 const verifyFridayUnchanged = (resultado: Parameters<typeof verifyAppointment>[0]) =>
   verifyAppointment(resultado, 'viernes', { estado: 'CONFIRMED', inicio: '2026-10-09 15:00' });
@@ -826,6 +836,43 @@ export const evalCases: EvalCase[] = [
           verifyAttendanceConfirmed(resultado, 'viernes', false),
           verifyNotHandedOff(resultado),
           verifyReplied(resultado),
+        ),
+    },
+  },
+  {
+    // Prueba manual de H10: después de «Confirmo» tocó «Cancelar» y el modelo contestó «respondeme que sí y lo cancelo»
+    // sin llamar a cancelar_turno: no ofreció el botón «Sí, cancelar».
+    nombre: 'recordatorio_cancelar_despues_de_confirmar',
+    mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'cancelar' }, titulo: 'Cancelar' }],
+    preparar: { nombre: CLIENT_NAME, turnos: [FRIDAY_CONFIRMED_APPOINTMENT], historial: CONFIRMED_REMINDER_HISTORY },
+    espera: {
+      herramientas: ['cancelar_turno'],
+      verifica: (resultado) =>
+        combineChecks(verifyCancelButtonOffered(resultado), verifyFridayUnchanged(resultado), verifyNotHandedOff(resultado)),
+    },
+  },
+  {
+    // Prueba manual de H10: después de «Confirmo» y de «Cancelar», tocó «Reprogramar» y el modelo contestó «no me llegó
+    // el texto de tu elección» sin consultar horarios.
+    nombre: 'recordatorio_reprogramar_despues_de_cancelar',
+    mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'reprogramar' }, titulo: 'Reprogramar' }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [
+        ...CONFIRMED_REMINDER_HISTORY,
+        { clienta: { eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'cancelar' }, titulo: 'Cancelar' } },
+        { asistente: 'Caro, ¿querés cancelar tu turno del viernes 9/10 a las 15:00?', botones: ['Sí, cancelar'] },
+      ],
+    },
+    espera: {
+      herramientas: ['consultar_horarios_para_reprogramar'],
+      noLlama: ['cancelar_turno', 'crear_reserva'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
+          verifyFridayUnchanged(resultado),
+          verifyNotHandedOff(resultado),
         ),
     },
   },

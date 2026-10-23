@@ -8,6 +8,7 @@ import {
   PENDING_WORK_NOTICE,
   UNCONFIRMED_CHANGE_NOTICE,
   chosenSlotNotice,
+  reminderActionNotice,
   runAgent,
   type AgentInput,
 } from '../../../../src/modules/conversation/agent/agent.js';
@@ -1531,5 +1532,61 @@ describe('runAgent: la clienta eligió un horario libre y la respuesta no lo res
     await run();
 
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe('runAgent: un botón del recordatorio pide una herramienta y la respuesta no la llama (4.7, H10)', () => {
+  // Lo encontró la prueba manual de H10: después de «Confirmo», tocó «Cancelar» y el modelo contestó «respondeme que sí
+  // y lo cancelo» sin llamar a cancelar_turno (sin el botón «Sí, cancelar»); y a «Reprogramar» contestó «no me llegó
+  // el texto de tu elección» sin consultar horarios. El contexto le decía qué herramienta llamar.
+  const TURNO = 'turno:00000000-0000-4000-8000-00000000000c';
+  const cancel = { tool: 'cancelar_turno', turnoId: TURNO } as const;
+  const reschedule = { tool: 'consultar_horarios_para_reprogramar', turnoId: TURNO } as const;
+
+  it('«Cancelar» sin cancelar_turno: se lo marca una vez y contesta con lo que devuelva', async () => {
+    const skipped = finalAnswer('¿Querés cancelar tu turno? Respondeme que sí y lo cancelo.');
+    const cancelTool = fakeTool('cancelar_turno');
+    const { run, requests } = agent(
+      [skipped, callTools([{ name: 'cancelar_turno', input: { turno_id: TURNO, confirmada: false } }]), finalAnswer('¿Lo cancelo?')],
+      [cancelTool.tool],
+      { reminderAction: cancel },
+    );
+
+    const { run: record } = await run();
+
+    expect(requests).toHaveLength(3);
+    expect(requests[1]?.messages.slice(-2)).toEqual([
+      { role: 'assistant_turn', turn: skipped.assistantTurn },
+      { role: 'system_note', text: reminderActionNotice(cancel) },
+    ]);
+    expect(record.toolCalls).toEqual(['cancelar_turno']);
+  });
+
+  it('el aviso nombra la herramienta, el turno_id y lo que tiene que pasar después', () => {
+    expect(reminderActionNotice(cancel)).toContain(`cancelar_turno con turno_id=${TURNO} y confirmada=false`);
+    expect(reminderActionNotice(cancel)).toContain('Sí, cancelar');
+    expect(reminderActionNotice(reschedule)).toContain(`consultar_horarios_para_reprogramar con turno_id=${TURNO}`);
+  });
+
+  it('«Reprogramar» con la consulta hecha no se marca', async () => {
+    const { run, requests } = agent(
+      [callTools([{ name: 'consultar_horarios_para_reprogramar', input: { turno_id: TURNO } }]), finalAnswer('Tengo estos horarios.')],
+      [fakeTool('consultar_horarios_para_reprogramar').tool],
+      { reminderAction: reschedule },
+    );
+
+    await run();
+
+    expect(requests).toHaveLength(2);
+  });
+
+  it('si vuelve a no llamarla, se envía su respuesta: una sola marca por vuelta', async () => {
+    const { run, requests } = agent([finalAnswer('¿Qué querés hacer?'), finalAnswer('¿Qué querés hacer?')], [], {
+      reminderAction: reschedule,
+    });
+
+    await run();
+
+    expect(requests).toHaveLength(2);
   });
 });
