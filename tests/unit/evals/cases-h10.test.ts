@@ -105,6 +105,17 @@ describe('las fallas de la prueba manual: los botones después de otro intercamb
   });
 });
 
+describe('reprogramar_elige_horario_despues_del_recordatorio', () => {
+  it('pasa con el turno movido al horario que eligió, y falla si quedó donde estaba', () => {
+    expect(
+      check('reprogramar_elige_horario_despues_del_recordatorio', withState({ turnos: [friday({ inicio: '2026-10-14 15:30' })] })),
+    ).toBeNull();
+    expect(check('reprogramar_elige_horario_despues_del_recordatorio', withState({ turnos: [friday()] }))).toMatch(
+      /2026-10-14 15:30/,
+    );
+  });
+});
+
 describe('recordatorio_confirma', () => {
   it('pasa con la asistencia registrada y el turno igual', () => {
     expect(check('recordatorio_confirma', withState({ turnos: [friday({ asistenciaConfirmada: true })] }))).toBeNull();

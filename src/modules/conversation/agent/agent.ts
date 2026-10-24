@@ -394,6 +394,21 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
       answer =
         response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
+      // Eligió un horario libre, o tocó un botón del recordatorio, y en la vuelta no se llamó a la herramienta que
+      // corresponde (6.4, 4.7): una vez se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
+      // Va antes que los otros controles: si además anuncia una búsqueda o afirma el cambio sin hacerlo, lo que tiene
+      // que hacer es llamar a esa herramienta (prueba manual de H10). Si igual afirma un cambio, se corrige al final.
+      const required = requiredTool(input);
+      const skipsRequiredTool =
+        answer !== null && required !== undefined && answer.derivar === null && !executedTools.includes(required.tool);
+      if (skipsRequiredTool && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: required.notice },
+        );
+        continue;
+      }
       // Anuncia una búsqueda y en toda la vuelta no consultó nada (6.4): la respuesta se envía tal cual, así que
       // una vez se lo hace notar. Un turno que quedó con herramientas pedidas no admite un mensaje de texto a
       // continuación: la API exige sus resultados.
@@ -429,19 +444,6 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
         messages.push(
           { role: 'assistant_turn', turn: response.assistantTurn },
           { role: 'system_note', text: PAYMENT_DETAILS_NOTICE },
-        );
-        continue;
-      }
-      // Eligió un horario libre, o tocó un botón del recordatorio, y en la vuelta no se llamó a la herramienta que
-      // corresponde (6.4, 4.7): una vez se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
-      const required = requiredTool(input);
-      const skipsRequiredTool =
-        answer !== null && required !== undefined && answer.derivar === null && !executedTools.includes(required.tool);
-      if (skipsRequiredTool && response.toolCalls.length === 0 && !corrected) {
-        corrected = true;
-        messages.push(
-          { role: 'assistant_turn', turn: response.assistantTurn },
-          { role: 'system_note', text: required.notice },
         );
         continue;
       }

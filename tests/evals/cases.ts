@@ -877,6 +877,34 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
+    // Prueba manual de H10: después del recordatorio, «Confirmo», «quiero reprogramar» y los horarios ofrecidos, tocó
+    // uno que seguía libre y el modelo contestó «listo, reprogramado» sin llamar a reprogramar_turno. El control de
+    // «afirma un cambio» gastaba la única marca de la vuelta y la respuesta fue «todavía no pude confirmar el cambio».
+    nombre: 'reprogramar_elige_horario_despues_del_recordatorio',
+    mensajes: [{ eleccion: { tipo: 'reprogramar', turno: 'viernes', inicio: '2026-10-14 15:30' }, titulo: 'mié 14/10 15:30' }],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [
+        ...CONFIRMED_REMINDER_HISTORY,
+        { clienta: 'quiero reprogramar' },
+        {
+          asistente: 'Caro, tu turno es el viernes 9/10 a las 15:00. Para moverlo tengo estos horarios libres con Mica:',
+          botones: ['mié 14/10 10:00', 'mié 14/10 15:30', 'mié 14/10 17:00'],
+        },
+      ],
+    },
+    espera: {
+      herramientas: ['reprogramar_turno'],
+      noLlama: ['crear_reserva', 'cancelar_turno'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'viernes', { estado: 'CONFIRMED', inicio: '2026-10-14 15:30' }),
+          verifyNotHandedOff(resultado),
+        ),
+    },
+  },
+  {
     // H10, 4.5: venció su reserva provisoria (el aviso del sistema está en el historial) y pide otro horario. Ofrece
     // horarios libres para reservar de nuevo; el turno vencido queda vencido y no se reserva nada sin que elija.
     nombre: 'reserva_vencida_otro_horario',

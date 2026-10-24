@@ -1590,3 +1590,46 @@ describe('runAgent: un botón del recordatorio pide una herramienta y la respues
     expect(requests).toHaveLength(2);
   });
 });
+
+describe('runAgent: con una herramienta obligatoria pendiente, su aviso va primero (H10)', () => {
+  // Prueba manual de H10: tocó un horario para reprogramar que seguía libre y el modelo contestó «listo, quedó
+  // reprogramado» sin llamar a reprogramar_turno. Saltó primero el control de «afirma un cambio» (no lo des por
+  // hecho), que gasta la única marca de la vuelta, y la respuesta final fue «todavía no pude confirmar el cambio».
+  const MOVE = 'reprogramar:00000000-0000-4000-8000-00000000000c:2026-10-23T22:00:00.000Z';
+  const chosenSlot = { tool: 'reprogramar_turno', slotId: MOVE } as const;
+
+  it('si afirma el cambio sin hacerlo, se le marca la herramienta que tiene que llamar', async () => {
+    const claimed = finalAnswer('Listo, tu turno quedó reprogramado para el viernes 23/10 a las 19:00.');
+    const { run, requests } = agent(
+      [claimed, callTools([{ name: 'reprogramar_turno', input: { horario_id: MOVE } }]), finalAnswer('Listo, lo pasé.')],
+      [changeTool('reprogramar_turno', { reprogramado: true }, true).tool],
+      { chosenSlot },
+    );
+
+    const { run: record } = await run();
+
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'system_note', text: chosenSlotNotice(chosenSlot) });
+    expect(record.toolCalls).toEqual(['reprogramar_turno']);
+  });
+
+  it('si anuncia una búsqueda sin hacerla, también: lo que tiene que hacer es llamar a esa herramienta', async () => {
+    const announced = finalAnswer('Dejame consultar si sigue libre ese horario.');
+    const { run, requests } = agent(
+      [announced, callTools([{ name: 'reprogramar_turno', input: { horario_id: MOVE } }]), finalAnswer('Listo, lo pasé.')],
+      [changeTool('reprogramar_turno', { reprogramado: true }, true).tool],
+      { chosenSlot },
+    );
+
+    await run();
+
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'system_note', text: chosenSlotNotice(chosenSlot) });
+  });
+
+  it('sin herramienta obligatoria, el control de «afirma un cambio» sigue igual', async () => {
+    const { run, requests } = agent([finalAnswer('Listo, quedó reprogramado.'), finalAnswer('Todavía no lo cambié.')]);
+
+    await run();
+
+    expect(requests[1]?.messages.at(-1)).toEqual({ role: 'system_note', text: UNCONFIRMED_CHANGE_NOTICE });
+  });
+});
