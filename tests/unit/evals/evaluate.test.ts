@@ -297,4 +297,8 @@ describe('evaluateCase: varias condiciones y el outcome', () => {
   it('la derivación del código por varias señas pendientes es una respuesta, no un fallo (H9, 4.5)', () => {
     expect(evaluateCase(caso({ sinHerramientas: true }), result({ outcome: 'handoff_payment_issue' })).ok).toBe(true);
   });
+
+  it('la respuesta del código a un botón del recordatorio es una respuesta, no un fallo (H10, decisión 38)', () => {
+    expect(evaluateCase(caso({ sinHerramientas: true }), result({ outcome: 'reminder_button' })).ok).toBe(true);
+  });
 });

@@ -172,9 +172,11 @@ function visibleText(result: EvalResult): string {
   return normalizeText(parts.join('\n'));
 }
 
-/** Resultados con los que la clienta recibió una respuesta del agente (aunque sea una a medias). */
-/** Contestó: el modelo, o el código con un texto fijo que es la respuesta correcta (varias señas pendientes, H9). */
-const ANSWERED: AgentOutcome[] = ['replied', 'tool_limit', 'handoff_payment_issue'];
+/**
+ * Contestó: el modelo, o el código con un texto fijo que es la respuesta correcta (varias señas pendientes, H9; un
+ * botón «Cancelar» o «Reprogramar» del recordatorio, H10).
+ */
+const ANSWERED: AgentOutcome[] = ['replied', 'tool_limit', 'handoff_payment_issue', 'reminder_button'];
 
 export function evaluateCase(evalCase: EvalCase, result: EvalResult): Evaluation {
   const { espera } = evalCase;
