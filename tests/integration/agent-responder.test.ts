@@ -9,7 +9,7 @@ import {
 } from '../../src/modules/conversation/agent/agent-responder.js';
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
-import { chosenSlotNotice, reminderActionNotice } from '../../src/modules/conversation/agent/agent.js';
+import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
 import {
   CHOICE_MARKER,
   CONVERSATION_STARTED_BY_NOTICE,
@@ -1710,13 +1710,13 @@ describe('createAgentResponder: el historial arranca en la reanudación (4.8)', 
 });
 
 describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => {
-  async function confirmedAppointment(f: Fixture) {
+  async function confirmedAppointment(f: Fixture, start = at('2026-10-06', '15:30')) {
     const booked = await bookAppointment(db, {
       tenantId: f.tenantId,
       customerId: f.customerId,
       serviceId: f.semi,
       professionalId: f.mica,
-      start: at('2026-10-06', '15:30'),
+      start,
       actor: 'assistant',
       now: hoursAgo(30),
     });
@@ -1774,61 +1774,81 @@ describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => 
     expect(requests[0]?.turnContext).toContain('no se registró nada');
   });
 
-  it('«Cancelar» sin llamar a cancelar_turno: el código se lo marca y la respuesta ofrece «Sí, cancelar»', async () => {
-    // Prueba manual de H10: después del «Confirmo», tocó «Cancelar» y el modelo contestó «respondeme que sí» sin
-    // llamar a cancelar_turno. El contexto le decía qué hacer: lo verifica el código.
+  it('«Cancelar» lo contesta el código: pide la confirmación con «Sí, cancelar», sin llamar al modelo', async () => {
+    // Prueba manual de H10: el modelo lo contestaba sin llamar a cancelar_turno (sin el botón), aun con el aviso.
     const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
     const appointmentId = await confirmedAppointment(f);
-    const turnoId = `turno:${appointmentId}`;
-    const skipped = finalAnswer('¿Querés cancelar tu turno? Respondeme que sí y lo cancelo.');
 
-    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], [
-      skipped,
-      callTools([{ name: 'cancelar_turno', input: { turno_id: turnoId, confirmada: false } }]),
-      finalAnswer('¿Confirmás que querés cancelar tu turno del martes?', [choiceIds.cancel(appointmentId)]),
-    ]);
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], []);
     const answer = await result;
 
-    expect(requests[1]?.messages.at(-1)).toEqual({
-      role: 'system_note',
-      text: reminderActionNotice({ tool: 'cancelar_turno', turnoId }),
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'buttons',
+      body: '¿Querés cancelar tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30? Si es así, tocá «Sí, cancelar».',
+      buttons: [{ id: choiceIds.cancel(appointmentId), title: 'Sí, cancelar' }],
     });
-    expect(answer).toMatchObject({ type: 'buttons', buttons: [{ id: choiceIds.cancel(appointmentId) }] });
-    expect(await attendanceEvents(appointmentId)).toEqual([]);
-  });
-
-  it('«Reprogramar» sin consultar horarios: el código se lo marca', async () => {
-    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
-    const appointmentId = await confirmedAppointment(f);
-    const turnoId = `turno:${appointmentId}`;
-
-    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], [
-      finalAnswer('No me llegó el texto de tu elección. ¿Querés reprogramar o cancelar?'),
-      callTools([{ name: 'consultar_horarios_para_reprogramar', input: { turno_id: turnoId } }]),
-      finalAnswer('Tengo estos horarios para pasar tu turno.'),
-    ]);
-    await result;
-
-    expect(requests[1]?.messages.at(-1)).toEqual({
-      role: 'system_note',
-      text: reminderActionNotice({ tool: 'consultar_horarios_para_reprogramar', turnoId }),
-    });
-  });
-
-  it('«Cancelar» no cancela nada: el contexto le pide la confirmación con «Sí, cancelar»', async () => {
-    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
-    const appointmentId = await confirmedAppointment(f);
-
-    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], [
-      callTools([{ name: 'cancelar_turno', input: { turno_id: `turno:${appointmentId}`, confirmada: false } }]),
-      finalAnswer('¿Querés cancelar tu turno del martes?', [choiceIds.cancel(appointmentId)]),
-    ]);
-    await result;
-
-    expect(requests[0]?.turnContext).toContain('confirmada=false');
-    // Con la herramienta llamada no hay nada que marcarle: dos llamadas al modelo, no tres.
-    expect(requests).toHaveLength(2);
     expect(await statusOfAppointment(appointmentId)).toBe('CONFIRMED');
-    expect(await attendanceEvents(appointmentId)).toEqual([]);
+    expect(await runsOf(f)).toMatchObject([{ outcome: 'reminder_button', model: null, llmCalls: 0 }]);
+  });
+
+  it('«Cancelar» fuera de plazo: no cancela, deriva y le dice la política con un texto fijo', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f, at('2026-10-05', '17:00'));
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toMatchObject({ type: 'text' });
+    const body = answer?.type === 'text' ? answer.body : '';
+    expect(body).toMatch(/^No puedo cancelar tu turno del lunes 5\/10 17:00 porque faltan menos de 24 horas para el turno/);
+    expect(body).toContain('Tu turno no cambió.');
+    expect(await statusOfAppointment(appointmentId)).toBe('CONFIRMED');
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toMatchObject([
+      { reason: 'policy_exception', status: 'open' },
+    ]);
+  });
+
+  it('«Reprogramar» lo contesta el código: pregunta para qué día, sin ofrecer horarios al azar', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'text',
+      body:
+        '¿Para qué día querés pasar tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30? ' +
+        'Decime el día y si preferís a la mañana o a la tarde, y te busco horarios.',
+    });
+  });
+
+  it('«Reprogramar» fuera de plazo deriva igual que la herramienta, sin preguntar el día', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f, at('2026-10-05', '17:00'));
+
+    const answer = await reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []).result;
+
+    expect(answer?.type === 'text' ? answer.body : '').toMatch(/^No puedo reprogramar tu turno del lunes 5\/10 17:00/);
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toHaveLength(1);
+  });
+
+  it('el botón de un turno que ya no está activo lo dice, sin derivar ni llamar al modelo', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    await changeAppointmentStatus(db, { tenantId: f.tenantId, appointmentId, to: 'CANCELLED_BY_CUSTOMER', actor: 'assistant', now: hoursAgo(1) });
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'text',
+      body: 'Tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30 ya no está activo (cancelado), así que no hay nada para reprogramar.',
+    });
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toEqual([]);
   });
 });

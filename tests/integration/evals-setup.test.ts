@@ -514,8 +514,21 @@ describe('los casos de cases.ts contra el seed', () => {
   it.each(evalCases)('$nombre se puede preparar y correr', async (evalCase) => {
     const before = await countAppointments();
 
-    // Con dos señas pendientes el código deriva sin llamar al modelo (4.5): esa vuelta tiene su propio motivo.
-    const outcome = evalCase.nombre === 'sena_comprobante_dos_senas' ? 'handoff_payment_issue' : 'replied';
+    // Con dos señas pendientes el código deriva sin llamar al modelo (4.5), y «Cancelar» o «Reprogramar» del
+    // recordatorio también los contesta el código (4.7, decisión 38): esas vueltas tienen su propio motivo.
+    const tapsReminderButton = evalCase.mensajes.some(
+      (message) =>
+        typeof message === 'object' &&
+        'eleccion' in message &&
+        message.eleccion.tipo === 'recordatorio' &&
+        message.eleccion.accion !== 'confirmar',
+    );
+    const outcome =
+      evalCase.nombre === 'sena_comprobante_dos_senas'
+        ? 'handoff_payment_issue'
+        : tapsReminderButton
+          ? 'reminder_button'
+          : 'replied';
     await expect(run(evalCase).result).resolves.toMatchObject({ outcome });
 
     expect(await countAppointments()).toBe(before);

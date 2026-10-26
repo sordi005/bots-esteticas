@@ -11,6 +11,7 @@ import { tenants } from '../../tenants/schema.js';
 import type { FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { inboundImageId } from '../../whatsapp/webhook-payload.js';
 import { registerTransferReceipt } from '../deposit-receipts.js';
+import { answerReminderButton } from '../reminder-buttons.js';
 import { registerReminderConfirmations } from '../reminder-confirmations.js';
 import { formatLocalSlot } from '../format.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
@@ -26,7 +27,6 @@ import {
   runAgent,
   type AgentRun,
   type ChosenSlot,
-  type ReminderAction,
 } from './agent.js';
 import type { LlmClient, LlmMessage } from './llm-client.js';
 import {
@@ -212,9 +212,27 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       }
     }
     const chosenSlot = slotToActOn(choices, customer.name !== null);
-    const reminderAction = reminderActionOf(choices);
     // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
+
+    const toolContext = { db, tenantId, customerId, conversationId, now: at, timeZone: tenant.timeZone, chosenOptionIds, signal };
+
+    // «Cancelar» y «Reprogramar» del recordatorio los contesta el código, sin el modelo (4.7, decisión 38).
+    const reminderChoice = choices.findLast((choice) => choice.tipo === 'recordatorio' && choice.accion !== 'confirmar');
+    const reminderAnswer =
+      reminderChoice?.tipo === 'recordatorio' ? await answerReminderButton(toolContext, reminderChoice) : null;
+    if (reminderAnswer) {
+      await db.insert(agentRuns).values({
+        tenantId,
+        conversationId,
+        model: null,
+        llmCalls: 0,
+        outcome: 'reminder_button',
+        createdAt: at,
+      });
+      logger.info({ outcome: 'reminder_button' }, 'Botón del recordatorio: contestó el código');
+      return reminderAnswer;
+    }
 
     // Se calcula acá y no en el modelo (4.8): si deriva, escribe este texto tal cual en su respuesta.
     const humanReplyWhen = await describeWhenHumanReplies(db, { tenantId, now: at });
@@ -236,18 +254,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           ...(receipt ? { receipt } : {}),
         }),
         history: [...history, ...pendingMessages],
-        toolContext: {
-          db,
-          tenantId,
-          customerId,
-          conversationId,
-          now: at,
-          timeZone: tenant.timeZone,
-          chosenOptionIds,
-          signal,
-        },
+        toolContext,
         ...(chosenSlot ? { chosenSlot } : {}),
-        ...(reminderAction ? { reminderAction } : {}),
       },
     );
 
@@ -443,18 +451,6 @@ function slotToActOn(choices: ResolvedChoice[], hasBookingName: boolean): Chosen
       : undefined;
   }
   return { tool: 'reprogramar_turno', slotId: choiceIds.reschedule(last.turnoId, new Date(last.inicio)) };
-}
-
-/**
- * El botón del recordatorio que tocó en esta vuelta y la herramienta que pide (4.7): «Cancelar», cancelar_turno (que
- * ofrece «Sí, cancelar») y «Reprogramar», la consulta de horarios. Un turno que ya no está activo no pide nada: la
- * herramienta igual lo rechazaría.
- */
-function reminderActionOf(choices: ResolvedChoice[]): ReminderAction | undefined {
-  const last = choices.findLast((choice) => choice.tipo === 'recordatorio');
-  if (last?.tipo !== 'recordatorio' || !last.ocupaHorario || last.accion === 'confirmar') return undefined;
-  const tool = last.accion === 'cancelar' ? 'cancelar_turno' : 'consultar_horarios_para_reprogramar';
-  return { tool, turnoId: choiceIds.appointment(last.turnoId) };
 }
 
 /**

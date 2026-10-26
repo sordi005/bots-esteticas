@@ -351,7 +351,9 @@ Detalle de los recordatorios (H10):
 - **[S]** El recordatorio corto se programa solo si el negocio lo tiene activado y tiene cargada la dirección: una variable de plantilla no puede ir vacía.
 - **[D]** Los botones del recordatorio devuelven `recordatorio:<turno>:confirmar|reprogramar|cancelar`, y el código vuelve a validar el turno, como con cualquier opción (5.3).
   - "Confirmo": el código registra la confirmación de asistencia (evento de auditoría del turno, en `booking.ts`) antes de llamar al modelo, y el agente contesta con ese hecho en el contexto de la vuelta. Con el asistente pausado se registra igual, sin contestar (como el comprobante, 4.5). No cambia el estado del turno: es lo que el aviso diario (H16) usa para mostrar los turnos sin confirmar.
-  - "Reprogramar" y "Cancelar": son la elección de ese turno con esa intención, y siguen el camino de siempre (4.6), con sus plazos y su derivación. "Cancelar" igual pide el botón "Sí, cancelar": un toque sin querer cuesta caro.
+  - "Cancelar" y "Reprogramar" los contesta el código, sin llamar al modelo, con las mismas verificaciones que las herramientas (4.6): el turno es de la clienta y sigue activo, y el plazo y las reprogramaciones lo permiten. Si no corresponde, deriva como las herramientas y le dice la política con un texto fijo. La prueba manual de H10 mostró que el modelo, aun con el contexto y el aviso del ciclo, contestaba sin llamar a la herramienta (sin el botón para confirmar, o sin buscar horarios).
+  - "Cancelar": texto fijo con el turno y el botón "Sí, cancelar" ("¿Querés cancelar tu turno de {servicio} con {profesional} del {fecha y hora}? Si es así, tocá «Sí, cancelar»."). Tocar "Cancelar" no cancela: un toque sin querer cuesta caro. Desde el "Sí, cancelar" sigue el camino de siempre.
+  - "Reprogramar": texto fijo que pregunta para qué día ("¿Para qué día querés pasar tu turno de {servicio} con {profesional} del {fecha y hora}? Decime el día y si preferís a la mañana o a la tarde, y te busco horarios."), en vez de ofrecer los primeros horarios libres, que pueden no tener nada que ver con lo que necesita. Con su respuesta sigue el asistente.
 
 ### 4.8 Derivación a una persona
 
@@ -1156,6 +1158,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 35 | Los avisos intentan primero el mensaje libre y, fuera de la ventana de 24 horas, la plantilla | Enviar todos los avisos con plantilla | El mensaje libre es más rico (la imagen con botones, el resumen completo) y casi siempre entra; Meta dice cuándo la ventana está cerrada, así que no hace falta llevar la cuenta. Los recordatorios sí van siempre con plantilla: suelen salir fuera de la ventana |
 | 36 | Las plantillas las define el código y se crean igual en Meta | Guardarlas editables en la base | El código escribe los textos de los avisos (8.2): tenerlos en el código permite mostrar en el historial lo que se envió y verificar que la plantilla aprobada coincida |
 | 37 | "Confirmo" lo registra el código antes de llamar al modelo | Una herramienta "confirmar asistencia" | Igual que el comprobante (decisión 31): el toque siempre queda registrado, aunque el modelo no llame a nada |
+| 38 | "Cancelar" y "Reprogramar" del recordatorio los contesta el código con textos fijos | Que el modelo llame a la herramienta, con un aviso del ciclo si no lo hace | En la prueba manual el modelo los contestó sin la herramienta tres veces, aun con el aviso. La respuesta correcta es siempre la misma (pedir la confirmación, preguntar el día): no hace falta el modelo |
 
 ---
 

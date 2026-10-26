@@ -127,6 +127,13 @@
       "when": 1792595889610,
       "tag": "0017_recordatorios_y_vencimientos",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793057731179,
+      "tag": "0018_respuesta_del_boton_del_recordatorio",
+      "breakpoints": true
     }
   ]
 }

@@ -782,7 +782,7 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
-    // H10, 4.7: «Reprogramar» es elegir ese turno para moverlo: ofrece los horarios para reprogramar, sin tocar el turno.
+    // H10, 4.7, decisión 38: «Reprogramar» lo contesta el código preguntando para qué día, sin tocar el turno.
     nombre: 'recordatorio_reprogramar',
     mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'reprogramar' }, titulo: 'Reprogramar' }],
     preparar: {
@@ -791,11 +791,10 @@ export const evalCases: EvalCase[] = [
       historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
     },
     espera: {
-      herramientas: ['consultar_horarios_para_reprogramar'],
-      noLlama: ['crear_reserva', 'cancelar_turno'],
+      sinHerramientas: true,
+      menciona: ['para qué día'],
       verifica: (resultado) =>
         combineChecks(
-          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
           verifyFridayUnchanged(resultado),
           verifyAttendanceConfirmed(resultado, 'viernes', false),
           verifyNotHandedOff(resultado),
@@ -803,8 +802,8 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
-    // H10, 4.7 y 4.6: «Cancelar» no cancela: pide la confirmación con el botón «Sí, cancelar». Un toque sin querer
-    // cuesta caro.
+    // H10, 4.7 y 4.6, decisión 38: «Cancelar» no cancela: el código pide la confirmación con el botón «Sí, cancelar».
+    // Un toque sin querer cuesta caro.
     nombre: 'recordatorio_cancelar',
     mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'cancelar' }, titulo: 'Cancelar' }],
     preparar: {
@@ -813,7 +812,7 @@ export const evalCases: EvalCase[] = [
       historial: [{ aviso: 'recordatorio', turno: 'viernes' }],
     },
     espera: {
-      herramientas: ['cancelar_turno'],
+      sinHerramientas: true,
       verifica: (resultado) =>
         combineChecks(verifyCancelButtonOffered(resultado), verifyFridayUnchanged(resultado), verifyNotHandedOff(resultado)),
     },
@@ -841,19 +840,19 @@ export const evalCases: EvalCase[] = [
   },
   {
     // Prueba manual de H10: después de «Confirmo» tocó «Cancelar» y el modelo contestó «respondeme que sí y lo cancelo»
-    // sin llamar a cancelar_turno: no ofreció el botón «Sí, cancelar».
+    // sin llamar a cancelar_turno: no ofreció el botón «Sí, cancelar». Desde la decisión 38 lo contesta el código.
     nombre: 'recordatorio_cancelar_despues_de_confirmar',
     mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'cancelar' }, titulo: 'Cancelar' }],
     preparar: { nombre: CLIENT_NAME, turnos: [FRIDAY_CONFIRMED_APPOINTMENT], historial: CONFIRMED_REMINDER_HISTORY },
     espera: {
-      herramientas: ['cancelar_turno'],
+      sinHerramientas: true,
       verifica: (resultado) =>
         combineChecks(verifyCancelButtonOffered(resultado), verifyFridayUnchanged(resultado), verifyNotHandedOff(resultado)),
     },
   },
   {
     // Prueba manual de H10: después de «Confirmo» y de «Cancelar», tocó «Reprogramar» y el modelo contestó «no me llegó
-    // el texto de tu elección» sin consultar horarios.
+    // el texto de tu elección» sin consultar horarios. Desde la decisión 38 el código pregunta para qué día.
     nombre: 'recordatorio_reprogramar_despues_de_cancelar',
     mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'reprogramar' }, titulo: 'Reprogramar' }],
     preparar: {
@@ -866,14 +865,9 @@ export const evalCases: EvalCase[] = [
       ],
     },
     espera: {
-      herramientas: ['consultar_horarios_para_reprogramar'],
-      noLlama: ['cancelar_turno', 'crear_reserva'],
-      verifica: (resultado) =>
-        combineChecks(
-          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
-          verifyFridayUnchanged(resultado),
-          verifyNotHandedOff(resultado),
-        ),
+      sinHerramientas: true,
+      menciona: ['para qué día'],
+      verifica: (resultado) => combineChecks(verifyFridayUnchanged(resultado), verifyNotHandedOff(resultado)),
     },
   },
   {

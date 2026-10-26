@@ -87,24 +87,6 @@ export function chosenSlotNotice({ tool, slotId }: ChosenSlot): string {
   return `La clienta eligió un horario con un botón y sigue libre: elegirlo ya es la confirmación. Tu respuesta no lo reservó y la respuesta se envía tal cual. Llamá ahora a ${tool} con horario_id=${slotId} (tal cual) y contestá con lo que devuelva. Si devuelve que no se pudo, explicale por qué y ofrecé otros horarios.`;
 }
 
-/**
- * Un botón del recordatorio que pide una herramienta (4.7, H10): «Cancelar» pide `cancelar_turno` (que ofrece «Sí,
- * cancelar») y «Reprogramar», `consultar_horarios_para_reprogramar`. Lo arma el código antes de llamar al modelo:
- * la prueba manual mostró que, después de otro intercambio, el modelo contestaba sin llamarla.
- */
-export interface ReminderAction {
-  tool: 'cancelar_turno' | 'consultar_horarios_para_reprogramar';
-  /** `turno:<uuid>`, como lo usan las herramientas. */
-  turnoId: string;
-}
-
-/** Lo que se le dice al modelo cuando tocó un botón del recordatorio y su respuesta no llamó a la herramienta. */
-export function reminderActionNotice({ tool, turnoId }: ReminderAction): string {
-  return tool === 'cancelar_turno'
-    ? `La clienta tocó «Cancelar» en el recordatorio y tu respuesta no llamó a cancelar_turno, así que no le ofrece el botón para confirmar. La respuesta se envía tal cual. Llamá ahora a cancelar_turno con turno_id=${turnoId} y confirmada=false, y ofrecele el botón «Sí, cancelar» que devuelve (su opcionId en «opciones»).`
-    : `La clienta tocó «Reprogramar» en el recordatorio y tu respuesta no consultó horarios. La respuesta se envía tal cual. Llamá ahora a consultar_horarios_para_reprogramar con turno_id=${turnoId} y ofrecele esos horarios.`;
-}
-
 /** Máximos de WhatsApp (outgoing.ts). */
 const MAX_TEXT_LENGTH = 4_096;
 const MAX_BUTTONS = 3;
@@ -215,8 +197,6 @@ export interface AgentInput {
   toolContext: ToolContext;
   /** El horario libre que la clienta eligió en esta vuelta, si hay uno para reservar o mover ya. */
   chosenSlot?: ChosenSlot;
-  /** El botón del recordatorio que tocó en esta vuelta, si pide una herramienta (4.7). */
-  reminderAction?: ReminderAction;
 }
 
 /** La derivación que pidió la respuesta del modelo, con el motivo ya traducido al de la base (4.8). */
@@ -336,7 +316,6 @@ function parseFinalAnswer(text: string): FinalAnswer | null {
 /** La herramienta que la elección de esta vuelta obliga a llamar, con lo que se le dice al modelo si no la llama. */
 function requiredTool(input: AgentInput): { tool: string; notice: string } | undefined {
   if (input.chosenSlot) return { tool: input.chosenSlot.tool, notice: chosenSlotNotice(input.chosenSlot) };
-  if (input.reminderAction) return { tool: input.reminderAction.tool, notice: reminderActionNotice(input.reminderAction) };
   return undefined;
 }
 
@@ -394,8 +373,8 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
       answer =
         response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
-      // Eligió un horario libre, o tocó un botón del recordatorio, y en la vuelta no se llamó a la herramienta que
-      // corresponde (6.4, 4.7): una vez se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
+      // Eligió un horario libre y en la vuelta no se llamó a la herramienta que lo reserva o lo mueve (6.4): una vez
+      // se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
       // Va antes que los otros controles: si además anuncia una búsqueda o afirma el cambio sin hacerlo, lo que tiene
       // que hacer es llamar a esa herramienta (prueba manual de H10). Si igual afirma un cambio, se corrige al final.
       const required = requiredTool(input);

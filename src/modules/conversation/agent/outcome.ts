@@ -28,6 +28,11 @@ export const agentOutcomes = [
    * «pago» y envía un texto fijo, sin llamar al modelo (4.5, H9).
    */
   'handoff_payment_issue',
+  /**
+   * La clienta tocó «Cancelar» o «Reprogramar» en el recordatorio: contestó el código con un texto fijo (pedir la
+   * confirmación o preguntar el día, o derivar si no corresponde), sin llamar al modelo (4.7, H10).
+   */
+  'reminder_button',
 ] as const;
 
 export type AgentOutcome = (typeof agentOutcomes)[number];
