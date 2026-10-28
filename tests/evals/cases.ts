@@ -899,6 +899,37 @@ export const evalCases: EvalCase[] = [
     },
   },
   {
+    // Prueba manual de H10: después de «Reprogramar» el código preguntó para qué día y la clienta contestó «para el
+    // miércoles por la tarde noche». El modelo consultó horarios y afirmó un cambio que no hizo: el código lo frenó
+    // con la frase fija y ella tuvo que repetirlo. Tiene que ofrecerle los horarios para mover el turno.
+    nombre: 'reprogramar_contesta_el_dia',
+    mensajes: ['para el miércoles por la tarde noche'],
+    preparar: {
+      nombre: CLIENT_NAME,
+      turnos: [FRIDAY_CONFIRMED_APPOINTMENT],
+      historial: [
+        { aviso: 'recordatorio', turno: 'viernes' },
+        { clienta: { eleccion: { tipo: 'recordatorio', turno: 'viernes', accion: 'reprogramar' }, titulo: 'Reprogramar' } },
+        {
+          asistente:
+            '¿Para qué día querés pasar tu turno de Esmaltado semipermanente con Mica del viernes 9/10 15:00? ' +
+            'Decime el día y si preferís a la mañana o a la tarde, y te busco horarios.',
+        },
+      ],
+    },
+    espera: {
+      herramientas: ['consultar_horarios_para_reprogramar'],
+      noLlama: ['crear_reserva', 'cancelar_turno'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyReplied(resultado),
+          verifyOffersRescheduleSlots(resultado, EVAL_TIME_ZONE),
+          verifyFridayUnchanged(resultado),
+          verifyNotHandedOff(resultado),
+        ),
+    },
+  },
+  {
     // H10, 4.5: venció su reserva provisoria (el aviso del sistema está en el historial) y pide otro horario. Ofrece
     // horarios libres para reservar de nuevo; el turno vencido queda vencido y no se reserva nada sin que elija.
     nombre: 'reserva_vencida_otro_horario',
