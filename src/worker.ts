@@ -12,6 +12,7 @@ import {
 import type { JobKind } from './modules/jobs/schema.js';
 import type { MercadoPagoClient } from './modules/mercadopago/client.js';
 import { refreshTokenJobHandler } from './modules/mercadopago/connection.js';
+import { paymentJobHandler } from './modules/mercadopago/payment-processing.js';
 import { reminderJobHandler } from './modules/notifications/appointment-reminders.js';
 import { notificationJobHandler, type NotificationSenderDependencies } from './modules/notifications/outbox.js';
 import { reservationExpiryJobHandler } from './modules/notifications/reservation-expiry.js';
@@ -31,7 +32,7 @@ export interface WorkerDependencies {
     NotificationSenderDependencies,
     'client' | 'credentialsKey' | 'notificationsNumber' | 'preferTemplates'
   >;
-  /** Sin esto no se renuevan los tokens de Mercado Pago (8.3): la aplicación no está configurada. */
+  /** Sin esto no se procesan los pagos ni se renuevan los tokens de Mercado Pago (8.3): la aplicación no está configurada. */
   mercadoPago?: { client: MercadoPagoClient; credentialsKey: Buffer };
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
@@ -49,7 +50,8 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
     remind_deposit_receipt: depositReminderJobHandler({ db, logger, now }),
     // Lo mismo los recordatorios del turno y el vencimiento de la reserva provisoria (H10).
     send_appointment_reminder: reminderJobHandler({ db, logger, now }),
-    expire_reservation: reservationExpiryJobHandler({ db, logger, now }),
+    // Con Mercado Pago, antes de vencer una seña se busca su pago (decisión 42).
+    expire_reservation: reservationExpiryJobHandler({ db, logger, now, ...(mercadoPago ? { mercadoPago } : {}) }),
   };
 
   if (conversations) {
@@ -60,6 +62,7 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
   }
 
   if (mercadoPago) {
+    handlers.process_mercadopago_payment = paymentJobHandler({ db, logger, now, ...mercadoPago });
     handlers.refresh_mercadopago_token = refreshTokenJobHandler({ db, logger, now, ...mercadoPago });
   }
 

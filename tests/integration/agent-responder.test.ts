@@ -1191,6 +1191,8 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
       'user: hola',
     ]);
     expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
+    // La seña confirmada sale igual con los dos medios (H11): la etiqueta no dice que fue una transferencia.
+    expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/la verificó la dueña o la acreditó Mercado Pago/);
   });
 
   it.each([

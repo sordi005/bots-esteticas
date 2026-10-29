@@ -18,7 +18,8 @@ const UNREADABLE = '[Mensaje que no se puede leer]';
  * quedó confirmado» el modelo creía haberlo dicho él y lo «corregía» (prueba manual de H9).
  */
 export const SYSTEM_NOTICE_LABELS = {
-  deposit_confirmed: '[Aviso del sistema, no lo escribiste vos: la dueña verificó la transferencia y confirmó la seña]',
+  deposit_confirmed:
+    '[Aviso del sistema, no lo escribiste vos: la seña quedó confirmada (la verificó la dueña o la acreditó Mercado Pago) y el turno también]',
   deposit_rejected: '[Aviso del sistema, no lo escribiste vos: la dueña marcó que la transferencia no llegó]',
   // H10 (4.5, 4.7): los recordatorios y el vencimiento también los manda el código.
   appointment_reminder: '[Aviso del sistema, no lo escribiste vos: el recordatorio del turno, con botones para confirmar, reprogramar o cancelar]',
