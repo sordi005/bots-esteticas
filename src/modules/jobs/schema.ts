@@ -13,6 +13,9 @@ export const jobKind = pgEnum('job_kind', [
   // Recordatorios y vencimiento de reservas provisorias (H10).
   'send_appointment_reminder',
   'expire_reservation',
+  // Mercado Pago (H11): procesar el aviso de un pago y renovar el token de un negocio.
+  'process_mercadopago_payment',
+  'refresh_mercadopago_token',
 ]);
 
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);

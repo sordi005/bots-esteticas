@@ -31,6 +31,8 @@ export const deposits = pgTable(
     /** Vencimiento de la reserva provisoria. */
     expiresAt: instant('expires_at').notNull(),
     mercadopagoPreferenceId: text('mercadopago_preference_id'),
+    /** El link de pago de la preferencia (4.5, H11): se reusa si la clienta lo pide de nuevo. */
+    mercadopagoPaymentUrl: text('mercadopago_payment_url'),
     /** Único: los webhooks de pago se procesan una sola vez (CLAUDE.md, regla 6). */
     mercadopagoPaymentId: text('mercadopago_payment_id').unique(),
     /** Id del medio de WhatsApp con la foto del comprobante de transferencia. */
@@ -50,6 +52,11 @@ export const deposits = pgTable(
     check(
       'deposits_review_has_receipt',
       sql`${t.status} <> 'in_review' or ${t.receiptMediaId} is not null`,
+    ),
+    // La preferencia y su link se guardan juntos (H11).
+    check(
+      'deposits_mercadopago_link_complete',
+      sql`(${t.mercadopagoPreferenceId} is null) = (${t.mercadopagoPaymentUrl} is null)`,
     ),
   ],
 );
