@@ -114,7 +114,13 @@ export function templateMessage<Name extends TemplateName>(
     );
   }
 
-  const params = Object.fromEntries(given.map(([key, value]) => [key, cleanParam(value)]));
+  // Si el texto pone un punto después de la variable, el del valor sobra («…persona..»).
+  const params = Object.fromEntries(
+    given.map(([key, value]) => {
+      const clean = cleanParam(value);
+      return [key, definition.body.includes(`{{${key}}}.`) ? clean.replace(/\.+$/, '') : clean];
+    }),
+  );
   const empty = Object.entries(params).filter(([, value]) => value === '').map(([key]) => key);
   if (empty.length > 0) throw new Error(`Variables vacías en la plantilla ${name}: ${empty.join(', ')}`);
 

@@ -44,6 +44,30 @@ describe('templateMessage: arma la plantilla con sus variables (8.1)', () => {
     expect(() => toGraphPayload('+5492614000001', message)).not.toThrow();
   });
 
+  it('no duplica el punto cuando la variable termina en punto y el texto también', () => {
+    const message = templateMessage('aviso_derivacion', {
+      params: {
+        clienta: 'Caro Pérez (+5492614000001)',
+        motivo: 'pidió hablar con una persona',
+        resumen: 'La clienta pide hablar con una persona.',
+        hasta: 'viernes 9/10 22:00',
+      },
+      buttonPayloads: ['aviso:1:handoff_attended'],
+    });
+
+    expect(message.params).toMatchObject({ resumen: 'La clienta pide hablar con una persona' });
+    expect(renderTemplate(message)).toContain('Resumen: La clienta pide hablar con una persona. El asistente');
+  });
+
+  it('conserva el punto de una variable que no va seguida de punto en el texto', () => {
+    const message = templateMessage('recordatorio_turno', {
+      params: { servicio: 'Depilación def.', profesional: 'Mica', fecha_hora: 'viernes 9/10 10:00' },
+      buttonPayloads: ['recordatorio:1:confirmar', 'recordatorio:1:reprogramar', 'recordatorio:1:cancelar'],
+    });
+
+    expect(message.params).toMatchObject({ servicio: 'Depilación def.' });
+  });
+
   it('lleva el dato de cada botón, en el orden de los botones', () => {
     const message = templateMessage('recordatorio_turno', {
       params: { servicio: 'Semi', profesional: 'Mica', fecha_hora: 'viernes 9/10 10:00' },
