@@ -1,6 +1,6 @@
 /**
  * El prompt del sistema se arma por negocio a partir de su configuración (8.5): nombre del
- * negocio, nombre del asistente, emojis y voseo. No hay prompts escritos a mano por cliente.
+ * negocio, nombre del asistente, emojis, voseo y medio de la seña. No hay prompts escritos a mano por cliente.
  *
  * Tiene que ser idéntico entre llamadas del mismo negocio para que el proveedor lo reutilice
  * de su caché: nada de fecha, hora ni datos de la clienta. Eso va en el contexto de la vuelta
@@ -12,6 +12,8 @@ export interface PromptTenant {
   assistantName: string;
   emojiUsage: 'none' | 'low' | 'medium';
   usesVoseo: boolean;
+  /** El medio con el que el negocio cobra la seña (4.5): cambia qué le pide el asistente a la clienta. */
+  depositMethod: 'transfer' | 'mercadopago';
 }
 
 const EMOJI_RULES: Record<PromptTenant['emojiUsage'], string> = {
@@ -25,7 +27,7 @@ const TUTEO = 'Tratala de tú («tienes», «quieres», «mira»), sin voseo.';
 
 // La seña por transferencia (4.5): los datos los escribe el código, el comprobante lo reconoce el código y la
 // transferencia la confirma siempre la dueña. El ciclo del agente verifica que el alias salga en la respuesta.
-const DEPOSIT_RULES = `Seña:
+const TRANSFER_DEPOSIT_RULES = `Seña:
 - Si crear_reserva devuelve que quedó pendiente de seña, en esa misma respuesta pasale los datos de «pago» tal cual (monto, hasta cuándo, alias o CBU y titular; sirve «pago.texto») y pedile que mande por acá la foto del comprobante.
 - Si después pide de nuevo los datos para pagar, usá generar_pago_sena con el turno_id del turno. Nunca inventes alias, CBU, links ni datos de pago: solo los que devuelven las herramientas.
 - Cuando manda la foto del comprobante, el sistema ya lo registró: te lo dice el contexto de la vuelta y te llega como [Comprobante de la seña]. Decile que lo recibiste y que una persona del equipo verifica la transferencia y le avisa por acá. No lo derives.
@@ -34,7 +36,21 @@ const DEPOSIT_RULES = `Seña:
 - Si una herramienta responde derivada=true por la seña, ya derivó a una persona: decile que los datos para pagar se los pasa una persona del equipo por este chat (completá «te va a responder por acá » con el texto «cuando» de la herramienta), sin inventar datos, y «derivar» va null.`;
 
 // Reservar, cancelar y reprogramar turnos (4.6, 6.4). Las herramientas validan todo y derivan solas cuando no corresponde.
-const BOOKING_RULES = `Reservar:
+// La seña por Mercado Pago (4.5, H11): el link lo crea el código y el pago lo confirma el sistema cuando Mercado Pago
+// avisa. No hay comprobante que pedir. El ciclo del agente verifica que el link salga en la respuesta.
+const MERCADOPAGO_DEPOSIT_RULES = `Seña:
+- Si crear_reserva devuelve que quedó pendiente de seña, en esa misma respuesta pasale el link de «pago» tal cual (monto, hasta cuándo y el link; sirve «pago.texto»). Se paga en ese link: no le pidas comprobante.
+- Si después pide de nuevo el link, usá generar_pago_sena con el turno_id del turno. Nunca inventes alias, CBU, links ni datos de pago: solo los que devuelven las herramientas.
+- Nunca digas que la seña llegó, que se acreditó o que el turno quedó confirmado: el pago lo confirma el sistema cuando Mercado Pago lo acredita, y le avisa a la clienta.
+- Si dice que ya pagó, decile que apenas Mercado Pago lo acredite el sistema le avisa por acá que el turno quedó confirmado. No le pidas comprobante ni lo des por confirmado.
+- Si una herramienta responde derivada=true por la seña, ya derivó a una persona: decile que los datos para pagar se los pasa una persona del equipo por este chat (completá «te va a responder por acá » con el texto «cuando» de la herramienta), sin inventar datos, y «derivar» va null.`;
+
+const DEPOSIT_RULES: Record<PromptTenant['depositMethod'], string> = {
+  transfer: TRANSFER_DEPOSIT_RULES,
+  mercadopago: MERCADOPAGO_DEPOSIT_RULES,
+};
+
+const bookingRules = (depositMethod: PromptTenant['depositMethod']) => `Reservar:
 - Para reservar necesitás el id de un horario que devolvió consultar_disponibilidad o que la clienta eligió con un botón (en ese caso el contexto de la vuelta te lo da como horario_id). Pasalo tal cual a crear_reserva: nunca inventes ni armes un id. Solo sirven los que empiezan con «horario:».
 - Si el contexto dice que la clienta no tiene un nombre cargado, pedile el nombre antes de reservar y pasalo en «nombre». Si ya está cargado, no se lo pidas de nuevo.
 - Solo decí «reservado», «anotado», «agendado» o «te guardo» cuando crear_reserva respondió reservado=true. Si no, no lo des por reservado.
@@ -42,7 +58,7 @@ const BOOKING_RULES = `Reservar:
 - Si el horario se ocupó, avisale, volvé a consultar la disponibilidad y ofrecele otros. Un servicio con consulta previa no se reserva: derivá con el motivo consulta_previa.
 - Decí el servicio, la profesional, el día, la hora y el estado tal cual los devuelve la herramienta.
 
-${DEPOSIT_RULES}
+${DEPOSIT_RULES[depositMethod]}
 
 Cancelar:
 - Identificá el turno con listar_turnos_de_la_clienta. Si tiene varios y no queda claro cuál, ofrecelos para que elija (poné en «opciones» el opcionId de cada turno de esa lista).
@@ -111,7 +127,7 @@ export function buildSystemPrompt(tenant: PromptTenant): string {
 ${HANDOFF_RULES}
 
 ## Reservar, cancelar y reprogramar turnos
-${BOOKING_RULES}
+${bookingRules(tenant.depositMethod)}
 
 ## Mensajes que no son texto
 Los mensajes que no son texto te llegan como un marcador entre corchetes:

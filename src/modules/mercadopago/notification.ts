@@ -47,3 +47,8 @@ export async function recordPaymentNotification(
   });
   return 'scheduled';
 }
+
+/** La URL de avisos de un negocio: va en cada preferencia (`notification_url`). */
+export function paymentNotificationUrl(publicBaseUrl: string, tenantId: string): string {
+  return `${publicBaseUrl}/webhooks/mercadopago/${tenantId}`;
+}

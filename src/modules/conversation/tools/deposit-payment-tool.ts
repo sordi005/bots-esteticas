@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { findCustomerAppointment } from '../../scheduling/customer-appointments.js';
 import { displayStatus, isExpiredPending } from './appointment-summary.js';
 import { choiceIds, parseAppointmentRef } from './choice-ids.js';
-import { depositPayment, derivedPaymentMessage, PAYMENT_INSTRUCTIONS } from './deposit-payment.js';
+import { depositPayment, derivedPaymentMessage } from './deposit-payment.js';
 import type { AgentTool, ToolResult } from './tool.js';
 
 const input = z.object({
@@ -32,7 +32,8 @@ const noPayment = (turnoId: string, mensaje: string): ToolResult => ({
 export const depositPaymentTool: AgentTool<Input> = {
   name: 'generar_pago_sena',
   description:
-    'Devuelve los datos para pagar la seña de un turno de la clienta (alias o CBU, titular, monto y hasta cuándo), ' +
+    'Devuelve los datos para pagar la seña de un turno de la clienta (el link de Mercado Pago, o el alias o CBU y el ' +
+    'titular; el monto y hasta cuándo), ' +
     'ya escritos. Usala cuando la clienta pide de nuevo los datos para pagar; al reservar no hace falta: ' +
     'crear_reserva ya los devuelve. Si la seña ya no está pendiente (el comprobante está en verificación, ya está ' +
     'pagada o el plazo venció), lo dice. Si no hay cómo cobrarla por acá, deriva sola a una persona.',
@@ -87,7 +88,7 @@ export const depositPaymentTool: AgentTool<Input> = {
       };
     }
     return {
-      content: { turnoId, pago: payment.content, mensaje: PAYMENT_INSTRUCTIONS },
+      content: { turnoId, pago: payment.content, mensaje: payment.instructions },
       options: [],
       mustMention: payment.mustMention,
     };

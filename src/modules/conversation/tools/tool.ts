@@ -1,5 +1,6 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { z } from 'zod';
+import type { PaymentLinkDependencies } from '../../mercadopago/payment-link.js';
 
 /**
  * Contrato de las herramientas del agente (6.4). Es neutral: no conoce el SDK del modelo.
@@ -27,6 +28,11 @@ export interface ToolContext {
   chosenOptionIds: ReadonlySet<string>;
   /** Se cancela si el ciclo del agente se corta (por ejemplo, por tiempo). */
   signal: AbortSignal;
+  /**
+   * Para cobrar la seña con Mercado Pago (4.5, H11). Sin esto, el servidor no tiene la aplicación
+   * configurada y las señas por Mercado Pago derivan a una persona.
+   */
+  mercadoPago?: Omit<PaymentLinkDependencies, 'db'>;
 }
 
 /**
@@ -64,8 +70,8 @@ export interface ToolResult {
    */
   changedAppointment?: true;
   /**
-   * Un dato que la respuesta tiene que decir: el alias (o el CBU) para pagar la seña (4.5, D4). Si el
-   * texto final no lo trae, el ciclo del agente se lo hace notar al modelo una vez.
+   * Un dato que la respuesta tiene que decir: el alias (o el CBU), o el link de Mercado Pago, para pagar la
+   * seña (4.5, D4). Si el texto final no lo trae, el ciclo del agente se lo hace notar al modelo una vez.
    */
   mustMention?: string;
 }

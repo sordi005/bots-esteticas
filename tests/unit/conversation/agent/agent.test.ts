@@ -1393,6 +1393,11 @@ describe('runAgent: los datos para pagar la seña salen en la respuesta (4.5, D4
     expect(record).toMatchObject({ outcome: 'replied', llmCalls: 3 });
   });
 
+  it('el aviso sirve para los dos medios: el alias o el CBU, o el link de Mercado Pago (H11)', () => {
+    expect(PAYMENT_DETAILS_NOTICE).toMatch(/alias o el CBU/);
+    expect(PAYMENT_DETAILS_NOTICE).toMatch(/link de Mercado Pago/);
+  });
+
   it('con el alias en el texto (sin importar mayúsculas) no se le marca nada', async () => {
     const { run, requests } = agent([callTools([{ name: 'crear_reserva' }]), finalAnswer(WITH_ALIAS)], [bookingWithDeposit().tool]);
 

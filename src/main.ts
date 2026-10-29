@@ -1,5 +1,6 @@
 import { createAgentResponder } from './modules/conversation/agent/agent-responder.js';
 import { createAnthropicLlmClient } from './modules/conversation/agent/anthropic-client.js';
+import type { ToolContext } from './modules/conversation/tools/tool.js';
 import { recordWebhookEvents } from './modules/conversation/inbox.js';
 import { createMercadoPagoClient } from './modules/mercadopago/client.js';
 import { completeMercadoPagoConnection } from './modules/mercadopago/connection.js';
@@ -57,12 +58,14 @@ const whatsappClient = withRecipientOverride(
 // Mercado Pago (8.3): una sola aplicación del servicio para todos los negocios. Sin ella, o sin la clave
 // de cifrado para guardar los tokens, no se conecta ningún negocio y los que cobran así derivan (4.5).
 let mercadoPago: WorkerDependencies['mercadoPago'];
+let mercadoPagoTools: ToolContext['mercadoPago'];
 let mercadoPagoRoutes: MercadoPagoRoutesOptions | undefined;
 if (config.mercadoPago && config.credentialsKey) {
   const { clientId, clientSecret, webhookSecret, publicBaseUrl, testToken } = config.mercadoPago;
   const credentialsKey = config.credentialsKey;
   const client = createMercadoPagoClient({ clientId, clientSecret, testToken });
   mercadoPago = { client, credentialsKey };
+  mercadoPagoTools = { client, credentialsKey, publicBaseUrl, logger };
   mercadoPagoRoutes = {
     webhookSecret,
     connect: ({ code, state }) =>
@@ -110,6 +113,7 @@ switch (conversationMode.kind) {
         }),
         logger,
         now: () => new Date(),
+        ...(mercadoPagoTools ? { mercadoPago: mercadoPagoTools } : {}),
       }),
     };
     logger.info(

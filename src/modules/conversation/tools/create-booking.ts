@@ -13,7 +13,7 @@ import {
   type AppointmentSettings,
 } from './appointment-summary.js';
 import { parseChoiceId } from './choice-ids.js';
-import { depositPayment, derivedPaymentMessage, PAYMENT_INSTRUCTIONS } from './deposit-payment.js';
+import { depositPayment, derivedPaymentMessage } from './deposit-payment.js';
 import { NEEDS_CHOICE_MESSAGE, offerForConfirmation, wasChosenByCustomer } from './slot-offer.js';
 import type { AgentTool, ToolContext, ToolResult } from './tool.js';
 
@@ -107,9 +107,9 @@ async function reservedResult(
   const base = { reservado: true, ...(alreadyBooked ? { yaEstabaReservado: true } : {}), ...summary };
 
   const payment = appointment.status === 'PENDING_DEPOSIT' && deadline ? await depositPayment(ctx, appointment) : null;
-  if (payment?.kind === 'transfer') {
+  if (payment && payment.kind !== 'derived') {
     return {
-      content: { ...base, pago: payment.content, mensaje: `${intro} ${PAYMENT_INSTRUCTIONS}` },
+      content: { ...base, pago: payment.content, mensaje: `${intro} ${payment.instructions}` },
       options: [],
       changedAppointment: true,
       mustMention: payment.mustMention,

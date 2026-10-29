@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 import { conversations, handoffs } from '../../src/modules/conversation/schema.js';
@@ -8,6 +9,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createCustomer, single } from './support/fixtures.js';
+import { connectMercadoPago, fakeMercadoPago, paymentUrl, toolMercadoPago } from './support/mercadopago.js';
 
 /**
  * `generar_pago_sena(turno_id)` (6.4, 4.5): vuelve a dar los datos para pagar la seña de un turno de
@@ -132,7 +134,7 @@ describe('generar_pago_sena: cuando el turno ya no espera la seña', () => {
 describe('generar_pago_sena: sin cómo cobrar, deriva sola (4.5)', () => {
   it.each([
     ['sin alias ni CBU', { transferAlias: null, transferCbu: null }],
-    ['con Mercado Pago (H11)', { depositPaymentOptions: 'mercadopago' as const }],
+    ['con Mercado Pago, sin la aplicación configurada en el servidor', { depositPaymentOptions: 'mercadopago' as const }],
   ])('%s: no inventa datos y deriva con «pago»', async (_case, settings) => {
     const f = await setup({ settings });
     const { appointmentId } = await book(f);
@@ -140,6 +142,66 @@ describe('generar_pago_sena: sin cómo cobrar, deriva sola (4.5)', () => {
     const result = await pay(f, appointmentId);
 
     expect(result.content).toMatchObject({ derivada: true, cuando: 'el lunes 5/10 a las 9:00' });
+    expect(result.content).not.toHaveProperty('pago');
+    expect(await handoffsOf(f)).toMatchObject([{ reason: 'payment_issue', status: 'open' }]);
+  });
+});
+
+describe('generar_pago_sena: con Mercado Pago (H11, 4.5)', () => {
+  const credentialsKey = randomBytes(32);
+
+  async function setupMercadoPago(options: { connected?: boolean; fail?: Error } = {}) {
+    const f = await setup({ settings: { depositPaymentOptions: 'mercadopago' } });
+    if (options.connected ?? true) await connectMercadoPago(db, credentialsKey, f.tenantId);
+    const mercadoPago = fakeMercadoPago(options.fail ? { fail: options.fail } : {});
+    const payWithMercadoPago = (turnoId: string) =>
+      runTool(
+        depositPaymentTool,
+        { turno_id: turnoId },
+        toolContext(db, f, {
+          conversationId: f.conversationId,
+          now: at('2026-10-04', '09:30'),
+          mercadoPago: toolMercadoPago(mercadoPago.client, credentialsKey),
+        }),
+      );
+    return { f, payWithMercadoPago, created: mercadoPago.created };
+  }
+
+  it('da el link de pago escrito por el código y pide verificarlo en la respuesta', async () => {
+    const { f, payWithMercadoPago } = await setupMercadoPago();
+    const { appointmentId } = await book(f);
+
+    const result = await payWithMercadoPago(appointmentId);
+
+    expect(result.content).toMatchObject({
+      turnoId: `turno:${appointmentId}`,
+      pago: { medio: 'Mercado Pago', monto: '$5.400', pagarHasta: 'hoy a las 10:00', link: paymentUrl('pref-1') },
+    });
+    expect(JSON.stringify(result.content)).not.toMatch(/foto del comprobante/);
+    expect(result.mustMention).toBe(paymentUrl('pref-1'));
+  });
+
+  it('si lo pide de nuevo, vuelve a dar el mismo link sin crear otra preferencia', async () => {
+    const { f, payWithMercadoPago, created } = await setupMercadoPago();
+    const { appointmentId } = await book(f);
+
+    await payWithMercadoPago(appointmentId);
+    const again = await payWithMercadoPago(appointmentId);
+
+    expect(again.content).toMatchObject({ pago: { link: paymentUrl('pref-1') } });
+    expect(created).toHaveLength(1);
+  });
+
+  it.each([
+    ['el negocio no conectó su cuenta', { connected: false }],
+    ['Mercado Pago no crea la preferencia', { fail: new Error('fetch failed') }],
+  ])('si %s, no inventa un link y deriva con «pago»', async (_case, options) => {
+    const { f, payWithMercadoPago } = await setupMercadoPago(options);
+    const { appointmentId } = await book(f);
+
+    const result = await payWithMercadoPago(appointmentId);
+
+    expect(result.content).toMatchObject({ derivada: true });
     expect(result.content).not.toHaveProperty('pago');
     expect(await handoffsOf(f)).toMatchObject([{ reason: 'payment_issue', status: 'open' }]);
   });
