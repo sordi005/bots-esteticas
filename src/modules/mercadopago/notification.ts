@@ -1,4 +1,8 @@
+import { eq } from 'drizzle-orm';
+import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { z } from 'zod';
+import { scheduleJob } from '../jobs/queue.js';
+import { tenants } from '../tenants/schema.js';
 
 /**
  * Qué dice un aviso del webhook de Mercado Pago (8.3). Mercado Pago agrega `data.id` y `type` a la
@@ -19,4 +23,27 @@ export function parseMercadoPagoNotification(
 
   if (type !== 'payment' || !paymentId) return { kind: 'ignored', type };
   return { kind: 'payment', paymentId };
+}
+
+export type RecordedNotification = 'scheduled' | 'unknown_tenant';
+
+/**
+ * Guarda el aviso de un pago programando la tarea "procesar un pago de Mercado Pago" con el id del
+ * pago como clave (decisión 40): un aviso repetido es la misma fila. La tarea consulta el pago a la
+ * API; el aviso no se cree.
+ */
+export async function recordPaymentNotification(
+  db: NodePgDatabase,
+  input: { tenantId: string; paymentId: string; now: Date },
+): Promise<RecordedNotification> {
+  const [tenant] = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.id, input.tenantId));
+  if (!tenant) return 'unknown_tenant';
+
+  await scheduleJob(db, {
+    tenantId: input.tenantId,
+    kind: 'process_mercadopago_payment',
+    key: input.paymentId,
+    runAt: input.now,
+  });
+  return 'scheduled';
 }

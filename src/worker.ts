@@ -10,6 +10,8 @@ import {
   type JobRunnerOptions,
 } from './modules/jobs/runner.js';
 import type { JobKind } from './modules/jobs/schema.js';
+import type { MercadoPagoClient } from './modules/mercadopago/client.js';
+import { refreshTokenJobHandler } from './modules/mercadopago/connection.js';
 import { reminderJobHandler } from './modules/notifications/appointment-reminders.js';
 import { notificationJobHandler, type NotificationSenderDependencies } from './modules/notifications/outbox.js';
 import { reservationExpiryJobHandler } from './modules/notifications/reservation-expiry.js';
@@ -29,6 +31,8 @@ export interface WorkerDependencies {
     NotificationSenderDependencies,
     'client' | 'credentialsKey' | 'notificationsNumber' | 'preferTemplates'
   >;
+  /** Sin esto no se renuevan los tokens de Mercado Pago (8.3): la aplicación no está configurada. */
+  mercadoPago?: { client: MercadoPagoClient; credentialsKey: Buffer };
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
     JobRunnerOptions,
@@ -38,7 +42,7 @@ export interface WorkerDependencies {
 
 /** Arma el worker con un handler por tipo de tarea. No arranca: eso lo hace main.ts. */
 export function buildWorker(dependencies: WorkerDependencies): JobRunner {
-  const { db, logger, now = () => new Date(), conversations, notifications } = dependencies;
+  const { db, logger, now = () => new Date(), conversations, notifications, mercadoPago } = dependencies;
   const handlers: Partial<Record<JobKind, JobHandler>> = {
     // Los botones de la dueña y los recordatorios solo usan la base: dejan avisos para enviar (H9).
     process_owner_reply: ownerReplyJobHandler({ db, logger, now }),
@@ -53,6 +57,10 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
   }
   if (notifications) {
     handlers.send_notification = notificationJobHandler({ db, logger, now, ...notifications });
+  }
+
+  if (mercadoPago) {
+    handlers.refresh_mercadopago_token = refreshTokenJobHandler({ db, logger, now, ...mercadoPago });
   }
 
   return createJobRunner({ db, logger, now, handlers, ...dependencies.options });
