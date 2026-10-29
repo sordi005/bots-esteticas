@@ -57,3 +57,27 @@ export function authorizationUrl(input: { clientId: string; redirectUri: string;
   url.searchParams.set('redirect_uri', input.redirectUri);
   return url.toString();
 }
+
+/** La vuelta de OAuth: la URL registrada en la aplicación es `PUBLIC_BASE_URL` + esta ruta. */
+export const OAUTH_CALLBACK_PATH = '/mercadopago/oauth/callback';
+
+export function oauthRedirectUri(publicBaseUrl: string): string {
+  return `${publicBaseUrl}${OAUTH_CALLBACK_PATH}`;
+}
+
+/**
+ * El link que se le pasa a la dueña para conectar su cuenta. El state lo firma el secreto de la
+ * aplicación: el mismo con el que lo verifica la vuelta.
+ */
+export function connectionLink(input: {
+  tenantId: string;
+  now: Date;
+  app: { clientId: string; clientSecret: string; publicBaseUrl: string };
+}): string {
+  const { tenantId, now, app } = input;
+  return authorizationUrl({
+    clientId: app.clientId,
+    redirectUri: oauthRedirectUri(app.publicBaseUrl),
+    state: createOAuthState({ tenantId, now, secret: app.clientSecret }),
+  });
+}

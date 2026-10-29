@@ -2,6 +2,7 @@ import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ConnectionResult } from './connection.js';
 import { parseMercadoPagoNotification, type RecordedNotification } from './notification.js';
+import { OAUTH_CALLBACK_PATH } from './oauth.js';
 import { isValidMercadoPagoSignature } from './signature.js';
 
 /**
@@ -16,8 +17,6 @@ export interface MercadoPagoRoutesOptions {
   /** Guarda el aviso de un pago. Si falla, responde 500 y Mercado Pago reintenta: guardar es idempotente. */
   onPayment: (input: { tenantId: string; paymentId: string }, log: FastifyBaseLogger) => Promise<RecordedNotification>;
 }
-
-export const OAUTH_CALLBACK_PATH = '/mercadopago/oauth/callback';
 
 const callbackQuery = z.object({ code: z.string().min(1), state: z.string().min(1) });
 

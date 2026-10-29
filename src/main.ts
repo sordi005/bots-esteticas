@@ -4,7 +4,8 @@ import { recordWebhookEvents } from './modules/conversation/inbox.js';
 import { createMercadoPagoClient } from './modules/mercadopago/client.js';
 import { completeMercadoPagoConnection } from './modules/mercadopago/connection.js';
 import { recordPaymentNotification } from './modules/mercadopago/notification.js';
-import { OAUTH_CALLBACK_PATH, type MercadoPagoRoutesOptions } from './modules/mercadopago/routes.js';
+import { oauthRedirectUri } from './modules/mercadopago/oauth.js';
+import type { MercadoPagoRoutesOptions } from './modules/mercadopago/routes.js';
 import { createWhatsAppClient } from './modules/whatsapp/client.js';
 import { withRecipientOverride } from './modules/whatsapp/recipient-override.js';
 import type { WhatsAppWebhookOptions } from './modules/whatsapp/webhook-routes.js';
@@ -68,7 +69,7 @@ if (config.mercadoPago && config.credentialsKey) {
       completeMercadoPagoConnection(
         { db: database.db, logger, client, credentialsKey, now: () => new Date() },
         // El state lo firma la misma aplicación: el CLI que arma el link usa este secreto.
-        { code, state, redirectUri: `${publicBaseUrl}${OAUTH_CALLBACK_PATH}`, stateSecret: clientSecret },
+        { code, state, redirectUri: oauthRedirectUri(publicBaseUrl), stateSecret: clientSecret },
       ),
     onPayment: (notification) => recordPaymentNotification(database.db, { ...notification, now: new Date() }),
   };

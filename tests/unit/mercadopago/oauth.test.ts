@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   authorizationUrl,
+  connectionLink,
   createOAuthState,
+  OAUTH_CALLBACK_PATH,
   OAUTH_STATE_TTL_MS,
   verifyOAuthState,
 } from '../../../src/modules/mercadopago/oauth.js';
@@ -76,5 +78,24 @@ describe('authorizationUrl', () => {
       state: 'el-state',
       redirect_uri: 'https://ejemplo.ngrok-free.dev/mercadopago/oauth/callback',
     });
+  });
+});
+
+describe('connectionLink (pnpm mercadopago:connect)', () => {
+  const app = { clientId: '4934588586838432', clientSecret: SECRET, publicBaseUrl: 'https://ejemplo.ngrok-free.dev' };
+
+  it('vuelve a la ruta de la vuelta de OAuth en la URL pública', () => {
+    const url = new URL(connectionLink({ tenantId: TENANT_ID, now: NOW, app }));
+
+    expect(OAUTH_CALLBACK_PATH).toBe('/mercadopago/oauth/callback');
+    expect(url.searchParams.get('redirect_uri')).toBe('https://ejemplo.ngrok-free.dev/mercadopago/oauth/callback');
+    expect(url.searchParams.get('client_id')).toBe('4934588586838432');
+  });
+
+  it('lleva un state del negocio firmado con el secreto de la aplicación, que la vuelta acepta', () => {
+    const state = new URL(connectionLink({ tenantId: TENANT_ID, now: NOW, app })).searchParams.get('state') ?? '';
+
+    expect(verifyOAuthState(state, { now: NOW, secret: SECRET })).toBe(TENANT_ID);
+    expect(verifyOAuthState(state, { now: NOW, secret: 'otra-clave' })).toBeNull();
   });
 });
