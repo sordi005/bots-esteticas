@@ -6,7 +6,7 @@ import { addDaysToLocalDate, instantToLocal } from '../../shared/time-zone.js';
 import { listHolidays } from '../catalog/queries.js';
 import { loadNoticeCustomer } from '../notifications/notice-data.js';
 import { enqueueNotification } from '../notifications/outbox.js';
-import { handoffNotice } from '../notifications/texts.js';
+import { handoffNotice, handoffTemplate } from '../notifications/texts.js';
 import { tenants, tenantSettings } from '../tenants/schema.js';
 import {
   ATTENTION_SEARCH_DAYS,
@@ -191,6 +191,7 @@ export async function recordHandoff(tx: Queryable, input: HandOffInput): Promise
       customerId: conversation.customerId,
       handoffId: handoff.id,
       message: handoffNotice({ notificationId, appointment: customer, reason, summary, pausedUntil }),
+      template: handoffTemplate({ notificationId, appointment: customer, reason, summary, pausedUntil }),
       now,
     });
   }

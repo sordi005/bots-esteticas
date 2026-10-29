@@ -10,7 +10,9 @@ import type { OwnerReplyAction } from '../notifications/owner-buttons.js';
 import { notifications, ownerReplies } from '../notifications/schema.js';
 import {
   customerDepositConfirmed,
+  customerDepositConfirmedTemplate,
   customerDepositRejected,
+  customerDepositRejectedTemplate,
   depositReviewAck,
   handoffAttendedAck,
 } from '../notifications/texts.js';
@@ -108,6 +110,7 @@ async function processDepositReply(deps: OwnerReplyDependencies, reply: Reply, n
         customerId: review.customerId,
         appointmentId: review.appointmentId,
         message: confirmed ? customerDepositConfirmed(appointment) : customerDepositRejected(appointment),
+        template: confirmed ? customerDepositConfirmedTemplate(appointment) : customerDepositRejectedTemplate(appointment),
         now,
       });
       if (!confirmed) {

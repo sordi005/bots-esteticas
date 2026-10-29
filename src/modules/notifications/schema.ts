@@ -1,12 +1,12 @@
 import { sql } from 'drizzle-orm';
-import { check, foreignKey, index, jsonb, pgEnum, pgTable, text, unique, uuid } from 'drizzle-orm/pg-core';
+import { check, foreignKey, index, jsonb, pgEnum, pgTable, text, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, instant, updatedAt } from '../../shared/db-columns.js';
 import { handoffs } from '../conversation/schema.js';
 import { customers } from '../customers/schema.js';
 import { deposits } from '../payments/schema.js';
 import { appointments } from '../scheduling/schema.js';
 import { tenantId } from '../tenants/schema.js';
-import type { OutgoingMessage } from '../whatsapp/outgoing.js';
+import type { OutgoingMessage, TemplateMessage } from '../whatsapp/outgoing.js';
 
 /** A quién va un aviso: la dueña del negocio (8.2) o una clienta (por el número del negocio). */
 export const notificationRecipient = pgEnum('notification_recipient', ['owner', 'customer']);
@@ -14,7 +14,8 @@ export const notificationRecipient = pgEnum('notification_recipient', ['owner', 
 /**
  * Qué avisa (4.5, 4.6, 4.8). A la dueña: un comprobante (también sus recordatorios), una
  * derivación, una cancelación o una reprogramación del asistente, y qué pasó con el botón que
- * tocó. A la clienta: la seña confirmada o rechazada.
+ * tocó. A la clienta: la seña confirmada o rechazada y, desde H10, los recordatorios del turno y el
+ * vencimiento de la reserva provisoria (4.5, 4.7).
  */
 export const notificationKind = pgEnum('notification_kind', [
   'deposit_receipt',
@@ -24,7 +25,28 @@ export const notificationKind = pgEnum('notification_kind', [
   'owner_reply_ack',
   'deposit_confirmed',
   'deposit_rejected',
+  'appointment_reminder',
+  'appointment_short_reminder',
+  'reservation_expired',
 ]);
+
+/** Los avisos a la clienta. Comparados como texto en las restricciones: ver la migración 0017. */
+export const CUSTOMER_NOTIFICATION_KINDS = [
+  'deposit_confirmed',
+  'deposit_rejected',
+  'appointment_reminder',
+  'appointment_short_reminder',
+  'reservation_expired',
+] as const satisfies readonly (typeof notificationKind.enumValues)[number][];
+
+/** Los que salen una sola vez por turno e inicio del turno: los recordatorios y el vencimiento (4.5, 4.7). */
+export const ONCE_PER_APPOINTMENT_KINDS = [
+  'appointment_reminder',
+  'appointment_short_reminder',
+  'reservation_expired',
+] as const satisfies readonly (typeof notificationKind.enumValues)[number][];
+
+const textList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(', '));
 
 export const notificationStatus = pgEnum('notification_status', ['pending', 'sent', 'failed']);
 
@@ -54,6 +76,13 @@ export const notifications = pgTable(
     handoffId: uuid('handoff_id'),
     /** El mensaje listo para enviar. Al de un comprobante el envío le suma la imagen. */
     message: jsonb('message').$type<OutgoingMessage>().notNull(),
+    /**
+     * La versión con plantilla (8.1, H10): sale si Meta rechaza el mensaje por estar fuera de la ventana
+     * de 24 horas. Null si el aviso ya es una plantilla o no la necesita (lo que pasó con un botón).
+     */
+    template: jsonb('template').$type<TemplateMessage>(),
+    /** El inicio del turno al que se refiere un recordatorio o un vencimiento: salen una vez por inicio. */
+    appointmentStart: instant('appointment_start'),
     /** La imagen del comprobante en el número del negocio: se sube al número que envía (8.2). */
     receiptMediaId: text('receipt_media_id'),
     status: notificationStatus('status').notNull().default('pending'),
@@ -89,6 +118,17 @@ export const notifications = pgTable(
     }),
     // Los recordatorios de un comprobante se cuentan por seña.
     index('notifications_deposit_idx').on(t.tenantId, t.depositId, t.kind),
+    // Un recordatorio o un vencimiento sale una sola vez por turno e inicio (4.5, 4.7): lo garantiza la base.
+    uniqueIndex('notifications_once_per_appointment_key')
+      .on(t.tenantId, t.appointmentId, t.kind, t.appointmentStart)
+      // El predicado de un índice no admite convertir un enum a texto: filtra por la columna, que la
+      // restricción de abajo llena solo en esos tipos.
+      .where(sql`${t.appointmentStart} is not null`),
+    check(
+      'notifications_once_per_appointment_has_start',
+      sql`(${t.kind}::text in (${textList(ONCE_PER_APPOINTMENT_KINDS)})) = (${t.appointmentStart} is not null)
+        and (${t.appointmentStart} is null or ${t.appointmentId} is not null)`,
+    ),
     check(
       'notifications_sent_has_message_id',
       sql`(${t.status} = 'sent') = (${t.sentAt} is not null)
@@ -101,7 +141,7 @@ export const notifications = pgTable(
     check('notifications_handoff_has_handoff', sql`${t.kind} <> 'handoff' or ${t.handoffId} is not null`),
     check(
       'notifications_recipient_matches_kind',
-      sql`(${t.recipient} = 'customer') = (${t.kind} in ('deposit_confirmed', 'deposit_rejected'))`,
+      sql`(${t.recipient} = 'customer') = (${t.kind}::text in (${textList(CUSTOMER_NOTIFICATION_KINDS)}))`,
     ),
   ],
 );

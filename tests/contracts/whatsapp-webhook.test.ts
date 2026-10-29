@@ -49,6 +49,14 @@ describe('parseWebhook: mensajes recibidos', () => {
     expect(inboundContent(event.message)).toEqual(content);
   });
 
+  it('el botón de una plantilla llega como tipo button y se lee por su dato (8.1, H10)', () => {
+    // Ejemplo oficial: developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/button
+    const event = onlyMessage('template-button');
+
+    expect(event.type).toBe('button');
+    expect(inboundContent(event.message)).toEqual({ text: 'Unsubscribe', replyId: 'Unsubscribe' });
+  });
+
   it.each([
     ['image', 'image', 'Taj Mahal'],
     ['audio', 'audio', null],

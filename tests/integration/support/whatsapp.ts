@@ -90,6 +90,32 @@ export function buttonReplyWebhook(input: {
   );
 }
 
+/** El botón de una plantilla (8.1): tipo `button` con el dato que se fijó al enviar. */
+export function templateButtonWebhook(input: {
+  phoneNumberId: string;
+  from: string;
+  messageId: string;
+  payload: string;
+  text: string;
+  timestamp?: number;
+}): string {
+  return JSON.stringify(
+    envelope(input.phoneNumberId, {
+      contacts: [{ profile: { name: 'Clienta' }, wa_id: input.from }],
+      messages: [
+        {
+          context: { from: '5492615550000', id: 'wamid.plantilla-original' },
+          from: input.from,
+          id: input.messageId,
+          timestamp: String(input.timestamp ?? 1_790_000_000),
+          type: 'button',
+          button: { payload: input.payload, text: input.text },
+        },
+      ],
+    }),
+  );
+}
+
 export function statusWebhook(input: {
   phoneNumberId: string;
   messageId: string;

@@ -78,6 +78,26 @@ describe('sendWhatsAppMessage: enviar y registrar', () => {
     });
   });
 
+  it('una plantilla queda registrada como plantilla (H10)', async () => {
+    const tenant = await readyTenant();
+    const { client } = fakeClient(() => Promise.resolve({ messageId: 'wamid.plantilla-1' }));
+    const message = {
+      type: 'template' as const,
+      name: 'reserva_vencida',
+      language: 'es_AR',
+      params: { servicio: 'Semi', fecha_hora: 'viernes 9/10 10:00' },
+    };
+
+    await sendWhatsAppMessage(
+      { db, client, credentialsKey, now: NOW },
+      { tenantId: tenant.tenantId, customerId: tenant.customerId, message },
+    );
+
+    expect(
+      single(await db.select().from(messages).where(eq(messages.whatsappMessageId, 'wamid.plantilla-1'))),
+    ).toMatchObject({ direction: 'outbound', type: 'template', content: message });
+  });
+
   it('un negocio sin WhatsApp conectado no envía nada', async () => {
     const fixture = await createTenantFixture(db);
     const { client, sent } = fakeClient(() => Promise.resolve({ messageId: 'x' }));

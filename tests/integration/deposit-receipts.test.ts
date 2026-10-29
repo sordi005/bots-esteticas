@@ -15,6 +15,7 @@ import { tenantSettings, type AttentionHoursBlock } from '../../src/modules/tena
 import { createDatabase } from '../../src/shared/db.js';
 import { localDateTimeToInstant } from '../../src/shared/time-zone.js';
 import { testDatabaseUrl } from './support/database.js';
+import { noticeBody } from './support/notices.js';
 import { createBookableFixture, createCustomer, single, type BookableFixture } from './support/fixtures.js';
 
 /**
@@ -106,7 +107,10 @@ describe('registerTransferReceipt: ¿la imagen es el comprobante?', () => {
         ],
       },
     });
-    expect(notice?.message.body).toContain('$5.400');
+    expect(noticeBody(notice?.message)).toContain('$5.400');
+    // Por si la dueña no le escribió en 24 horas: la misma información con plantilla, con la imagen (H10).
+    expect(notice?.template).toMatchObject({ name: 'aviso_comprobante', params: { monto: '$5.400' } });
+    expect(notice?.template?.buttonPayloads).toHaveLength(2);
     expect(await reminderJob(f, depositId)).toMatchObject({
       status: 'pending',
       runAt: new Date(RECEIPT_AT.getTime() + DEPOSIT_REMINDER_DELAY_MS),
@@ -208,7 +212,8 @@ describe('remindDepositReceipt: la dueña no contestó (4.5)', () => {
     const notices = await receiptNotices(f);
     expect(notices).toHaveLength(2);
     expect(notices[1]).toMatchObject({ receiptMediaId: 'media-1', depositId });
-    expect(notices[1]?.message.body).toMatch(/^\*Recordatorio\*/);
+    expect(noticeBody(notices[1]?.message)).toMatch(/^\*Recordatorio\*/);
+    expect(notices[1]?.template).toMatchObject({ name: 'aviso_comprobante' });
     expect((await reminderJob(f, depositId)).rerunAt ?? (await reminderJob(f, depositId)).runAt).toEqual(
       new Date(now.getTime() + DEPOSIT_REMINDER_DELAY_MS),
     );

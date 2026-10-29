@@ -10,17 +10,22 @@ import {
 import { FALLBACK_REPLY_TEXT, notUnderstoodHandoffText } from '../../src/modules/conversation/agent/agent.js';
 import type { LlmClient, LlmMessage } from '../../src/modules/conversation/agent/llm-client.js';
 import { chosenSlotNotice } from '../../src/modules/conversation/agent/agent.js';
-import { CHOICE_MARKER, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
+import {
+  CHOICE_MARKER,
+  CONVERSATION_STARTED_BY_NOTICE,
+  SYSTEM_NOTICE_LABELS,
+} from '../../src/modules/conversation/agent/message-text.js';
 import type { ReceivedMessage } from '../../src/modules/conversation/processing.js';
 import { agentRuns, conversations, handoffs, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import type { AgentTool, ToolContext } from '../../src/modules/conversation/tools/tool.js';
 import { customers } from '../../src/modules/customers/schema.js';
 import { notifications } from '../../src/modules/notifications/schema.js';
-import { bookAppointment } from '../../src/modules/scheduling/booking.js';
-import { appointments } from '../../src/modules/scheduling/schema.js';
+import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
+import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { tenantSettings } from '../../src/modules/tenants/schema.js';
-import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
+import { renderTemplate, templateMessage } from '../../src/modules/whatsapp/templates.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
@@ -85,7 +90,7 @@ async function addInbound(
   return { id: row.id, type, content, occurredAt: row.occurredAt };
 }
 
-async function addOutbound(f: Fixture, message: OutgoingMessage, sentAt: Date) {
+async function addOutbound(f: Fixture, message: FreeFormMessage, sentAt: Date) {
   await db.insert(messages).values({
     tenantId: f.tenantId,
     conversationId: f.conversationId,
@@ -1141,6 +1146,57 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
     expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
   });
 
+  it.each([
+    [
+      'appointment_reminder',
+      templateMessage('recordatorio_turno', {
+        params: { servicio: 'Esmaltado semipermanente', profesional: 'Mica', fecha_hora: 'martes 6/10 15:30' },
+        buttonPayloads: ['recordatorio:a:confirmar', 'recordatorio:a:reprogramar', 'recordatorio:a:cancelar'],
+      }),
+    ],
+    [
+      'reservation_expired',
+      templateMessage('reserva_vencida', { params: { servicio: 'Esmaltado semipermanente', fecha_hora: 'martes 6/10 15:30' } }),
+    ],
+  ] as const)('en el historial, el %s (una plantilla) se ve con su texto, como aviso del sistema (H10)', async (kind, template) => {
+    const f = await setup('Caro Pérez');
+    const appointmentId = await pendingDeposit(f);
+    const whatsappMessageId = `wamid.${randomUUID()}`;
+    await db.insert(messages).values({
+      tenantId: f.tenantId,
+      conversationId: f.conversationId,
+      direction: 'outbound',
+      type: 'template',
+      content: template,
+      whatsappMessageId,
+      occurredAt: minutesAgo(20),
+    });
+    await db.insert(notifications).values({
+      tenantId: f.tenantId,
+      recipient: 'customer',
+      kind,
+      customerId: f.customerId,
+      appointmentId,
+      appointmentStart: at('2026-10-06', '15:30'),
+      message: template,
+      status: 'sent',
+      whatsappMessageId,
+      sentAt: minutesAgo(20),
+    });
+
+    const { result, requests } = reply(f, await pendingTexts(f, 'hola'), [finalAnswer('¡Hola!')]);
+    await result;
+
+    // La clienta no escribió en las últimas 24 horas: el aviso abre el historial y no se descarta, aunque la API
+    // exija empezar con ella. Sin esto, a un «no voy a poder ir» el modelo no sabía de qué recordatorio hablaba.
+    expect(conversationOf(requests[0]?.messages ?? [])).toEqual([
+      `user: ${CONVERSATION_STARTED_BY_NOTICE}`,
+      `assistant: ${SYSTEM_NOTICE_LABELS[kind]} ${renderTemplate(template) ?? ''}`,
+      'user: hola',
+    ]);
+    expect(SYSTEM_NOTICE_LABELS[kind]).toMatch(/no lo escribiste vos/);
+  });
+
   it('en el historial, el comprobante de antes se sigue viendo como comprobante (no como imagen para derivar)', async () => {
     const f = await setup('Caro Pérez');
     await pendingDeposit(f);
@@ -1650,5 +1706,149 @@ describe('createAgentResponder: el historial arranca en la reanudación (4.8)', 
 
     expect((await sentToTheModel(reused))?.turnContext).toMatch(/Conversación nueva: no/);
     expect((await sentToTheModel(stale))?.turnContext).toMatch(/Conversación nueva: sí/);
+  });
+});
+
+describe('createAgentResponder: los botones del recordatorio (4.7, H10)', () => {
+  async function confirmedAppointment(f: Fixture, start = at('2026-10-06', '15:30')) {
+    const booked = await bookAppointment(db, {
+      tenantId: f.tenantId,
+      customerId: f.customerId,
+      serviceId: f.semi,
+      professionalId: f.mica,
+      start,
+      actor: 'assistant',
+      now: hoursAgo(30),
+    });
+    if (!booked.ok) throw new Error(booked.reason);
+    return booked.appointmentId;
+  }
+
+  const tapReminder = (f: Fixture, appointmentId: string, code: 'confirmar' | 'reprogramar' | 'cancelar', text: string) =>
+    addInbound(f, {
+      type: 'button',
+      content: { type: 'button', button: { payload: `recordatorio:${appointmentId}:${code}`, text } },
+      at: minutesAgo(0.1),
+      processed: false,
+    });
+
+  const statusOfAppointment = async (appointmentId: string) =>
+    single(await db.select({ status: appointments.status }).from(appointments).where(eq(appointments.id, appointmentId))).status;
+
+  const attendanceEvents = async (appointmentId: string) =>
+    (await db.select().from(appointmentEvents).where(eq(appointmentEvents.appointmentId, appointmentId))).filter(
+      (event) => event.kind === 'attendance_confirmed',
+    );
+
+  it('«Confirmo» lo registra el código antes de llamar al modelo, y el contexto se lo dice', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'confirmar', 'Confirmo')], [
+      finalAnswer('¡Gracias, Caro! Te esperamos el martes.'),
+    ]);
+    await result;
+
+    expect(await attendanceEvents(appointmentId)).toHaveLength(1);
+    expect(requests[0]?.turnContext).toContain('Tocó «Confirmo» en el recordatorio de su turno del martes 6/10 15:30');
+    expect(requests[0]?.turnContext).toContain('el sistema ya registró que viene');
+  });
+
+  it('«Confirmo» sobre un turno cancelado no registra nada y el contexto lo dice', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    await changeAppointmentStatus(db, {
+      tenantId: f.tenantId,
+      appointmentId,
+      to: 'CANCELLED_BY_CUSTOMER',
+      actor: 'assistant',
+      now: hoursAgo(2),
+    });
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'confirmar', 'Confirmo')], [
+      finalAnswer('Ese turno ya estaba cancelado.'),
+    ]);
+    await result;
+
+    expect(await attendanceEvents(appointmentId)).toEqual([]);
+    expect(requests[0]?.turnContext).toContain('no se registró nada');
+  });
+
+  it('«Cancelar» lo contesta el código: pide la confirmación con «Sí, cancelar», sin llamar al modelo', async () => {
+    // Prueba manual de H10: el modelo lo contestaba sin llamar a cancelar_turno (sin el botón), aun con el aviso.
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'buttons',
+      body: '¿Querés cancelar tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30? Si es así, tocá «Sí, cancelar».',
+      buttons: [{ id: choiceIds.cancel(appointmentId), title: 'Sí, cancelar' }],
+    });
+    expect(await statusOfAppointment(appointmentId)).toBe('CONFIRMED');
+    expect(await runsOf(f)).toMatchObject([{ outcome: 'reminder_button', model: null, llmCalls: 0 }]);
+  });
+
+  it('«Cancelar» fuera de plazo: no cancela, deriva y le dice la política con un texto fijo', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f, at('2026-10-05', '17:00'));
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'cancelar', 'Cancelar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toMatchObject({ type: 'text' });
+    const body = answer?.type === 'text' ? answer.body : '';
+    expect(body).toMatch(/^No puedo cancelar tu turno del lunes 5\/10 17:00 porque faltan menos de 24 horas para el turno/);
+    expect(body).toContain('Tu turno no cambió.');
+    expect(await statusOfAppointment(appointmentId)).toBe('CONFIRMED');
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toMatchObject([
+      { reason: 'policy_exception', status: 'open' },
+    ]);
+  });
+
+  it('«Reprogramar» lo contesta el código: pregunta para qué día, sin ofrecer horarios al azar', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'text',
+      body:
+        '¿Para qué día querés pasar tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30? ' +
+        'Decime el día y si preferís a la mañana o a la tarde, y te busco horarios.',
+    });
+  });
+
+  it('«Reprogramar» fuera de plazo deriva igual que la herramienta, sin preguntar el día', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f, at('2026-10-05', '17:00'));
+
+    const answer = await reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []).result;
+
+    expect(answer?.type === 'text' ? answer.body : '').toMatch(/^No puedo reprogramar tu turno del lunes 5\/10 17:00/);
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toHaveLength(1);
+  });
+
+  it('el botón de un turno que ya no está activo lo dice, sin derivar ni llamar al modelo', async () => {
+    const f = await setup('Caro Pérez', { settings: { depositRequirement: 'never' } });
+    const appointmentId = await confirmedAppointment(f);
+    await changeAppointmentStatus(db, { tenantId: f.tenantId, appointmentId, to: 'CANCELLED_BY_CUSTOMER', actor: 'assistant', now: hoursAgo(1) });
+
+    const { result, requests } = reply(f, [await tapReminder(f, appointmentId, 'reprogramar', 'Reprogramar')], []);
+    const answer = await result;
+
+    expect(requests).toEqual([]);
+    expect(answer).toEqual({
+      type: 'text',
+      body: 'Tu turno de Esmaltado semipermanente con Mica del martes 6/10 15:30 ya no está activo (cancelado), así que no hay nada para reprogramar.',
+    });
+    expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, f.conversationId))).toEqual([]);
   });
 });

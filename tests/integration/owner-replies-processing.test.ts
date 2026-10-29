@@ -17,6 +17,7 @@ import { appointments } from '../../src/modules/scheduling/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { localDateTimeToInstant } from '../../src/shared/time-zone.js';
 import { testDatabaseUrl } from './support/database.js';
+import { noticeBody } from './support/notices.js';
 import { createBookableFixture, single, type BookableFixture } from './support/fixtures.js';
 
 /**
@@ -115,7 +116,10 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
       ]) as unknown,
     );
     expect(notices).toHaveLength(2);
-    expect(notices.find((n) => n.kind === 'deposit_confirmed')?.message.body).toMatch(/^¡Seña recibida!/);
+    expect(noticeBody(notices.find((n) => n.kind === 'deposit_confirmed')?.message)).toMatch(/^¡Seña recibida!/);
+    expect(notices.find((n) => n.kind === 'deposit_confirmed')?.template).toMatchObject({ name: 'sena_confirmada' });
+    // Lo que se le contesta a la dueña sale justo después de su toque, que le abre la ventana: sin plantilla.
+    expect(notices.find((n) => n.kind === 'owner_reply_ack')?.template).toBeNull();
     expect(await processedAt(id)).toEqual(NOW);
   });
 
@@ -128,7 +132,8 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
     expect(await statusOf(t.appointmentId)).toBe('DEPOSIT_REJECTED');
     const notices = await noticesAfter(t.tenantId);
     expect(notices.map((n) => n.kind).sort()).toEqual(['deposit_rejected', 'owner_reply_ack']);
-    expect(notices.find((n) => n.kind === 'owner_reply_ack')?.message.body).toMatch(/pausa/);
+    expect(noticeBody(notices.find((n) => n.kind === 'owner_reply_ack')?.message)).toMatch(/pausa/);
+    expect(notices.find((n) => n.kind === 'deposit_rejected')?.template).toMatchObject({ name: 'sena_rechazada' });
     const conversation = single(await db.select().from(conversations).where(eq(conversations.id, t.conversationId)));
     expect(conversation.assistantStatus).toBe('paused');
     expect(
@@ -155,7 +160,7 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
 
     expect(await statusOf(t.appointmentId)).toBe('CONFIRMED');
     const acks = (await noticesAfter(t.tenantId)).filter((n) => n.kind === 'owner_reply_ack');
-    expect(acks.at(-1)?.message.body).toContain('ya estaba confirmado');
+    expect(noticeBody(acks.at(-1)?.message)).toContain('ya estaba confirmado');
     expect(await processedAt(second)).toEqual(NOW);
   });
 
@@ -174,7 +179,7 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
 
     const notices = await noticesAfter(t.tenantId);
     expect(notices.map((n) => n.kind)).toEqual(['owner_reply_ack']);
-    expect(notices[0]?.message.body).toContain('canceló ese turno');
+    expect(noticeBody(notices[0]?.message)).toContain('canceló ese turno');
   });
 
   it('no procesa el botón de otro negocio (regla 1)', async () => {
@@ -208,7 +213,7 @@ describe('«Ya la atendí» (4.8)', () => {
   const handoffRow = async (id: string) => single(await db.select().from(handoffs).where(eq(handoffs.id, id)));
   const conversationRow = async (id: string) => single(await db.select().from(conversations).where(eq(conversations.id, id)));
   const lastAck = async (tenantId: string) =>
-    (await noticesAfter(tenantId, 'handoff')).filter((n) => n.kind === 'owner_reply_ack').at(-1)?.message.body;
+    noticeBody((await noticesAfter(tenantId, 'handoff')).filter((n) => n.kind === 'owner_reply_ack').at(-1)?.message);
 
   it('resuelve la derivación y reanuda el asistente desde ahora', async () => {
     const t = await derived();

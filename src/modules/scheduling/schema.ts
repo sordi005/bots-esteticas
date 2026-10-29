@@ -94,7 +94,10 @@ export const appointments = pgTable(
   ],
 );
 
-/** `status_change`: cambia el estado. `rescheduled`: cambia el horario, no el estado. */
+/**
+ * `status_change`: cambia el estado. `rescheduled`: cambia el horario, no el estado.
+ * `attendance_confirmed`: la clienta confirmó que va (4.7, H10), sin cambiar nada.
+ */
 export const appointmentEventKind = pgEnum('appointment_event_kind', APPOINTMENT_EVENT_KINDS);
 
 /**
@@ -133,7 +136,11 @@ export const appointmentEvents = pgTable(
         or (${t.kind} = 'rescheduled'
           and ${t.fromStatus} is not null
           and ${t.fromStatus} = ${t.toStatus}
-          and ${t.previousTimeRange} is not null)`,
+          and ${t.previousTimeRange} is not null)
+        or (${t.kind}::text = 'attendance_confirmed'
+          and ${t.fromStatus} is not null
+          and ${t.fromStatus} = ${t.toStatus}
+          and ${t.previousTimeRange} is null)`,
     ),
   ],
 );

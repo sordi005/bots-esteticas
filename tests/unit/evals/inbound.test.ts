@@ -101,3 +101,26 @@ describe('buildInboundMessage: imagen', () => {
     expect(describeInbound(type, content).text).toBe('[Imagen]');
   });
 });
+
+describe('buildInboundMessage: un botón del recordatorio (H10)', () => {
+  it('llega como el botón de una plantilla: tipo button, con el id como dato', () => {
+    const message = buildInboundMessage(
+      { eleccion: { tipo: 'recordatorio', turno: 'martes', accion: 'confirmar' }, titulo: 'Confirmo' },
+      () => 'recordatorio:x:confirmar',
+    );
+
+    expect(message).toEqual({
+      type: 'button',
+      content: { type: 'button', button: { payload: 'recordatorio:x:confirmar', text: 'Confirmo' } },
+    });
+  });
+
+  it('el agente lo lee como una opción tocada, con su id', () => {
+    const { type, content } = buildInboundMessage(
+      { eleccion: { tipo: 'recordatorio', turno: 'martes', accion: 'cancelar' }, titulo: 'Cancelar' },
+      () => 'recordatorio:x:cancelar',
+    );
+
+    expect(describeInbound(type, content)).toMatchObject({ replyId: 'recordatorio:x:cancelar', replyTitle: 'Cancelar' });
+  });
+});

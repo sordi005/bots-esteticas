@@ -100,7 +100,18 @@ export type ResolvedChoice =
       /** Inicio (UTC, ISO 8601) del último horario que ya se ofreció. */
       despuesDe: string;
     }
+  /**
+   * Tocó un botón del recordatorio del día anterior (4.7). «Confirmo» lo registra el código antes de
+   * llamar al modelo: `asistencia` dice si quedó registrado (lo completa el que procesa la vuelta).
+   */
+  | ({
+      tipo: 'recordatorio';
+      accion: 'confirmar' | 'reprogramar' | 'cancelar';
+      asistencia?: 'confirmada' | 'no_corresponde';
+    } & ResolvedAppointment)
   | { tipo: 'desconocido' };
+
+const REMINDER_ACTIONS = { confirm: 'confirmar', reschedule: 'reprogramar', cancel: 'cancelar' } as const;
 
 const UNKNOWN: ResolvedChoice = { tipo: 'desconocido' };
 
@@ -253,6 +264,21 @@ export async function resolveChoice(
         turnoTexto: formatLocalSlot(appointment.start, timeZone),
         ocupaHorario: occupiesSchedule(appointment.status),
         despuesDe: choice.after.toISOString(),
+      };
+    }
+
+    case 'reminder': {
+      // El turno del recordatorio tiene que ser de ESTA clienta (regla 2).
+      const appointment = await findCustomerAppointment(db, {
+        tenantId,
+        customerId,
+        appointmentId: choice.appointmentId,
+      });
+      if (!appointment) return UNKNOWN;
+      return {
+        tipo: 'recordatorio',
+        accion: REMINDER_ACTIONS[choice.action],
+        ...toResolvedAppointment(appointment, timeZone),
       };
     }
   }

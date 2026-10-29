@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import { z } from 'zod';
-import { outgoingMessageSchema, type OutgoingMessage } from '../../whatsapp/outgoing.js';
+import { freeFormMessageSchema, type FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { truncateText } from '../format.js';
 import type { HandoffReason } from '../handoff.js';
 import {
@@ -207,7 +207,7 @@ export interface AgentHandoff {
 }
 
 export interface AgentResult {
-  message: OutgoingMessage;
+  message: FreeFormMessage;
   /** Si la respuesta pidió derivar. El ciclo no conoce la base: quien lo llama registra la derivación. */
   handoff: AgentHandoff | null;
   run: AgentRun;
@@ -270,9 +270,9 @@ function missesRequiredMention(text: string, required: ReadonlySet<string>): boo
 }
 
 /** Arma el mensaje de WhatsApp: texto solo, botones o lista, según lo que haya para elegir. */
-function buildOutgoingMessage(texto: string, options: OfferableOption[]): OutgoingMessage {
+function buildFreeFormMessage(texto: string, options: OfferableOption[]): FreeFormMessage {
   const body = texto.slice(0, MAX_TEXT_LENGTH);
-  const textOnly: OutgoingMessage = { type: 'text', body };
+  const textOnly: FreeFormMessage = { type: 'text', body };
   if (options.length === 0) return textOnly;
 
   const fitsButtons =
@@ -280,7 +280,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
     texto.length <= MAX_BUTTON_BODY_LENGTH &&
     options.every((option) => option.title.length <= MAX_OPTION_TITLE_LENGTH);
 
-  const candidate: OutgoingMessage = fitsButtons
+  const candidate: FreeFormMessage = fitsButtons
     ? { type: 'buttons', body: texto, buttons: options.map(({ id, title }) => ({ id, title })) }
     : {
         type: 'list',
@@ -298,7 +298,7 @@ function buildOutgoingMessage(texto: string, options: OfferableOption[]): Outgoi
       };
 
   // Un mensaje que WhatsApp rechazaría (ids muy largos, por ejemplo) nunca llega a la API: se contesta solo con el texto.
-  return outgoingMessageSchema.safeParse(candidate).success ? candidate : textOnly;
+  return freeFormMessageSchema.safeParse(candidate).success ? candidate : textOnly;
 }
 
 /** Interpreta la salida final del modelo: null si no tiene la forma pedida. */
@@ -311,6 +311,12 @@ function parseFinalAnswer(text: string): FinalAnswer | null {
   }
   const parsed = finalAnswerSchema.safeParse(json);
   return parsed.success ? parsed.data : null;
+}
+
+/** La herramienta que la elección de esta vuelta obliga a llamar, con lo que se le dice al modelo si no la llama. */
+function requiredTool(input: AgentInput): { tool: string; notice: string } | undefined {
+  if (input.chosenSlot) return { tool: input.chosenSlot.tool, notice: chosenSlotNotice(input.chosenSlot) };
+  return undefined;
 }
 
 /** El texto afirma que un turno cambió y en la vuelta ninguna herramienta lo confirmó (6.4). */
@@ -367,6 +373,21 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     if (!allowTools || response.stopReason !== 'tool_calls' || response.toolCalls.length === 0) {
       answer =
         response.stopReason === 'refusal' || response.stopReason === 'max_tokens' ? null : parseFinalAnswer(response.text);
+      // Eligió un horario libre y en la vuelta no se llamó a la herramienta que lo reserva o lo mueve (6.4): una vez
+      // se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
+      // Va antes que los otros controles: si además anuncia una búsqueda o afirma el cambio sin hacerlo, lo que tiene
+      // que hacer es llamar a esa herramienta (prueba manual de H10). Si igual afirma un cambio, se corrige al final.
+      const required = requiredTool(input);
+      const skipsRequiredTool =
+        answer !== null && required !== undefined && answer.derivar === null && !executedTools.includes(required.tool);
+      if (skipsRequiredTool && response.toolCalls.length === 0 && !corrected) {
+        corrected = true;
+        messages.push(
+          { role: 'assistant_turn', turn: response.assistantTurn },
+          { role: 'system_note', text: required.notice },
+        );
+        continue;
+      }
       // Anuncia una búsqueda y en toda la vuelta no consultó nada (6.4): la respuesta se envía tal cual, así que
       // una vez se lo hace notar. Un turno que quedó con herramientas pedidas no admite un mensaje de texto a
       // continuación: la API exige sus resultados.
@@ -405,22 +426,7 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
         );
         continue;
       }
-      // Eligió un horario libre y en la vuelta no se llamó a la herramienta que lo reserva o lo mueve (6.4): una vez
-      // se lo hace notar. Si deriva, no: la persona del equipo sigue desde ahí.
-      const skipsChosenSlot =
-        answer !== null &&
-        input.chosenSlot !== undefined &&
-        answer.derivar === null &&
-        !executedTools.includes(input.chosenSlot.tool);
-      if (skipsChosenSlot && input.chosenSlot && response.toolCalls.length === 0 && !corrected) {
-        corrected = true;
-        messages.push(
-          { role: 'assistant_turn', turn: response.assistantTurn },
-          { role: 'system_note', text: chosenSlotNotice(input.chosenSlot) },
-        );
-        continue;
-      }
-      if (skipsChosenSlot) logger.debug('La respuesta no reservó el horario que eligió la clienta');
+      if (skipsRequiredTool) logger.debug({ tool: required.tool }, 'La respuesta no llamó a la herramienta que pedía la elección');
       if (missesPayment) logger.debug('La respuesta no trae los datos para pagar la seña');
       // Volvió a anunciar: se envía igual. Sin el texto, que es de la conversación.
       if (announcesWithoutTools) logger.debug('La respuesta volvió a anunciar una búsqueda sin llamar a ninguna herramienta');
@@ -453,7 +459,7 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
     );
   }
 
-  const finish = (message: OutgoingMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
+  const finish = (message: FreeFormMessage, outcome: AgentOutcome, handoff: AgentHandoff | null): AgentResult => ({
     message,
     handoff,
     run: {
@@ -495,5 +501,5 @@ export async function runAgent(deps: AgentDependencies, input: AgentInput): Prom
   const handoff: AgentHandoff | null = answer.derivar
     ? { reason: MODEL_HANDOFF_REASONS[answer.derivar.motivo].reason, summary: answer.derivar.resumen }
     : null;
-  return finish(buildOutgoingMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
+  return finish(buildFreeFormMessage(answer.texto, chosen), hitToolLimit ? 'tool_limit' : 'replied', handoff);
 }

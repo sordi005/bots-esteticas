@@ -58,9 +58,12 @@ export function dayBeforeReminderAt(input: ReminderInput): Date | null {
 export function shortReminderAt(input: ReminderInput & { hoursBefore?: number }): Date | null {
   const { appointmentStart, bookedAt, timeZone, window, hoursBefore = 2 } = input;
   const reminder = new Date(appointmentStart.getTime() - hoursBefore * HOUR_MS);
-  const { minutesOfDay } = instantToLocal(reminder, timeZone);
-
-  const insideWindow =
-    minutesOfDay >= parseLocalTime(window.start) && minutesOfDay <= parseLocalTime(window.end);
+  const insideWindow = isWithinReminderWindow({ now: reminder, timeZone, window });
   return insideWindow && reminder.getTime() > bookedAt.getTime() ? reminder : null;
+}
+
+/** Si `now` cae dentro del horario de envío del negocio (4.7): una tarea atrasada no envía fuera de él. */
+export function isWithinReminderWindow(input: { now: Date; timeZone: string; window: ReminderWindow }): boolean {
+  const { minutesOfDay } = instantToLocal(input.now, input.timeZone);
+  return minutesOfDay >= parseLocalTime(input.window.start) && minutesOfDay <= parseLocalTime(input.window.end);
 }

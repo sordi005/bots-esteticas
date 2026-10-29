@@ -1,6 +1,7 @@
 import { count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { LlmRequest } from '../../src/modules/conversation/agent/llm-client.js';
+import { CONVERSATION_STARTED_BY_NOTICE, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
 import { agentRuns, conversations, messages } from '../../src/modules/conversation/schema.js';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { consultationTools } from '../../src/modules/conversation/tools/index.js';
@@ -402,5 +403,52 @@ describe('los datos del seed respaldan lo que esperan las evaluaciones', () => {
     // La franja "tarde" arranca a las 13:00 inclusive: el primer lugar es Sofi a la 13:00.
     expect(text).toContain('viernes 9/10 13:00');
     expect(text).not.toContain('viernes 9/10 12');
+  });
+});
+
+describe('runEvalCase: recordatorios y vencimientos (H10)', () => {
+  const tuesday = { clave: 'martes', servicio: 'Esmaltado semipermanente', profesional: 'Mica', inicio: '2026-10-13 17:00' };
+
+  it('el recordatorio va en el historial como aviso del sistema, y «Confirmo» lo registra el código', async () => {
+    const evalCase: EvalCase = {
+      nombre: 'recordatorio_confirma_falso',
+      preparar: {
+        nombre: 'Caro Pérez',
+        turnos: [{ ...tuesday, senaAprobada: true }],
+        historial: [{ aviso: 'recordatorio', turno: 'martes' }],
+      },
+      mensajes: [{ eleccion: { tipo: 'recordatorio', turno: 'martes', accion: 'confirmar' }, titulo: 'Confirmo' }],
+      espera: {},
+    };
+
+    const { result, requests } = run(evalCase, [finalAnswer('¡Gracias, Caro! Te esperamos el martes.')]);
+    const evaluated = await result;
+
+    const [first, notice] = requestAt(requests, 0).messages;
+    expect(first).toEqual({ role: 'user', text: CONVERSATION_STARTED_BY_NOTICE });
+    expect(notice).toMatchObject({ role: 'assistant' });
+    expect(notice && 'text' in notice ? notice.text : '').toContain(SYSTEM_NOTICE_LABELS.appointment_reminder);
+    expect(requestAt(requests, 0).turnContext).toContain('el sistema ya registró que viene');
+    expect(evaluated.estado.turnos).toMatchObject([{ clave: 'martes', estado: 'CONFIRMED', asistenciaConfirmada: true }]);
+  });
+
+  it('un turno vencido queda EXPIRED y el aviso de la reserva vencida va en el historial', async () => {
+    const evalCase: EvalCase = {
+      nombre: 'reserva_vencida_falso',
+      preparar: {
+        nombre: 'Caro Pérez',
+        turnos: [{ ...tuesday, vencido: true }],
+        historial: [{ clienta: 'quiero turno el martes 13 a las 17' }, { aviso: 'reserva_vencida', turno: 'martes' }],
+      },
+      mensajes: ['uh, se me pasó. tenés otro horario?'],
+      espera: {},
+    };
+
+    const { result, requests } = run(evalCase, [finalAnswer('Sí, te busco otro.')]);
+    const evaluated = await result;
+
+    const texts = requestAt(requests, 0).messages.map((message) => ('text' in message ? message.text : ''));
+    expect(texts.some((text) => text.startsWith(SYSTEM_NOTICE_LABELS.reservation_expired))).toBe(true);
+    expect(evaluated.estado.turnos).toMatchObject([{ clave: 'martes', estado: 'EXPIRED', asistenciaConfirmada: false }]);
   });
 });

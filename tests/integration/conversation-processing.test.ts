@@ -15,7 +15,7 @@ import {
   type SendMessageInput,
   type WhatsAppClient,
 } from '../../src/modules/whatsapp/client.js';
-import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { inboundContent, parseWebhook } from '../../src/modules/whatsapp/webhook-payload.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
@@ -86,7 +86,7 @@ const textsOf = (turn: ConversationTurn) => turn.messages.map((message) => inbou
 const bodyOf = (sent: SendMessageInput) => (sent.message.type === 'text' ? sent.message.body : sent.message.type);
 
 /** Contesta con los textos recibidos, y anota cada vuelta. */
-function recordingResponder(reply: (turn: ConversationTurn) => OutgoingMessage | null = (turn) => ({
+function recordingResponder(reply: (turn: ConversationTurn) => FreeFormMessage | null = (turn) => ({
   type: 'text',
   body: textsOf(turn).join(' / '),
 })) {

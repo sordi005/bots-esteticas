@@ -1,4 +1,5 @@
 import { outgoingMessageSchema } from '../../whatsapp/outgoing.js';
+import { renderTemplate } from '../../whatsapp/templates.js';
 import { inboundContent, inboundImageId } from '../../whatsapp/webhook-payload.js';
 
 /**
@@ -19,9 +20,20 @@ const UNREADABLE = '[Mensaje que no se puede leer]';
 export const SYSTEM_NOTICE_LABELS = {
   deposit_confirmed: '[Aviso del sistema, no lo escribiste vos: la dueña verificó la transferencia y confirmó la seña]',
   deposit_rejected: '[Aviso del sistema, no lo escribiste vos: la dueña marcó que la transferencia no llegó]',
+  // H10 (4.5, 4.7): los recordatorios y el vencimiento también los manda el código.
+  appointment_reminder: '[Aviso del sistema, no lo escribiste vos: el recordatorio del turno, con botones para confirmar, reprogramar o cancelar]',
+  appointment_short_reminder: '[Aviso del sistema, no lo escribiste vos: el recordatorio del turno de hoy]',
+  reservation_expired:
+    '[Aviso del sistema, no lo escribiste vos: la reserva venció porque no llegó la seña a tiempo; el horario quedó libre]',
 } as const;
 
 export type SystemNoticeKind = keyof typeof SYSTEM_NOTICE_LABELS;
+
+/**
+ * Va primero en el historial cuando lo abre un aviso del sistema (H10): la API exige que la conversación
+ * empiece con la clienta, y un recordatorio casi siempre le llega a alguien que no escribió en 24 horas.
+ */
+export const CONVERSATION_STARTED_BY_NOTICE = '[La clienta no escribió antes en las últimas 24 horas: lo que sigue lo mandó el sistema]';
 
 /** Una imagen que el código registró como el comprobante de la seña (4.5): no es una imagen para derivar. */
 export const RECEIPT_MARKER = '[Comprobante de la seña]';
@@ -86,5 +98,7 @@ export function outgoingToText(content: Record<string, unknown>): string | null 
       const titles = data.sections.flatMap((section) => section.rows.map((row) => row.title));
       return `${data.body}\n[Opciones: ${titles.join(' | ')}]`;
     }
+    case 'template':
+      return renderTemplate(data);
   }
 }

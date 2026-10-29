@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.13 · 20/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.14 · 21/10/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -297,8 +297,8 @@ Detalle del flujo con transferencia (H9):
 - **[D]** Qué imagen es un comprobante lo decide el código, no el modelo, antes de llamarlo. La primera imagen de la vuelta es el comprobante si la clienta tiene **una sola** seña por transferencia pendiente y su turno sigue en `PENDIENTE_SEÑA` (4.5: cancelar no cambia la seña, por eso se mira el turno). Se acepta aunque haya pasado el plazo, mientras el turno no haya vencido: la dueña igual verifica el pago. Con varias señas pendientes, deriva con motivo "pago". Sin seña pendiente, o con la seña ya en verificación, la imagen se deriva como cualquier otra (4.8).
 - **[D]** El comprobante se registra (turno en verificación, id de la imagen en la seña) en la misma transacción que el aviso a la dueña. Después el agente contesta con ese hecho en el contexto de la vuelta: que lo recibió y que una persona del equipo lo verifica. El asistente nunca dice que la seña o el turno quedaron confirmados si en esa vuelta no lo confirmó una herramienta (6.4).
 - **[D]** El comprobante también se registra con el asistente pausado por una derivación (4.8): turno en verificación, aviso a la dueña con los botones y recordatorio, igual que siempre, pero sin llamar al modelo ni contestarle a la clienta, porque la está atendiendo una persona. Con varias señas pendientes no se vuelve a derivar: la conversación ya está en manos de una persona. Sin esto, una clienta que paga durante la pausa quedaba con el turno pendiente de seña y se le vencía (lo encontró la prueba manual de H9).
-- **[S]** Si la dueña no contesta, se le vuelve a avisar a las 2 horas, hasta 3 veces, solo dentro del horario de atención humana (4.8): si el aviso cae fuera, sale al próximo inicio. El primer aviso sale enseguida, a cualquier hora.
-- **[D]** "Recibida": el turno pasa a `CONFIRMADO`, la seña a aprobada y la clienta recibe un texto fijo: "¡Seña recibida! Tu turno quedó confirmado: {turno}."
+- **[S]** Si la dueña no contesta, se le vuelve a avisar a las 2 horas, hasta 3 veces, solo dentro del horario de atención humana (4.8): si el aviso cae fuera, sale al próximo inicio. El primer aviso sale enseguida, a cualquier hora. Vale también cuando el turno es ese mismo día y el próximo inicio cae después: el primer aviso ya salió y un turno en verificación no vence (4.4), así que la clienta no pierde el turno; cualquier regla que ignore el horario de atención le escribiría a la dueña de madrugada (revisado en H10).
+- **[D]** "Recibida": el turno pasa a `CONFIRMADO`, la seña a aprobada y la clienta recibe un texto fijo: "¡Seña recibida! Tu turno de {servicio} con {profesional} del {fecha y hora} quedó confirmado. ¡Te esperamos!" (desde H10 es también el texto de su plantilla, 8.1: una plantilla no puede terminar en una variable).
 - **[D]** "No llegó": el turno pasa a `RECHAZADO` (el horario se libera) y la clienta recibe un texto fijo: "No pudimos verificar la transferencia de la seña, así que el turno del {turno} quedó sin reservar. Si ya la hiciste, una persona del equipo te escribe por acá." La conversación se deriva con motivo "pago" (4.8), para que el asistente no discuta un pago: no sale otro aviso a la dueña, que acaba de tocar el botón.
 - **[D]** El botón de la dueña se procesa una sola vez y solo si el turno sigue en verificación. Si ya lo había respondido, o la clienta canceló mientras tanto, no cambia nada y la dueña recibe qué pasó ("Ese turno ya estaba confirmado", "La clienta canceló ese turno: si la seña llegó, la devolución la ves vos").
 
@@ -306,12 +306,18 @@ Detalle del flujo con transferencia (H9):
 
 - **[D]** El sistema nunca "lee" el comprobante con IA para confirmarlo. La confirmación de una transferencia siempre la hace una persona. Un comprobante se falsifica fácil.
 - **[D]** Si la reserva provisoria vence, el turno pasa a `EXPIRADO`, el horario se libera y el asistente le avisa a la clienta, ofreciendo volver a reservar.
+
+Detalle del vencimiento (H10):
+
+- **[D]** Al reservar un turno pendiente de seña, en la misma transacción se programa la tarea "vencimiento de reserva provisoria" para el vencimiento de la seña. La tarea bloquea el turno y lo vence solo si sigue en `PENDIENTE_SEÑA` y el plazo pasó, con la misma función que usa una reserva nueva para vencer las vencidas que pisan su horario (6.6). Un turno en verificación nunca vence (4.4).
+- **[D]** En la misma transacción se guarda el aviso a la clienta (6.7), con un texto fijo: "Tu reserva de {servicio} del {fecha y hora} se liberó porque no nos llegó la seña a tiempo. Si querés otro horario, respondé este mensaje y te ayudamos." Si el turno ya figuraba vencido (lo venció una reserva que pisaba su horario), la tarea manda el aviso igual: el aviso de vencimiento sale una sola vez por turno, venza por donde venza.
+- **[S]** El aviso sale aunque el asistente esté pausado por una derivación: si no, la clienta cree que todavía tiene el turno. Sin tiempo de gracia: el plazo es el configurado (60 minutos por defecto).
 - **[D]** Las devoluciones de seña nunca son automáticas. El asistente informa la política y avisa a la dueña.
 - **[S]** Cálculo del monto: el porcentaje se aplica sobre el precio de lista (en el ejemplo de 5.4, 30 % de $18.000 = $5.400) y se redondea hacia arriba al peso entero. Un monto fijo nunca supera el precio del servicio. Un servicio sin precio no lleva seña.
 - **[S]** "Clienta nueva" es la que todavía no tiene ningún turno completado en ese negocio.
 - **[?]** ¿La seña se pierde o se traspasa cuando la clienta cancela tarde? Depende de cada negocio: validar.
 - Cancelar un turno con la seña pendiente deja la seña en `pending` (el estado de la seña no tiene "cancelada"). Por eso, antes de aceptar un pago o un comprobante (H9, H11), se verifica que el turno siga pendiente de seña.
-- Si la dueña contesta pasadas 24 horas del último mensaje de la clienta, el aviso a la clienta ya no entra como mensaje libre (ventana de 24 horas de Meta, 8.2): necesita una plantilla del negocio, que llega en H10. Hasta entonces queda fallido, con una advertencia en el log.
+- Si la dueña contesta pasadas 24 horas del último mensaje de la clienta, el aviso a la clienta ya no entra como mensaje libre (ventana de 24 horas de Meta, 8.2): desde H10 sale con la plantilla del negocio (8.1).
 
 ### 4.6 Cancelación y reprogramación por la clienta
 
@@ -336,6 +342,18 @@ Detalle del flujo con transferencia (H9):
 - **[S]** El recordatorio corto de 2 horas antes se omite si cae fuera de la ventana: adelantarlo le quitaría el sentido.
 - **[D]** Los recordatorios usan **plantillas de utilidad aprobadas por Meta** en la cuenta de cada negocio, porque normalmente se envían fuera de la ventana de 24 horas. Tienen costo por mensaje (lo paga el negocio).
 - **[S]** Si la clienta no responde el recordatorio, no se cancela nada automáticamente. Aparece en el aviso diario a la dueña como "sin confirmar".
+
+Detalle de los recordatorios (H10):
+
+- **[D]** Los recordatorios se programan en la misma transacción que la reserva y se vuelven a calcular en la de la reprogramación (`booking.ts`): ninguna forma de reservar se los olvida. Al reprogramar, la hora de reserva para las reglas de arriba es la de la reprogramación: si el turno pasa a mañana, se omite el del día anterior.
+- **[D]** Antes de enviar, la tarea verifica con el turno bloqueado que su inicio sea el mismo para el que se calculó, que el turno no haya empezado, que el negocio esté activo y que el turno esté `CONFIRMADO` o en `SEÑA_EN_VERIFICACION` (la clienta ya pagó). Un recordatorio sale una sola vez por turno e inicio: lo garantiza la base.
+- **[S]** Si la tarea corre tarde (por ejemplo, el worker estuvo caído) y ya está fuera del horario de envío, no envía nada y deja una advertencia en el log.
+- **[S]** El recordatorio corto se programa solo si el negocio lo tiene activado y tiene cargada la dirección: una variable de plantilla no puede ir vacía.
+- **[D]** Los botones del recordatorio devuelven `recordatorio:<turno>:confirmar|reprogramar|cancelar`, y el código vuelve a validar el turno, como con cualquier opción (5.3).
+  - "Confirmo": el código registra la confirmación de asistencia (evento de auditoría del turno, en `booking.ts`) antes de llamar al modelo, y el agente contesta con ese hecho en el contexto de la vuelta. Con el asistente pausado se registra igual, sin contestar (como el comprobante, 4.5). No cambia el estado del turno: es lo que el aviso diario (H16) usa para mostrar los turnos sin confirmar.
+  - "Cancelar" y "Reprogramar" los contesta el código, sin llamar al modelo, con las mismas verificaciones que las herramientas (4.6): el turno es de la clienta y sigue activo, y el plazo y las reprogramaciones lo permiten. Si no corresponde, deriva como las herramientas y le dice la política con un texto fijo. La prueba manual de H10 mostró que el modelo, aun con el contexto y el aviso del ciclo, contestaba sin llamar a la herramienta (sin el botón para confirmar, o sin buscar horarios).
+  - "Cancelar": texto fijo con el turno y el botón "Sí, cancelar" ("¿Querés cancelar tu turno de {servicio} con {profesional} del {fecha y hora}? Si es así, tocá «Sí, cancelar»."). Tocar "Cancelar" no cancela: un toque sin querer cuesta caro. Desde el "Sí, cancelar" sigue el camino de siempre.
+  - "Reprogramar": texto fijo que pregunta para qué día ("¿Para qué día querés pasar tu turno de {servicio} con {profesional} del {fecha y hora}? Decime el día y si preferís a la mañana o a la tarde, y te busco horarios."), en vez de ofrecer los primeros horarios libres, que pueden no tener nada que ver con lo que necesita. Con su respuesta sigue el asistente.
 
 ### 4.8 Derivación a una persona
 
@@ -713,9 +731,9 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 **[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
 
-Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio, vencimiento de reserva provisoria, resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
+Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
 
-**[D] Avisos (H9):** un aviso (a la dueña o a la clienta, fuera de la respuesta del asistente) se guarda en la tabla `notifications` **en la misma transacción** que el cambio que lo origina: la derivación, el comprobante, la cancelación, la respuesta de la dueña. Lo envía después la tarea "enviar un aviso", con los reintentos de siempre. Así un cambio y su aviso no pueden quedar desparejos aunque falle la red en el medio.
+**[D] Avisos (H9):** un aviso (a la dueña o a la clienta, fuera de la respuesta del asistente) se guarda en la tabla `notifications` **en la misma transacción** que el cambio que lo origina: la derivación, el comprobante, la cancelación, la respuesta de la dueña. Lo envía después la tarea "enviar un aviso", con los reintentos de siempre. Así un cambio y su aviso no pueden quedar desparejos aunque falle la red en el medio. **[D]** Desde H10, junto con el mensaje se guarda su versión con plantilla (8.1), escrita también por el código: si Meta rechaza el mensaje libre por estar fuera de la ventana de 24 horas (error 131047), la misma ejecución envía la plantilla. Los recordatorios salen siempre con plantilla.
 
 **[D]** Una fila por tarea y clave. Cada tarea tiene una clave (la de procesar conversación es el id de la conversación), y la base no permite dos filas con el mismo negocio, tipo y clave. Programar una tarea que ya existe la actualiza:
 
@@ -745,7 +763,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[S]** Solo contestan los negocios activos. Los mensajes de un negocio pausado o dado de baja se marcan como procesados sin respuesta, con un aviso en el log.
 - **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 
-**[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado).
+**[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado o en verificación, 4.7).
 
 ### 6.8 Stack
 
@@ -801,16 +819,16 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | `holidays` | fecha, nombre. Global: la cargamos nosotros para todos los negocios |
 | `customers` | teléfono (E.164, único por negocio), nombre de perfil, nombre, profesional preferida, ausencias, consentimiento de marketing con fecha, origen, notas |
 | `appointments` | clienta, servicio, profesional, `time_range` (`tstzrange`), duración y margen al momento de reservar, estado, precio, precio en efectivo y tipo de precio al momento de reservar, id del evento de calendario, origen |
-| `appointment_events` | turno, tipo (cambio de estado o reprogramación), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
+| `appointment_events` | turno, tipo (cambio de estado, reprogramación o confirmación de asistencia de la clienta, 4.7), estado anterior, estado nuevo, horario anterior (solo en una reprogramación), actor, motivo, fecha |
 | `deposits` | turno (una seña por turno), monto, medio (el del negocio al reservar, 4.5), estado, id de preferencia y de pago de Mercado Pago (único), vencimiento, id del comprobante |
 | `conversations` | clienta (una conversación por clienta), estado del asistente (activo, pausado), pausado hasta, último mensaje, respuesta guardada sin enviar y desde cuándo (6.7, H8), cuándo se reanudó el asistente después de una derivación (4.8) |
 | `messages` | conversación, dirección (entrante, saliente, eco), tipo, contenido, id de WhatsApp (único), categoría de precio de Meta, costo estimado, fecha según WhatsApp, fecha en que se procesó (solo entrantes, sección 6.7) |
 | `handoffs` | conversación, motivo (lista cerrada, sección 4.8), resumen, estado, fecha de resolución |
-| `notifications` | avisos fuera de la respuesta del asistente (6.7, H9): destinataria (la dueña o una clienta), tipo, turno, seña o derivación a la que se refiere, mensaje, estado del envío, id de WhatsApp, fecha de envío, cuántas veces se le recordó a la dueña |
+| `notifications` | avisos fuera de la respuesta del asistente (6.7, H9): destinataria (la dueña o una clienta), tipo, turno, seña o derivación a la que se refiere, mensaje, su versión con plantilla (H10), el inicio del turno al que se refiere un recordatorio (H10), estado del envío, id de WhatsApp, fecha de envío, cuántas veces se le recordó a la dueña |
 | `owner_replies` | botones que tocó la dueña (H9): aviso, acción, id de WhatsApp (único: Meta reintenta), fecha, fecha en que se procesó |
 | `agent_runs` | conversación, modelo, tokens de entrada, de salida y de caché, nombres de las herramientas llamadas (sin sus argumentos), latencia, motivo de fin, fecha. Una fila por respuesta del agente (8.5). Se crea en H7 |
 | `scheduled_jobs` | tipo, clave (única por negocio y tipo, sección 6.7), datos, ejecutar en, volver a ejecutar en (si se programó mientras corría), estado (pendiente, en ejecución, terminada, fallida), intentos, último error, bloqueada hasta y token de bloqueo. Se crea en H6 |
-| `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables. Las plantillas del número de avisos del servicio (sección 8.2) no son de ningún negocio: se modelan en H10, junto con las de los recordatorios |
+| `message_templates` | nombre en Meta, categoría, idioma, estado de aprobación, variables. Desde H10 las plantillas (nombre, categoría, idioma, texto y variables) las define el código (8.1); esta tabla guarda el estado de aprobación que informa Meta, que se sincroniza en H14 con el webhook de estado de plantillas |
 | `audit_log` | quién cambió qué configuración, qué cambió y cuándo. Nunca guarda valores de credenciales |
 
 **[D]** `appointments` guarda el precio y la duración **al momento de reservar**. Si la dueña cambia el precio después, los turnos ya tomados no cambian.
@@ -832,6 +850,12 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
   - **[?]** Confirmar que la coexistencia esté disponible para números de Argentina antes de vender.
 - **[D]** Si un negocio no califica para coexistencia, no entra al MVP. Queda en espera hasta la fase 3, cuando exista el panel de la dueña para responder conversaciones.
 - **Plantillas:** se crean y aprueban en la cuenta de cada negocio durante el onboarding. Mínimo: recordatorio del día anterior (utilidad, con 3 botones) y aviso de reserva vencida (utilidad).
+- **[D] Plantillas (H10):** las define el código (`whatsapp/templates.ts`): nombre, categoría, idioma `es_AR`, texto, variables con nombre (`{{servicio}}`) y botones. El texto sirve para mostrar en el historial del modelo lo que se envió (los avisos del sistema se marcan como tales, 4.5) y para verificar la plantilla aprobada.
+  - Las de la clienta van en la cuenta del negocio: `recordatorio_turno` (botones "Confirmo", "Reprogramar", "Cancelar"), `recordatorio_turno_corto`, `reserva_vencida`, `sena_confirmada` y `sena_rechazada`. Las de la dueña van en la cuenta del número de avisos (8.2), o en la del negocio en la fase 0: `aviso_comprobante` (con la imagen como encabezado y los botones "Recibida" / "No llegó"), `aviso_derivacion` ("Ya la atendí"), `aviso_cancelacion` y `aviso_reprogramacion`. Qué pasó con un botón de la dueña no lleva plantilla: sale justo después de que ella tocó el botón, que le abre la ventana.
+  - Todas son de utilidad (en el Administrador de WhatsApp la categoría se llama "Servicio") y tienen un período de validez de 12 horas: con el estándar de 10 minutos, un recordatorio a un celular apagado se perdía.
+  - Reglas de Meta que condicionan los textos: una variable no puede abrir ni cerrar el texto, y el valor de una variable no puede llevar saltos de línea (el código los reemplaza por espacios). Un botón de respuesta rápida lleva un dato que se fija al enviar (`aviso:…` o `recordatorio:…`) y vuelve en el webhook como un mensaje de tipo `button`, no `interactive`.
+  - `pnpm whatsapp:templates <negocio>` consulta a Meta el estado de cada plantilla y compara su texto con el del código. Necesita el id de la cuenta de WhatsApp Business (`WHATSAPP_BUSINESS_ACCOUNT_ID` en desarrollo; desde H15, guardado con el negocio). El estado se sincroniza solo en H14.
+  - **[S]** En desarrollo, `WHATSAPP_PREFER_TEMPLATES=true` manda con plantilla todo aviso que la tenga, sin intentar antes el mensaje libre: en la demo la dueña y la clienta son el mismo celular, y el toque de la dueña le abre la ventana a la clienta. En producción el servidor no arranca con esa variable.
 - **Número de prueba:** la demo usa el número de prueba de Meta, que permite mandar mensajes a unos pocos números verificados sin configurar un negocio real.
   - La lista de permitidos compara el número como texto. A un celular argentino WhatsApp lo identifica como `549` + área + número, pero la lista lo guarda como `54` + área + `15` + número, y contestarle al `wa_id` da el error 131030. Es solo del modo de prueba: en producción no hay lista. Para probar en desarrollo, `WHATSAPP_TEST_RECIPIENT` en `.env` con el número como figura en la lista: todo envío va a ese número. En producción el servidor no arranca con esa variable.
   - El token de acceso que da el panel de prueba vence en pocas horas. Para cualquier uso que no sea una prueba corta hace falta un token que no venza (usuario del sistema o el que entrega el registro del negocio).
@@ -861,7 +885,7 @@ Detalle (H9):
 
 - **[S]** El número de avisos se configura con `NOTIFICATIONS_PHONE_NUMBER_ID` y `NOTIFICATIONS_ACCESS_TOKEN` (es del servicio, no de un negocio: va en variables de entorno, como el App Secret). Sin configurar, los avisos salen del número de cada negocio: así funciona la demo de la fase 0 (13), con el número de prueba de Meta.
 - **[D]** El teléfono de la dueña se guarda como lo identifica WhatsApp (`+549…`, sin el 15), porque contra ese número se reconocen sus respuestas (6.5). En desarrollo se carga con `pnpm owner:phone <negocio> <teléfono>`; desde H15, en el panel.
-- **[D] Ventana de 24 horas:** WhatsApp solo deja mandar mensajes libres a quien le escribió a ese número en las últimas 24 horas; fuera de eso hacen falta plantillas aprobadas. En H9 los avisos son mensajes interactivos (la imagen del comprobante como encabezado, hasta 3 botones), que en la demo llegan porque la dueña le escribe al número de prueba. Las plantillas de aviso se crean en H10, junto con las de los recordatorios. Hasta entonces, un aviso fuera de la ventana queda fallido con una advertencia en el log (la alerta a Yordi llega en H14).
+- **[D] Ventana de 24 horas:** WhatsApp solo deja mandar mensajes libres a quien le escribió a ese número en las últimas 24 horas; fuera de eso hacen falta plantillas aprobadas. En H9 los avisos son mensajes interactivos (la imagen del comprobante como encabezado, hasta 3 botones), que en la demo llegan porque la dueña le escribe al número de prueba. Desde H10, si Meta rechaza el aviso por estar fuera de la ventana (131047), la misma tarea lo envía con su plantilla (8.1, 6.7). Si la plantilla tampoco sale (no está aprobada, está pausada), el aviso queda fallido con el error de Meta y una advertencia en el log (la alerta a Yordi llega en H14).
 - **[D]** La imagen del comprobante se descarga del número del negocio y se vuelve a subir al número que envía el aviso: Meta no documenta que el id de una imagen recibida sirva para enviarla, y los ids de los webhooks vencen a los 7 días. La imagen no se guarda en nuestra base.
 - **[D]** Los textos de los avisos los escribe el código, nunca el modelo, y no incluyen datos de salud: una derivación por tema sensible muestra el resumen fijo (4.8).
 
@@ -1131,6 +1155,10 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 32 | Avisos interactivos en H9, plantillas en H10 | Plantillas desde H9 | Las plantillas se construyen una sola vez para los recordatorios y los avisos; la demo funciona con mensajes interactivos porque la dueña le escribe al número |
 | 33 | "Ya la atendí" resuelve la derivación y reanuda el asistente | Que solo la resuelva y el asistente siga esperando las 12 horas | Es la señal más explícita de la dueña; sin ella la clienta queda sin respuesta hasta que vence la pausa |
 | 34 | El comprobante se registra aunque el asistente esté pausado | Que lo vea solo la persona que atiende el chat | La dueña no siempre mira ese chat (sin coexistencia no lo ve), y el turno quedaba pendiente de seña hasta vencerse aunque la clienta hubiera pagado. Registrarlo no habla con la clienta: no se pisa con la persona |
+| 35 | Los avisos intentan primero el mensaje libre y, fuera de la ventana de 24 horas, la plantilla | Enviar todos los avisos con plantilla | El mensaje libre es más rico (la imagen con botones, el resumen completo) y casi siempre entra; Meta dice cuándo la ventana está cerrada, así que no hace falta llevar la cuenta. Los recordatorios sí van siempre con plantilla: suelen salir fuera de la ventana |
+| 36 | Las plantillas las define el código y se crean igual en Meta | Guardarlas editables en la base | El código escribe los textos de los avisos (8.2): tenerlos en el código permite mostrar en el historial lo que se envió y verificar que la plantilla aprobada coincida |
+| 37 | "Confirmo" lo registra el código antes de llamar al modelo | Una herramienta "confirmar asistencia" | Igual que el comprobante (decisión 31): el toque siempre queda registrado, aunque el modelo no llame a nada |
+| 38 | "Cancelar" y "Reprogramar" del recordatorio los contesta el código con textos fijos | Que el modelo llame a la herramienta, con un aviso del ciclo si no lo hace | En la prueba manual el modelo los contestó sin la herramienta tres veces, aun con el aviso. La respuesta correcta es siempre la misma (pedir la confirmación, preguntar el día): no hace falta el modelo |
 
 ---
 
@@ -1158,6 +1186,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
 | Lista oficial de feriados nacionales 2027 (todavía no publicada al 30/09/2026) | Diciembre de 2026 |
+| Meta clasificó la plantilla `reserva_vencida` como marketing, no como utilidad (8.1), seguramente por la invitación a pedir otro horario: sale más cara y tiene límites de envío por persona. Casi nunca se usa, porque la clienta reservó por chat hace menos de una hora y el aviso entra como mensaje libre; solo saldría con un plazo de seña de casi un día. Decidido en H10: queda así. Revisar con un negocio real si usa plazos largos | Piloto |
 | Mensajes que Meta entrega con demora. Si el servidor no respondió, Meta reintenta el webhook más tarde, y el mensaje puede llegar después de otros más nuevos que ya se contestaron. En la prueba manual de H9, un «quiero reservar un turno» llegó 6 minutos tarde, después de la reserva, y el asistente lo contestó como un pedido nuevo. Propuesta: avisarle al modelo en el historial que ese mensaje llegó con demora y es anterior a su última respuesta. No se descarta, porque puede traer una pregunta real | Piloto |
 
 ---

@@ -3,10 +3,12 @@ import {
   ACTORS,
   APPOINTMENT_STATUSES,
   canReschedule,
+  attendanceConfirmedEvent,
   canTransition,
   InvalidTransitionError,
   isFinalStatus,
   occupiesSchedule,
+  receivesReminder,
   rescheduleEvent,
   transition,
   type Actor,
@@ -205,4 +207,33 @@ describe('rescheduleEvent: reprogramar cambia el horario, no el estado', () => {
     expect(canReschedule('CONFIRMED', 'system')).toBe(false);
     expect(canReschedule('CONFIRMED', 'assistant')).toBe(true);
   });
+});
+
+describe('recordatorios y confirmación de asistencia (4.7, H10)', () => {
+  const at = new Date('2026-10-05T15:00:00.000Z');
+
+  it('reciben el recordatorio los turnos confirmados y los que esperan que la dueña verifique la seña', () => {
+    const reminded = APPOINTMENT_STATUSES.filter((status) => receivesReminder(status));
+
+    expect(reminded.sort()).toEqual(['CONFIRMED', 'DEPOSIT_REVIEW']);
+  });
+
+  it('confirmar la asistencia no cambia el estado: es un evento de auditoría aparte', () => {
+    expect(attendanceConfirmedEvent({ status: 'DEPOSIT_REVIEW', at })).toEqual({
+      kind: 'attendance_confirmed',
+      fromStatus: 'DEPOSIT_REVIEW',
+      toStatus: 'DEPOSIT_REVIEW',
+      actor: 'assistant',
+      reason: null,
+      previousTimeRange: null,
+      occurredAt: at,
+    });
+  });
+
+  it.each([['PENDING_DEPOSIT'], ['EXPIRED'], ['CANCELLED_BY_CUSTOMER'], ['COMPLETED']] as const)(
+    'un turno %s no confirma asistencia',
+    (status) => {
+      expect(() => attendanceConfirmedEvent({ status, at })).toThrow(InvalidTransitionError);
+    },
+  );
 });

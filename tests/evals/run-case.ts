@@ -4,7 +4,7 @@ import { createAgentResponder } from '../../src/modules/conversation/agent/agent
 import type { LlmClient } from '../../src/modules/conversation/agent/llm-client.js';
 import { agentRuns } from '../../src/modules/conversation/schema.js';
 import { resolveChoice } from '../../src/modules/conversation/tools/choices.js';
-import type { OutgoingMessage } from '../../src/modules/whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { EVAL_NOW, EVAL_TIME_ZONE } from './clock.js';
 import type { EvalCase, EvalOption, EvalResult } from './evaluate.js';
@@ -42,7 +42,7 @@ export interface RunCaseDependencies {
   signal?: AbortSignal;
 }
 
-function optionsOf(message: OutgoingMessage): Omit<EvalOption, 'resuelta'>[] {
+function optionsOf(message: FreeFormMessage): Omit<EvalOption, 'resuelta'>[] {
   switch (message.type) {
     case 'text':
       return [];

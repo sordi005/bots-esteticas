@@ -47,6 +47,25 @@ export async function readEvalState(db: NodePgDatabase, input: StateInput): Prom
     .where(and(eq(appointments.tenantId, tenantId), inArray(appointments.customerId, [customerId, ...otherCustomerIds])))
     .orderBy(asc(sql`lower(${appointments.timeRange})`), asc(appointments.id));
 
+  // Los turnos en los que la clienta tocó «Confirmo» en el recordatorio (4.7, H10).
+  const appointmentIds = appointmentRows.map((row) => row.id);
+  const confirmed = new Set(
+    appointmentIds.length === 0
+      ? []
+      : (
+          await db
+            .select({ appointmentId: appointmentEvents.appointmentId })
+            .from(appointmentEvents)
+            .where(
+              and(
+                eq(appointmentEvents.tenantId, tenantId),
+                inArray(appointmentEvents.appointmentId, appointmentIds),
+                eq(appointmentEvents.kind, 'attendance_confirmed'),
+              ),
+            )
+        ).map((row) => row.appointmentId),
+  );
+
   const handoffRows = await db
     .select({ motivo: handoffs.reason, resumen: handoffs.summary })
     .from(handoffs)
@@ -71,6 +90,7 @@ export async function readEvalState(db: NodePgDatabase, input: StateInput): Prom
       profesional: row.professionalName,
       inicio: formatLocalStart(row.timeRange.start, timeZone),
       estado: row.status,
+      asistenciaConfirmada: confirmed.has(row.id),
     })),
     derivaciones: handoffRows,
     pausada: conversation.status === 'paused',

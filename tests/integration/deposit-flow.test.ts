@@ -126,7 +126,7 @@ describe('seña por transferencia, de punta a punta con el worker', () => {
       expect.arrayContaining([
         expect.objectContaining({
           to: FIXTURE_CUSTOMER_PHONE,
-          message: expect.objectContaining({ body: expect.stringMatching(/^¡Seña recibida! Tu turno quedó confirmado/) as unknown }) as unknown,
+          message: expect.objectContaining({ body: expect.stringMatching(/^¡Seña recibida! Tu turno de .+ quedó confirmado/) as unknown }) as unknown,
         }),
         expect.objectContaining({
           to: `+${OWNER_WA_ID}`,

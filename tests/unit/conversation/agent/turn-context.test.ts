@@ -352,3 +352,50 @@ describe('describeChoice: la elección resuelta como texto, nunca el título del
     );
   });
 });
+
+describe('describeChoice: los botones del recordatorio (4.7, H10)', () => {
+  const reminder = (accion: 'confirmar' | 'reprogramar' | 'cancelar') =>
+    ({ ...appointment('turno'), tipo: 'recordatorio', accion }) as const satisfies ResolvedChoice;
+  const turn = `martes 13/10 17:00 (Esmaltado semipermanente con Mica, confirmado), turno_id=turno:${APPOINTMENT}`;
+
+  it('«Confirmo» registrado por el código: que le agradezca, sin herramientas', () => {
+    expect(describeChoice({ ...reminder('confirmar'), asistencia: 'confirmada' }, MENDOZA)).toBe(
+      `Tocó «Confirmo» en el recordatorio de su turno del ${turn}: el sistema ya registró que viene. ` +
+        'Agradecele y decile que la esperamos; no hace falta ninguna herramienta.',
+    );
+  });
+
+  it('«Confirmo» sobre un turno que ya no se puede confirmar: no se registró y no lo da por confirmado', () => {
+    const text = describeChoice(
+      { ...reminder('confirmar'), estado: 'cancelado por la clienta', ocupaHorario: false, asistencia: 'no_corresponde' },
+      MENDOZA,
+    );
+
+    expect(text).toContain('no se registró nada');
+    expect(text).toContain('listar_turnos_de_la_clienta');
+    expect(text).not.toContain('ya registró');
+  });
+
+  it('«Reprogramar»: que consulte los horarios para mover ese turno', () => {
+    expect(describeChoice(reminder('reprogramar'), MENDOZA)).toBe(
+      `Tocó «Reprogramar» en el recordatorio de su turno del ${turn}: consultá los horarios con ` +
+        'consultar_horarios_para_reprogramar y ese turno_id, y ofrecéselos.',
+    );
+  });
+
+  it('«Cancelar»: que pida la confirmación con «Sí, cancelar», nunca que cancele de una', () => {
+    const text = describeChoice(reminder('cancelar'), MENDOZA);
+
+    expect(text).toBe(
+      `Tocó «Cancelar» en el recordatorio de su turno del ${turn}: llamá a cancelar_turno con ese turno_id y ` +
+        'confirmada=false, para que lo confirme con el botón «Sí, cancelar».',
+    );
+    expect(text).not.toContain('confirmada=true');
+  });
+
+  it('sobre un turno que ya no está activo lo avisa', () => {
+    const text = describeChoice({ ...reminder('reprogramar'), estado: 'vencido por falta de seña', ocupaHorario: false }, MENDOZA);
+
+    expect(text).toContain('Ojo: ese turno ya no está activo (vencido por falta de seña).');
+  });
+});

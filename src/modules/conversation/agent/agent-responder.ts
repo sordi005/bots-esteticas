@@ -8,9 +8,11 @@ import { notifications } from '../../notifications/schema.js';
 import { deposits } from '../../payments/schema.js';
 import { appointments } from '../../scheduling/schema.js';
 import { tenants } from '../../tenants/schema.js';
-import type { OutgoingMessage } from '../../whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { inboundImageId } from '../../whatsapp/webhook-payload.js';
 import { registerTransferReceipt } from '../deposit-receipts.js';
+import { answerReminderButton } from '../reminder-buttons.js';
+import { registerReminderConfirmations } from '../reminder-confirmations.js';
 import { formatLocalSlot } from '../format.js';
 import { describeWhenHumanReplies, handOff } from '../handoff.js';
 import type { ConversationTurn, ReceivedMessage, Responder } from '../processing.js';
@@ -30,6 +32,7 @@ import type { LlmClient, LlmMessage } from './llm-client.js';
 import {
   describeInbound,
   outgoingToText,
+  CONVERSATION_STARTED_BY_NOTICE,
   SYSTEM_NOTICE_LABELS,
   type InboundDescription,
   type SystemNoticeKind,
@@ -83,7 +86,7 @@ export interface AgentResponderDependencies {
 export function createAgentResponder(deps: AgentResponderDependencies): Responder {
   const { db, llm, now, tools = agentTools } = deps;
 
-  return async (turn: ConversationTurn, { signal }): Promise<OutgoingMessage | null> => {
+  return async (turn: ConversationTurn, { signal }): Promise<FreeFormMessage | null> => {
     const { tenantId, conversationId, customerId } = turn;
     const at = now();
     const logger = deps.logger.child({ tenant_id: tenantId, conversation_id: conversationId });
@@ -193,6 +196,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
 
     // Lo que la clienta tocó en botones o listas se resuelve y se vuelve a validar acá: el modelo
     // recibe la elección ya resuelta y nunca interpreta el título del botón (5.3).
+    // «Confirmo» del recordatorio: lo registra el código antes de llamar al modelo (4.7, decisión 37).
+    const confirmations = await registerReminderConfirmations(db, { tenantId, customerId, messages: turn.messages, now: at });
     const choices: ResolvedChoice[] = [];
     const pendingMessages: LlmMessage[] = [];
     const chosenOptionIds = new Set<string>();
@@ -201,12 +206,33 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
       pendingMessages.push({ role: 'user', text: described.text });
       if (described.replyId) {
         chosenOptionIds.add(described.replyId);
-        choices.push(await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId));
+        const choice = await resolveChoice(db, { tenantId, customerId, now: at, timeZone: tenant.timeZone }, described.replyId);
+        const confirmedNow = choice.tipo === 'recordatorio' && choice.accion === 'confirmar';
+        choices.push(confirmedNow ? { ...choice, asistencia: confirmations.get(choice.turnoId) ?? 'no_corresponde' } : choice);
       }
     }
     const chosenSlot = slotToActOn(choices, customer.name !== null);
     // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
+
+    const toolContext = { db, tenantId, customerId, conversationId, now: at, timeZone: tenant.timeZone, chosenOptionIds, signal };
+
+    // «Cancelar» y «Reprogramar» del recordatorio los contesta el código, sin el modelo (4.7, decisión 38).
+    const reminderChoice = choices.findLast((choice) => choice.tipo === 'recordatorio' && choice.accion !== 'confirmar');
+    const reminderAnswer =
+      reminderChoice?.tipo === 'recordatorio' ? await answerReminderButton(toolContext, reminderChoice) : null;
+    if (reminderAnswer) {
+      await db.insert(agentRuns).values({
+        tenantId,
+        conversationId,
+        model: null,
+        llmCalls: 0,
+        outcome: 'reminder_button',
+        createdAt: at,
+      });
+      logger.info({ outcome: 'reminder_button' }, 'Botón del recordatorio: contestó el código');
+      return reminderAnswer;
+    }
 
     // Se calcula acá y no en el modelo (4.8): si deriva, escribe este texto tal cual en su respuesta.
     const humanReplyWhen = await describeWhenHumanReplies(db, { tenantId, now: at });
@@ -228,16 +254,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           ...(receipt ? { receipt } : {}),
         }),
         history: [...history, ...pendingMessages],
-        toolContext: {
-          db,
-          tenantId,
-          customerId,
-          conversationId,
-          now: at,
-          timeZone: tenant.timeZone,
-          chosenOptionIds,
-          signal,
-        },
+        toolContext,
         ...(chosenSlot ? { chosenSlot } : {}),
       },
     );
@@ -343,7 +360,7 @@ async function loadHistory(
     rows.flatMap((row) => (row.direction === 'outbound' && row.whatsappMessageId ? [row.whatsappMessageId] : [])),
   );
 
-  const history: LlmMessage[] = [];
+  const history: { role: 'user' | 'assistant'; text: string; notice?: true }[] = [];
   for (const row of rows.reverse()) {
     if (row.direction === 'inbound') {
       const described = describeInbound(row.type, row.content, receiptMediaIds);
@@ -351,12 +368,16 @@ async function loadHistory(
     } else {
       const text = outgoingToText(row.content);
       const notice = row.whatsappMessageId ? notices.get(row.whatsappMessageId) : undefined;
-      if (text) history.push({ role: 'assistant', text: notice ? `${SYSTEM_NOTICE_LABELS[notice]} ${text}` : text });
+      if (!text) continue;
+      history.push(notice ? { role: 'assistant', text: `${SYSTEM_NOTICE_LABELS[notice]} ${text}`, notice: true } : { role: 'assistant', text });
     }
   }
-  // La API exige que la conversación empiece con la clienta.
-  while (history[0]?.role === 'assistant') history.shift();
-  return history;
+  // La API exige que la conversación empiece con la clienta. Una respuesta del asistente que quedó sin
+  // su pregunta (el corte de 20 mensajes) se descarta; un aviso del sistema no: un recordatorio suele
+  // abrir el historial, y sin él el modelo no sabe de qué turno le habla la clienta (H10).
+  while (history[0]?.role === 'assistant' && !history[0].notice) history.shift();
+  if (history[0]?.role === 'assistant') history.unshift({ role: 'user', text: CONVERSATION_STARTED_BY_NOTICE });
+  return history.map(({ role, text }) => ({ role, text }));
 }
 
 /**

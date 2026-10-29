@@ -1,4 +1,4 @@
-import { and, count, eq, lte, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { customers } from '../customers/schema.js';
 import { depositAmountCents, resolveDepositRule } from '../payments/deposit-policy.js';
@@ -7,20 +7,23 @@ import type { Queryable } from '../../shared/db.js';
 import { EXCLUSION_VIOLATION, isConstraintViolation, retryOnDeadlock } from '../../shared/postgres-errors.js';
 import type { TimestampRange } from '../../shared/timestamp-range.js';
 import {
+  attendanceConfirmedEvent,
   canReschedule,
   canTransition,
+  receivesReminder,
   rescheduleEvent,
   transition,
   type Actor,
   type AppointmentStatus,
 } from './appointment-state-machine.js';
+import { scheduleReminders, scheduleReservationExpiry } from './appointment-jobs.js';
 import {
   loadAvailabilityContext,
   loadRescheduleContext,
   overlaps,
   type AvailabilityContext,
 } from './availability-context.js';
-import { diagnoseStart, type ProfessionalSchedule } from './availability.js';
+import { diagnoseStart, holdsSchedule, type ProfessionalSchedule } from './availability.js';
 import { appointmentEvents, appointments } from './schema.js';
 
 /**
@@ -92,16 +95,22 @@ async function expireOverdueReservations(
     .for('update', { of: appointments });
 
   for (const { id } of overdue) {
-    await applyStatusChange(tx, {
-      tenantId,
-      appointmentId: id,
-      from: 'PENDING_DEPOSIT',
-      to: 'EXPIRED',
-      actor: 'system',
-      reason: 'Venció el plazo para pagar la seña',
-      now,
-    });
+    await expireLocked(tx, { tenantId, appointmentId: id, now });
   }
+}
+
+/**
+ * Vence un turno pendiente de seña ya bloqueado (4.5): lo usan la reserva que pisa su horario y la
+ * tarea de vencimiento. El turno pasa a `EXPIRED` y la seña pendiente, a vencida.
+ */
+async function expireLocked(tx: Queryable, input: { tenantId: string; appointmentId: string; now: Date }) {
+  await applyStatusChange(tx, {
+    ...input,
+    from: 'PENDING_DEPOSIT',
+    to: 'EXPIRED',
+    actor: 'system',
+    reason: 'Venció el plazo para pagar la seña',
+  });
 }
 
 /** Cambia el estado y guarda el evento, más lo que cada estado implica. Dentro de `tx`. */
@@ -261,6 +270,15 @@ export async function bookAppointment(
       if (!appointment) throw new Error('La base no devolvió el turno creado');
 
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId: appointment.id, ...creation });
+      // Los recordatorios y el vencimiento quedan programados con la reserva (4.5, 4.7).
+      await scheduleReminders(tx, {
+        tenantId,
+        appointmentId: appointment.id,
+        start,
+        bookedAt: now,
+        timeZone: context.query.timeZone,
+        settings,
+      });
 
       if (depositCents === null) {
         return { ok: true, appointmentId: appointment.id, status, deposit: null } as const;
@@ -279,6 +297,7 @@ export async function bookAppointment(
         })
         .returning({ id: deposits.id });
       if (!deposit) throw new Error('La base no devolvió la seña creada');
+      await scheduleReservationExpiry(tx, { tenantId, appointmentId: appointment.id, expiresAt });
 
       return {
         ok: true,
@@ -345,6 +364,101 @@ export async function changeAppointmentStatus(
     });
     await inTransaction?.(tx, { appointmentId, from: current.status, to });
     return { ok: true } as const;
+  });
+}
+
+// ─── Vencer y confirmar asistencia (H10) ───────────────────────────────────────
+
+export type ExpiryResult =
+  | { ok: true; outcome: 'expired' | 'already_expired' }
+  | { ok: false; reason: 'not_found' | 'not_due' }
+  | { ok: false; reason: 'not_pending'; status: AppointmentStatus };
+
+/**
+ * La tarea de vencimiento (4.5): con el turno bloqueado, lo vence si sigue pendiente de seña y el
+ * plazo pasó. Uno en verificación nunca vence (4.4). Si ya estaba vencido (lo venció una reserva que
+ * pisaba su horario) también llama a `inTransaction`: el aviso a la clienta sale venza por donde venza.
+ */
+export async function expireReservation(
+  db: NodePgDatabase,
+  input: {
+    tenantId: string;
+    appointmentId: string;
+    now: Date;
+    inTransaction?: InTransaction<{ appointmentId: string; start: Date }>;
+  },
+): Promise<ExpiryResult> {
+  const { tenantId, appointmentId, now, inTransaction } = input;
+
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ status: appointments.status, timeRange: appointments.timeRange, expiresAt: deposits.expiresAt })
+      .from(appointments)
+      .leftJoin(deposits, and(eq(deposits.tenantId, appointments.tenantId), eq(deposits.appointmentId, appointments.id)))
+      .where(and(eq(appointments.tenantId, tenantId), eq(appointments.id, appointmentId)))
+      .for('update', { of: appointments });
+    if (!current) return { ok: false, reason: 'not_found' } as const;
+    const change = { appointmentId, start: current.timeRange.start };
+
+    if (current.status === 'EXPIRED') {
+      await inTransaction?.(tx, change);
+      return { ok: true, outcome: 'already_expired' } as const;
+    }
+    if (current.status !== 'PENDING_DEPOSIT') {
+      return { ok: false, reason: 'not_pending', status: current.status } as const;
+    }
+    // La misma regla que usa la disponibilidad para dejar de contarlo como ocupado (4.3).
+    if (holdsSchedule({ status: current.status, depositExpiresAt: current.expiresAt }, now)) {
+      return { ok: false, reason: 'not_due' } as const;
+    }
+
+    await expireLocked(tx, { tenantId, appointmentId, now });
+    await inTransaction?.(tx, change);
+    return { ok: true, outcome: 'expired' } as const;
+  });
+}
+
+export type AttendanceResult =
+  | { ok: true; alreadyConfirmed: boolean }
+  | { ok: false; reason: 'not_found' | 'already_started' }
+  | { ok: false; reason: 'not_confirmable'; status: AppointmentStatus };
+
+/**
+ * La clienta tocó «Confirmo» en el recordatorio (4.7): queda un evento de auditoría, sin cambiar el
+ * estado. Una confirmación anterior a la última reprogramación no cuenta: era para otro horario.
+ */
+export async function confirmAttendance(
+  db: NodePgDatabase,
+  input: { tenantId: string; customerId: string; appointmentId: string; now: Date },
+): Promise<AttendanceResult> {
+  const { tenantId, customerId, appointmentId, now } = input;
+  const ofThisAppointment = and(eq(appointmentEvents.tenantId, tenantId), eq(appointmentEvents.appointmentId, appointmentId));
+
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select({ status: appointments.status, timeRange: appointments.timeRange })
+      .from(appointments)
+      // El id viene del botón: el turno tiene que ser de ESTA clienta (regla 2).
+      .where(and(eq(appointments.tenantId, tenantId), eq(appointments.customerId, customerId), eq(appointments.id, appointmentId)))
+      .for('update');
+    if (!current) return { ok: false, reason: 'not_found' } as const;
+    if (!receivesReminder(current.status)) {
+      return { ok: false, reason: 'not_confirmable', status: current.status } as const;
+    }
+    if (current.timeRange.start.getTime() <= now.getTime()) return { ok: false, reason: 'already_started' } as const;
+
+    const [latest] = await tx
+      .select({ kind: appointmentEvents.kind })
+      .from(appointmentEvents)
+      .where(and(ofThisAppointment, inArray(appointmentEvents.kind, ['attendance_confirmed', 'rescheduled'])))
+      .orderBy(desc(appointmentEvents.occurredAt))
+      .limit(1);
+    if (latest?.kind === 'attendance_confirmed') return { ok: true, alreadyConfirmed: true } as const;
+
+    await tx
+      .insert(appointmentEvents)
+      .values({ tenantId, appointmentId, ...attendanceConfirmedEvent({ status: current.status, at: now }) });
+    return { ok: true, alreadyConfirmed: false } as const;
   });
 }
 
@@ -561,6 +675,15 @@ export async function rescheduleAppointment(
       });
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
+      // Para los recordatorios, el turno se reservó ahora: la clienta acaba de elegir el horario (4.7).
+      await scheduleReminders(tx, {
+        tenantId,
+        appointmentId,
+        start: newStart,
+        bookedAt: now,
+        timeZone: context.query.timeZone,
+        settings: context.settings,
+      });
       await inTransaction?.(tx, { appointmentId, previousStart: locked.timeRange.start, newStart });
       return { ok: true } as const;
     }));

@@ -15,7 +15,7 @@ import {
 import { createdAt, instant, updatedAt } from '../../shared/db-columns.js';
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
-import type { OutgoingMessage } from '../whatsapp/outgoing.js';
+import type { FreeFormMessage } from '../whatsapp/outgoing.js';
 import { agentOutcomes } from './agent/outcome.js';
 
 export const assistantStatus = pgEnum('assistant_status', ['active', 'paused']);
@@ -67,7 +67,7 @@ export const conversations = pgTable(
      * mensajes procesados y se borra al enviarla: si el envío falla, el reintento solo la
      * reenvía, sin volver a llamar al modelo ni repetir lo que hicieron las herramientas.
      */
-    pendingReply: jsonb('pending_reply').$type<OutgoingMessage>(),
+    pendingReply: jsonb('pending_reply').$type<FreeFormMessage>(),
     /** Cuándo se guardó `pendingReply`: pasados 5 minutos se descarta. */
     pendingReplyAt: instant('pending_reply_at'),
     createdAt: createdAt(),

@@ -140,3 +140,74 @@ describe('toGraphPayload: los límites de Meta se validan antes de enviar', () =
     expect(() => toGraphPayload(TO, message)).not.toThrow();
   });
 });
+
+describe('toGraphPayload: plantillas (8.1, H10)', () => {
+  it('una plantilla con variables con nombre', () => {
+    const message: OutgoingMessage = {
+      type: 'template',
+      name: 'reserva_vencida',
+      language: 'es_AR',
+      params: { servicio: 'Esmaltado semipermanente', fecha_hora: 'viernes 9/10 10:00' },
+    };
+
+    expect(toGraphPayload(TO, message)).toEqual({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: TO,
+      type: 'template',
+      template: {
+        name: 'reserva_vencida',
+        language: { code: 'es_AR' },
+        components: [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', parameter_name: 'servicio', text: 'Esmaltado semipermanente' },
+              { type: 'text', parameter_name: 'fecha_hora', text: 'viernes 9/10 10:00' },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it('con imagen de encabezado y el dato de cada botón de respuesta rápida, en orden', () => {
+    const payload = toGraphPayload(TO, {
+      type: 'template',
+      name: 'aviso_comprobante',
+      language: 'es_AR',
+      header: { type: 'image', imageId: '1037543291543636' },
+      params: { clienta: 'Laura (+5492615550000)' },
+      buttonPayloads: ['aviso:1:deposit_received', 'aviso:1:deposit_not_received'],
+    });
+
+    expect(payload.template).toEqual({
+      name: 'aviso_comprobante',
+      language: { code: 'es_AR' },
+      components: [
+        { type: 'header', parameters: [{ type: 'image', image: { id: '1037543291543636' } }] },
+        { type: 'body', parameters: [{ type: 'text', parameter_name: 'clienta', text: 'Laura (+5492615550000)' }] },
+        { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'aviso:1:deposit_received' }] },
+        { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'aviso:1:deposit_not_received' }] },
+      ],
+    });
+  });
+
+  it('sin variables no manda el componente del cuerpo', () => {
+    const payload = toGraphPayload(TO, { type: 'template', name: 'hello_world', language: 'en_US', params: {} });
+
+    expect(payload.template).toEqual({ name: 'hello_world', language: { code: 'en_US' }, components: [] });
+  });
+
+  it.each<[string, OutgoingMessage]>([
+    ['un nombre con mayúsculas', { type: 'template', name: 'Reserva', language: 'es_AR', params: {} }],
+    ['una variable vacía', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: { servicio: '' } }],
+    ['una variable con salto de línea', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: { servicio: 'Semi\nbase' } }],
+    ['una variable con tabulación', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: { servicio: 'Semi\tbase' } }],
+    ['una variable con cuatro espacios seguidos', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: { servicio: 'Semi    base' } }],
+    ['un nombre de variable inválido', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: { Servicio: 'Semi' } }],
+    ['más de 10 botones', { type: 'template', name: 'reserva_vencida', language: 'es_AR', params: {}, buttonPayloads: Array.from({ length: 11 }, (_, i) => `b${String(i)}`) }],
+  ])('rechaza %s', (_case, message) => {
+    expect(() => toGraphPayload(TO, message)).toThrow();
+  });
+});

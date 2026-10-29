@@ -11,7 +11,7 @@ import { parseWebhook } from '../../src/modules/whatsapp/webhook-payload.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture } from './support/fixtures.js';
-import { buttonReplyWebhook, connectWhatsApp, textMessageWebhook } from './support/whatsapp.js';
+import { buttonReplyWebhook, connectWhatsApp, templateButtonWebhook, textMessageWebhook } from './support/whatsapp.js';
 
 /**
  * Las respuestas de la dueña a los avisos (6.5, paso 2). Con número de avisos, todo lo que entra
@@ -94,6 +94,23 @@ describe('fase 0: los avisos salen del número del negocio', () => {
     expect(job).toMatchObject([{ key: reply?.id, status: 'pending', runAt: NOW }]);
     // No es un mensaje de clienta: el asistente no lo ve.
     expect(await inboundOf(tenant.tenantId)).toEqual([]);
+  });
+
+  it('el botón de un aviso que le llegó como plantilla también es su respuesta (H10)', async () => {
+    const tenant = await tenantWithNotice();
+
+    const summary = await record(
+      templateButtonWebhook({
+        phoneNumberId: tenant.phoneNumberId,
+        from: tenant.owner,
+        messageId: `wamid.${randomUUID()}`,
+        payload: `aviso:${tenant.noticeId}:atendida`,
+        text: 'Ya la atendí',
+      }),
+    );
+
+    expect(summary).toMatchObject({ ownerReplies: 1, stored: 0 });
+    expect(await repliesOf(tenant.tenantId)).toMatchObject([{ notificationId: tenant.noticeId, action: 'handoff_attended' }]);
   });
 
   it('el mismo botón reenviado por Meta se guarda una sola vez', async () => {

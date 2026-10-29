@@ -115,7 +115,7 @@ describe('preparar: los turnos', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: 'martes', de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: TUESDAY, estado: 'PENDING_DEPOSIT' },
+      { clave: 'martes', de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: TUESDAY, estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     const listed = lastToolOutputs(request(requests, 1))[0] as { turnos: Record<string, unknown>[] };
     expect(listed.turnos).toHaveLength(1);
@@ -133,7 +133,7 @@ describe('preparar: los turnos', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: 'maria', de: 'otra', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 11:00', estado: 'PENDING_DEPOSIT' },
+      { clave: 'maria', de: 'otra', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-14 11:00', estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     expect(lastToolOutputs(request(requests, 1))[0]).toMatchObject({ turnos: [] });
   });
@@ -448,7 +448,7 @@ describe('el estado que queda en la base', () => {
     const evaluated = await result;
 
     expect(evaluated.estado.turnos).toEqual([
-      { clave: null, de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT' },
+      { clave: null, de: 'clienta', servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT', asistenciaConfirmada: false },
     ]);
     expect(evaluated.estado.nombreClienta).toBe('Caro Pérez');
     expect(evaluated.estado.derivaciones).toEqual([]);
@@ -514,8 +514,21 @@ describe('los casos de cases.ts contra el seed', () => {
   it.each(evalCases)('$nombre se puede preparar y correr', async (evalCase) => {
     const before = await countAppointments();
 
-    // Con dos señas pendientes el código deriva sin llamar al modelo (4.5): esa vuelta tiene su propio motivo.
-    const outcome = evalCase.nombre === 'sena_comprobante_dos_senas' ? 'handoff_payment_issue' : 'replied';
+    // Con dos señas pendientes el código deriva sin llamar al modelo (4.5), y «Cancelar» o «Reprogramar» del
+    // recordatorio también los contesta el código (4.7, decisión 38): esas vueltas tienen su propio motivo.
+    const tapsReminderButton = evalCase.mensajes.some(
+      (message) =>
+        typeof message === 'object' &&
+        'eleccion' in message &&
+        message.eleccion.tipo === 'recordatorio' &&
+        message.eleccion.accion !== 'confirmar',
+    );
+    const outcome =
+      evalCase.nombre === 'sena_comprobante_dos_senas'
+        ? 'handoff_payment_issue'
+        : tapsReminderButton
+          ? 'reminder_button'
+          : 'replied';
     await expect(run(evalCase).result).resolves.toMatchObject({ outcome });
 
     expect(await countAppointments()).toBe(before);

@@ -120,6 +120,20 @@
       "when": 1792169415833,
       "tag": "0016_respuesta_derivada_por_la_sena",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792595889610,
+      "tag": "0017_recordatorios_y_vencimientos",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793057731179,
+      "tag": "0018_respuesta_del_boton_del_recordatorio",
+      "breakpoints": true
     }
   ]
 }

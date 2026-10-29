@@ -62,6 +62,17 @@ const envSchema = z
         .optional(),
     ),
     /**
+     * SOLO desarrollo (8.1, H10): manda con plantilla todo aviso que la tenga, sin probar antes el
+     * mensaje libre. En la demo la dueña y la clienta son el mismo celular y el 131047 nunca se da solo.
+     */
+    WHATSAPP_PREFER_TEMPLATES: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
+    ),
+    /**
      * Número de avisos del servicio (8.2): de ahí salen los avisos a las dueñas. Es del servicio, no
      * de un negocio. Sin configurar, salen del número de cada negocio (la demo de la fase 0).
      */
@@ -101,6 +112,13 @@ const envSchema = z
         message: 'Es solo para desarrollo: en producción mandaría todo a un solo número',
       });
     }
+    if (env.WHATSAPP_PREFER_TEMPLATES) {
+      context.addIssue({
+        code: 'custom',
+        path: ['WHATSAPP_PREFER_TEMPLATES'],
+        message: 'Es solo para la prueba manual: en producción los avisos prueban primero el mensaje libre',
+      });
+    }
     for (const name of REQUIRED_IN_PRODUCTION) {
       if (!env[name]) {
         context.addIssue({ code: 'custom', path: [name], message: 'Obligatoria en producción' });
@@ -128,6 +146,8 @@ export interface Config {
   whatsapp: { appSecret: string; verifyToken: string; graphApiVersion: string } | null;
   /** Solo en desarrollo: todo envío de WhatsApp va a este número (sección 8.1). */
   whatsappTestRecipient: string | null;
+  /** Solo en desarrollo: los avisos salen directo con su plantilla (8.1, H10). */
+  preferTemplates: boolean;
   /** Null: los avisos a la dueña salen del número de cada negocio (fase 0, sección 8.2). */
   notificationsNumber: { phoneNumberId: string; accessToken: string } | null;
   /** Null: sin clave el worker no contesta conversaciones (sección 8.5). En producción es obligatoria. */
@@ -169,6 +189,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
           }
         : null,
     whatsappTestRecipient: data.WHATSAPP_TEST_RECIPIENT ?? null,
+    preferTemplates: data.WHATSAPP_PREFER_TEMPLATES,
     notificationsNumber:
       data.NOTIFICATIONS_PHONE_NUMBER_ID && data.NOTIFICATIONS_ACCESS_TOKEN
         ? { phoneNumberId: data.NOTIFICATIONS_PHONE_NUMBER_ID, accessToken: data.NOTIFICATIONS_ACCESS_TOKEN }

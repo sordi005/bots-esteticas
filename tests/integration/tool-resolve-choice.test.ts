@@ -321,6 +321,38 @@ describe('resolveChoice: un turno elegido o la confirmación de cancelarlo (4.6)
       tipo: 'desconocido',
     });
   });
+
+  it.each([
+    ['confirm', 'confirmar'],
+    ['reschedule', 'reprogramar'],
+    ['cancel', 'cancelar'],
+  ] as const)('un botón del recordatorio (%s) se resuelve con su turno y la intención (4.7)', async (action, accion) => {
+    const fixture = await createCatalogFixture(db, { settings: { depositRequirement: 'never' } });
+    const appointmentId = await bookFor(fixture);
+
+    expect(await resolve(fixture, choiceIds.reminder(appointmentId, action))).toEqual({
+      tipo: 'recordatorio',
+      accion,
+      turnoId: appointmentId,
+      servicioId: fixture.semi,
+      profesionalId: fixture.mica,
+      servicioNombre: 'Esmaltado semipermanente',
+      profesionalNombre: 'Mica',
+      texto: 'lunes 5/10 9:00',
+      estado: 'confirmado',
+      ocupaHorario: true,
+    });
+  });
+
+  it('el recordatorio de otra clienta o de otro negocio es desconocido', async () => {
+    const fixture = await createCatalogFixture(db);
+    const other = await createCatalogFixture(db);
+    const theirs = await bookFor(fixture, await otherCustomer(fixture));
+    const otherTenant = await bookFor(other, other.customerId);
+
+    expect(await resolve(fixture, choiceIds.reminder(theirs, 'confirm'))).toEqual({ tipo: 'desconocido' });
+    expect(await resolve(fixture, choiceIds.reminder(otherTenant, 'cancel'))).toEqual({ tipo: 'desconocido' });
+  });
 });
 
 describe('resolveChoice: un horario para reprogramar un turno (4.6, decisión 28)', () => {

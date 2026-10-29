@@ -10,7 +10,9 @@ import {
   type JobRunnerOptions,
 } from './modules/jobs/runner.js';
 import type { JobKind } from './modules/jobs/schema.js';
+import { reminderJobHandler } from './modules/notifications/appointment-reminders.js';
 import { notificationJobHandler, type NotificationSenderDependencies } from './modules/notifications/outbox.js';
+import { reservationExpiryJobHandler } from './modules/notifications/reservation-expiry.js';
 import type { WhatsAppClient } from './modules/whatsapp/client.js';
 
 export interface WorkerDependencies {
@@ -23,7 +25,10 @@ export interface WorkerDependencies {
    * Sin esto los avisos quedan pendientes: no se envían (6.7, 8.2). `notificationsNumber`: el número de
    * avisos del servicio; sin él, los avisos a la dueña salen del número de cada negocio (fase 0).
    */
-  notifications?: Pick<NotificationSenderDependencies, 'client' | 'credentialsKey' | 'notificationsNumber'>;
+  notifications?: Pick<
+    NotificationSenderDependencies,
+    'client' | 'credentialsKey' | 'notificationsNumber' | 'preferTemplates'
+  >;
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
     JobRunnerOptions,
@@ -38,6 +43,9 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
     // Los botones de la dueña y los recordatorios solo usan la base: dejan avisos para enviar (H9).
     process_owner_reply: ownerReplyJobHandler({ db, logger, now }),
     remind_deposit_receipt: depositReminderJobHandler({ db, logger, now }),
+    // Lo mismo los recordatorios del turno y el vencimiento de la reserva provisoria (H10).
+    send_appointment_reminder: reminderJobHandler({ db, logger, now }),
+    expire_reservation: reservationExpiryJobHandler({ db, logger, now }),
   };
 
   if (conversations) {
