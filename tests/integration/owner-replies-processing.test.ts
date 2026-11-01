@@ -160,7 +160,10 @@ describe('«Recibida» y «No llegó» (4.5)', () => {
 
     expect(await statusOf(t.appointmentId)).toBe('CONFIRMED');
     const acks = (await noticesAfter(t.tenantId)).filter((n) => n.kind === 'owner_reply_ack');
-    expect(noticeBody(acks.at(-1)?.message)).toContain('ya estaba confirmado');
+    // Sin depender del orden de las filas: los dos avisos tienen la misma hora.
+    expect(acks.map((ack) => noticeBody(ack.message))).toEqual(
+      expect.arrayContaining([expect.stringContaining('quedó confirmado'), expect.stringContaining('ya estaba confirmado')]),
+    );
     expect(await processedAt(second)).toEqual(NOW);
   });
 
