@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.15 · 29/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.16 · 01/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -289,8 +289,16 @@ Detalle del flujo con Mercado Pago (H11):
 - **[D]** Si el negocio cobra con Mercado Pago y no lo tiene conectado, o Mercado Pago no crea la preferencia, la herramienta no inventa nada: deriva sola con motivo "pago". El turno queda pendiente de seña y vence como cualquier otro.
 - **[S]** La preferencia se crea en modo binario (el pago queda aprobado o rechazado, nunca "pendiente") y sin medios en efectivo (Rapipago, Pago Fácil, cajeros): se acreditan en horas o días y el plazo de la seña es de 60 minutos. Un pago rechazado no cambia nada: la clienta puede volver a intentar con el mismo link hasta el vencimiento.
 - **[D]** Al confirmar, la clienta recibe el mismo texto fijo que con la transferencia ("¡Seña recibida! …", con su plantilla `sena_confirmada`). La dueña no recibe aviso: el cobro lo ve en su cuenta de Mercado Pago.
-- **[D]** Un pago aprobado que llega cuando el turno ya no está pendiente de seña (venció, se canceló, ya estaba confirmado por otro pago), o con un monto menor que la seña o en otra moneda, no cambia el turno. Se guarda el id del pago en la seña y la conversación se deriva con motivo "pago" y un resumen fijo ("Pagó la seña por Mercado Pago, pero el turno ya estaba vencido. Si corresponde, la devolución la hacés vos."). La clienta recibe un texto fijo: "Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá." Las devoluciones nunca son automáticas.
-- **[D]** Por si un webhook se pierde: antes de vencer una seña de Mercado Pago, la tarea de vencimiento busca en Mercado Pago un pago con su `external_reference`. Si hay uno aprobado, se procesa como si hubiera llegado el webhook, en vez de vencer el turno.
+- **[D]** Un pago aprobado que llega cuando el turno ya no está pendiente de seña (venció, se canceló, ya estaba confirmado por otro pago), o con un monto menor que la seña o en otra moneda, no cambia el turno. Se guarda el id del pago en la seña (si no tiene otro) y la conversación se deriva con motivo "pago" y un resumen fijo para la dueña. La clienta recibe un texto fijo. Los dos dependen del caso (propuesto en H11, decisión 43):
+
+  | Caso | Resumen para la dueña | Texto para la clienta |
+  |---|---|---|
+  | El turno venció o se canceló | "Pagó la seña por Mercado Pago, pero el turno ya estaba vencido (o cancelado). Si corresponde, la devolución la hacés vos." | "Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá." |
+  | Ya estaba confirmado por otro pago | "Pagó la seña dos veces por Mercado Pago: el turno ya estaba confirmado. Si corresponde, la devolución la hacés vos." | "Nos llegó otro pago de la seña, pero tu turno ya estaba confirmado. Una persona del equipo te escribe por acá." |
+  | Monto menor o en otra moneda | "Pagó por Mercado Pago $X, que no cubre la seña de $Y: el turno sigue pendiente de seña. Revisalo vos." (o "en otra moneda (USD)") | "Nos llegó tu pago, pero no coincide con la seña. Una persona del equipo te escribe por acá." |
+
+  La derivación y el texto salen una sola vez por seña: Mercado Pago avisa más de una vez del mismo pago, y un segundo pago tardío ya lo ve la persona que atiende. El texto no lleva plantilla: llega minutos después de que la clienta pagó con el link del chat, dentro de la ventana de 24 horas. Las devoluciones nunca son automáticas.
+- **[D]** Por si un webhook se pierde: antes de vencer una seña de Mercado Pago, la tarea de vencimiento busca en Mercado Pago un pago con su `external_reference`. Si hay uno aprobado, se procesa como si hubiera llegado el webhook, en vez de vencer el turno. **[S]** Si Mercado Pago no responde a la búsqueda, el turno vence igual: reintentar dejaría a la clienta sin el aviso de vencimiento, y si el pago existe su webhook llega después y se trata como un pago tardío. La búsqueda la hace solo la tarea: una reserva que vence una provisoria que pisa su horario (6.6) no busca nada.
 
 **Flujo con transferencia [D]:**
 
@@ -616,7 +624,8 @@ Un solo proceso de Node con módulos bien separados, y una base Postgres. **No**
 | `catalog` | Servicios, profesionales, horarios, excepciones, información del negocio | `tenants` |
 | `scheduling` | Disponibilidad (función pura), turnos, máquina de estados | `catalog` |
 | `customers` | Clientas, historial, consentimientos | `tenants`, `catalog` (profesional preferida) |
-| `payments` | Señas, Mercado Pago, verificación de transferencias | `scheduling` |
+| `payments` | Señas: el monto según la política, verificación de transferencias | `scheduling` |
+| `mercadopago` | Adaptador de Mercado Pago (H11): OAuth, preferencias, webhook con firma, procesar pagos, renovar tokens | `tenants`, `payments`, `scheduling`, `notifications` |
 | `whatsapp` | Adaptador de la API: recibir, enviar, plantillas, firma | — |
 | `conversation` | Agente de IA, herramientas, pausa por derivación, agrupado de mensajes | todos los de dominio |
 | `notifications` | Avisos a la dueña | `whatsapp` |
@@ -1178,6 +1187,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 40 | El webhook de Mercado Pago guarda programando una tarea con el id del pago como clave | Una tabla aparte de avisos de pago | La tabla de tareas ya garantiza una fila por clave: el aviso repetido no duplica nada y no hay otra tabla que mantener |
 | 41 | `state` de OAuth firmado, sin PKCE | Guardar cada intento en una tabla, o sumar PKCE | El `state` firmado identifica al negocio y vence solo; PKCE protege a clientes que no pueden guardar un secreto, y el nuestro lo guarda en el servidor |
 | 42 | Antes de vencer una seña de Mercado Pago se busca el pago | Confiar solo en el webhook | Un webhook perdido haría vencer el turno de una clienta que pagó; la búsqueda es un pedido por seña vencida |
+| 43 | Un texto por caso cuando un pago de Mercado Pago no se aplica | Un solo texto ("el turno ya se había liberado") | Ese texto es falso si el turno estaba confirmado por otro pago o si el monto no cubre la seña: el turno no se liberó |
 
 ---
 
