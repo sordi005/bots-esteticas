@@ -628,6 +628,7 @@ export type PaymentResult =
 export interface PaymentRefused {
   appointmentId: string;
   customerId: string;
+  depositAmountCents: number;
   reason: PaymentRefusal;
   status: AppointmentStatus;
 }
@@ -683,7 +684,13 @@ export async function applyMercadoPagoPayment(
     if (current.mercadopagoPaymentId === null) {
       await tx.update(deposits).set({ mercadopagoPaymentId: payment.id }).where(thisDeposit);
     }
-    await input.onRefused?.(tx, { appointmentId, customerId, reason, status: current.appointmentStatus });
+    await input.onRefused?.(tx, {
+      appointmentId,
+      customerId,
+      depositAmountCents: current.depositAmountCents,
+      reason,
+      status: current.appointmentStatus,
+    });
     return { ok: false, reason, appointmentId, customerId, status: current.appointmentStatus } as const;
   });
 }

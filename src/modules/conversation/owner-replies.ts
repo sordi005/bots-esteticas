@@ -18,7 +18,7 @@ import {
 } from '../notifications/texts.js';
 import type { OutgoingMessage } from '../whatsapp/outgoing.js';
 import { reviewDeposit } from '../scheduling/booking.js';
-import { recordHandoff } from './handoff.js';
+import { customerConversation, recordHandoff } from './handoff.js';
 import { conversations, handoffs } from './schema.js';
 
 /**
@@ -77,17 +77,6 @@ function enqueueAck(tx: Queryable, reply: Reply, message: OutgoingMessage, now: 
   });
 }
 
-/** La conversación de la clienta: existe si mandó el comprobante, pero no cuesta asegurarlo. */
-async function conversationOf(tx: Queryable, tenantId: string, customerId: string): Promise<string> {
-  await tx.insert(conversations).values({ tenantId, customerId }).onConflictDoNothing();
-  const [conversation] = await tx
-    .select({ id: conversations.id })
-    .from(conversations)
-    .where(and(eq(conversations.tenantId, tenantId), eq(conversations.customerId, customerId)));
-  if (!conversation) throw new Error('No se encontró la conversación de la clienta');
-  return conversation.id;
-}
-
 async function processDepositReply(deps: OwnerReplyDependencies, reply: Reply, now: Date): Promise<OwnerReplyResult> {
   const { db } = deps;
   const { tenantId } = reply;
@@ -117,7 +106,7 @@ async function processDepositReply(deps: OwnerReplyDependencies, reply: Reply, n
         // El asistente no discute un pago: la conversación pasa a una persona, sin otro aviso (4.5).
         await recordHandoff(tx, {
           tenantId,
-          conversationId: await conversationOf(tx, tenantId, review.customerId),
+          conversationId: await customerConversation(tx, tenantId, review.customerId),
           reason: 'payment_issue',
           summary: DEPOSIT_REJECTED_HANDOFF_SUMMARY,
           now,

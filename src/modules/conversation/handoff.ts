@@ -115,6 +115,17 @@ export interface HandOffResult {
   when: string;
 }
 
+/** La conversación de la clienta, para derivarla desde una tarea: casi siempre existe, pero no cuesta asegurarlo. */
+export async function customerConversation(tx: Queryable, tenantId: string, customerId: string): Promise<string> {
+  await tx.insert(conversations).values({ tenantId, customerId }).onConflictDoNothing();
+  const [conversation] = await tx
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(and(eq(conversations.tenantId, tenantId), eq(conversations.customerId, customerId)));
+  if (!conversation) throw new Error('No se encontró la conversación de la clienta');
+  return conversation.id;
+}
+
 export async function handOff(db: NodePgDatabase, input: HandOffInput): Promise<HandOffResult> {
   // Antes de la transacción: si no se puede calcular, no queda una derivación hecha de la que el
   // modelo no se entera (reintentaría y quedaría repetida).

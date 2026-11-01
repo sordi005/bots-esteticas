@@ -1,11 +1,21 @@
+import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+import { customerConversation, recordHandoff } from '../conversation/handoff.js';
 import type { JobHandler } from '../jobs/runner.js';
 import { loadNoticeAppointment } from '../notifications/notice-data.js';
 import { enqueueNotification } from '../notifications/outbox.js';
-import { customerDepositConfirmed, customerDepositConfirmedTemplate } from '../notifications/texts.js';
-import { applyMercadoPagoPayment } from '../scheduling/booking.js';
+import { notifications } from '../notifications/schema.js';
+import {
+  customerDepositConfirmed,
+  customerDepositConfirmedTemplate,
+  customerPaymentNotApplied,
+  paymentNotAppliedSummary,
+  type UnappliedPayment,
+} from '../notifications/texts.js';
+import type { Queryable } from '../../shared/db.js';
+import { applyMercadoPagoPayment, type PaymentRefused } from '../scheduling/booking.js';
 import type { MercadoPagoClient, MercadoPagoPayment } from './client.js';
 import { loadMercadoPagoCredential } from './connection.js';
 
@@ -14,6 +24,10 @@ import { loadMercadoPagoCredential } from './connection.js';
  * como clave. Consulta el pago a la API con el token del negocio (el aviso no se cree) y verifica que
  * la seña sea de ese negocio, el estado, el monto y la moneda. La seña aprobada de un turno pendiente
  * lo confirma y la clienta recibe el mismo texto que con la transferencia; la dueña no recibe aviso.
+ *
+ * Un pago aprobado que no se puede aplicar (el turno ya no espera la seña, o el monto no la cubre) no
+ * cambia el turno: la conversación se deriva con motivo "pago" y la clienta recibe un texto fijo, una
+ * sola vez por seña. Las devoluciones nunca son automáticas.
  */
 export interface PaymentProcessingDependencies {
   db: NodePgDatabase;
@@ -35,6 +49,56 @@ export type PaymentProcessingResult =
   | 'not_applied';
 
 const depositReference = z.uuid();
+
+function unappliedPayment(refused: PaymentRefused, payment: MercadoPagoPayment): UnappliedPayment {
+  if (refused.reason === 'amount_mismatch') {
+    return { kind: 'amount_mismatch', paidCents: payment.amountCents, currency: payment.currency, depositCents: refused.depositAmountCents };
+  }
+  switch (refused.status) {
+    case 'EXPIRED':
+      return { kind: 'released', status: 'vencido' };
+    case 'CANCELLED_BY_CUSTOMER':
+    case 'CANCELLED_BY_BUSINESS':
+    case 'DEPOSIT_REJECTED':
+      return { kind: 'released', status: 'cancelado' };
+    default:
+      return { kind: 'already_confirmed' };
+  }
+}
+
+/** Deriva y le avisa a la clienta, una sola vez por seña: Mercado Pago repite sus avisos. */
+async function deriveUnappliedPayment(
+  tx: Queryable,
+  input: { tenantId: string; depositId: string; refused: PaymentRefused; payment: MercadoPagoPayment; now: Date },
+): Promise<void> {
+  const { tenantId, depositId, refused, payment, now } = input;
+  const [already] = await tx
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(
+      and(eq(notifications.tenantId, tenantId), eq(notifications.depositId, depositId), eq(notifications.kind, 'payment_not_applied')),
+    );
+  if (already) return;
+
+  const unapplied = unappliedPayment(refused, payment);
+  await recordHandoff(tx, {
+    tenantId,
+    conversationId: await customerConversation(tx, tenantId, refused.customerId),
+    reason: 'payment_issue',
+    summary: paymentNotAppliedSummary(unapplied),
+    now,
+  });
+  await enqueueNotification(tx, {
+    tenantId,
+    recipient: 'customer',
+    kind: 'payment_not_applied',
+    customerId: refused.customerId,
+    appointmentId: refused.appointmentId,
+    depositId,
+    message: customerPaymentNotApplied(unapplied),
+    now,
+  });
+}
 
 /** Aplica un pago ya consultado a la API. Lo usan el webhook y la búsqueda antes de vencer (D9). */
 export async function applyApprovedPayment(
@@ -66,6 +130,7 @@ export async function applyApprovedPayment(
         now,
       });
     },
+    onRefused: (tx, refused) => deriveUnappliedPayment(tx, { tenantId, depositId: depositId.data, refused, payment, now }),
   });
 
   if (result.ok) return 'confirmed';

@@ -5,7 +5,8 @@ import type { MercadoPagoPayment } from '../../src/modules/mercadopago/client.js
 import { processMercadoPagoPayment } from '../../src/modules/mercadopago/payment-processing.js';
 import { notifications } from '../../src/modules/notifications/schema.js';
 import { deposits } from '../../src/modules/payments/schema.js';
-import { bookAppointment } from '../../src/modules/scheduling/booking.js';
+import { handoffs } from '../../src/modules/conversation/schema.js';
+import { bookAppointment, changeAppointmentStatus, expireReservation } from '../../src/modules/scheduling/booking.js';
 import { appointmentEvents, appointments } from '../../src/modules/scheduling/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { createLogger } from '../../src/shared/logger.js';
@@ -153,5 +154,110 @@ describe('processMercadoPagoPayment: la seña aprobada (D7)', () => {
     const { fixture } = await bookedWithMercadoPago();
 
     await expect(process(fixture, [], '999').result).rejects.toThrow();
+  });
+});
+
+describe('processMercadoPagoPayment: un pago que no se puede aplicar (D8)', () => {
+  const handoffsOf = (tenantId: string) => db.select().from(handoffs).where(eq(handoffs.tenantId, tenantId));
+  const customerNotices = async (tenantId: string) =>
+    (await noticesOf(tenantId)).filter((notice) => notice.recipient === 'customer');
+
+  async function expectDerived(tenantId: string, summary: string | RegExp, customerText: string) {
+    expect(await handoffsOf(tenantId)).toMatchObject([{ reason: 'payment_issue', status: 'open', summary }]);
+    const notices = await customerNotices(tenantId);
+    expect(notices.map((notice) => notice.kind)).toEqual(['payment_not_applied']);
+    expect(noticeBody(notices[0]?.message)).toBe(customerText);
+  }
+
+  it('con el turno vencido no lo toca: guarda el pago en la seña y deriva con «pago»', async () => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+    await expireReservation(db, { tenantId: fixture.tenantId, appointmentId, now: at('2026-10-04', '10:00') });
+    const payment = approved(deposit.id, deposit.amountCents);
+
+    expect(await process(fixture, [payment]).result).toBe('not_applied');
+
+    expect(await statusOf(appointmentId)).toBe('EXPIRED');
+    expect(single(await db.select().from(deposits).where(eq(deposits.id, deposit.id))).mercadopagoPaymentId).toBe(payment.id);
+    await expectDerived(
+      fixture.tenantId,
+      'Pagó la seña por Mercado Pago, pero el turno ya estaba vencido. Si corresponde, la devolución la hacés vos.',
+      'Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá.',
+    );
+    // La dueña recibe el aviso de la derivación, con el resumen.
+    expect((await noticesOf(fixture.tenantId)).some((notice) => notice.recipient === 'owner' && notice.kind === 'handoff')).toBe(true);
+  });
+
+  it('con el turno cancelado, lo mismo', async () => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+    await changeAppointmentStatus(db, { tenantId: fixture.tenantId, appointmentId, to: 'CANCELLED_BY_CUSTOMER', actor: 'assistant', now: BOOKED_AT });
+
+    expect(await process(fixture, [approved(deposit.id, deposit.amountCents)]).result).toBe('not_applied');
+
+    expect(await statusOf(appointmentId)).toBe('CANCELLED_BY_CUSTOMER');
+    await expectDerived(
+      fixture.tenantId,
+      'Pagó la seña por Mercado Pago, pero el turno ya estaba cancelado. Si corresponde, la devolución la hacés vos.',
+      'Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá.',
+    );
+  });
+
+  it('con el turno ya confirmado por otro pago, no lo toca y deriva', async () => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+    const first = approved(deposit.id, deposit.amountCents);
+    await process(fixture, [first]).result;
+
+    expect(await process(fixture, [approved(deposit.id, deposit.amountCents)]).result).toBe('not_applied');
+
+    expect(await statusOf(appointmentId)).toBe('CONFIRMED');
+    expect(single(await db.select().from(deposits).where(eq(deposits.id, deposit.id))).mercadopagoPaymentId).toBe(first.id);
+    expect(await handoffsOf(fixture.tenantId)).toMatchObject([
+      {
+        reason: 'payment_issue',
+        summary: 'Pagó la seña dos veces por Mercado Pago: el turno ya estaba confirmado. Si corresponde, la devolución la hacés vos.',
+      },
+    ]);
+    const notices = await customerNotices(fixture.tenantId);
+    expect(notices.map((notice) => notice.kind)).toEqual(['deposit_confirmed', 'payment_not_applied']);
+    expect(noticeBody(notices[1]?.message)).toBe(
+      'Nos llegó otro pago de la seña, pero tu turno ya estaba confirmado. Una persona del equipo te escribe por acá.',
+    );
+  });
+
+  it.each([
+    ['un monto menor que la seña', { amountCents: 100_000 }, /^Pagó por Mercado Pago \$1\.000, que no cubre la seña de \$5\.400: el turno sigue pendiente de seña\. Revisalo vos\.$/],
+    ['otra moneda', { currency: 'USD' }, /^Pagó por Mercado Pago en otra moneda \(USD\): el turno sigue pendiente de seña\. Revisalo vos\.$/],
+  ])('con %s, el turno sigue pendiente y deriva', async (_case, overrides, summary) => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+
+    expect(await process(fixture, [approved(deposit.id, deposit.amountCents, overrides)]).result).toBe('not_applied');
+
+    expect(await statusOf(appointmentId)).toBe('PENDING_DEPOSIT');
+    await expectDerived(
+      fixture.tenantId,
+      summary,
+      'Nos llegó tu pago, pero no coincide con la seña. Una persona del equipo te escribe por acá.',
+    );
+  });
+
+  it('el mismo pago otra vez no deriva ni avisa de nuevo', async () => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+    await expireReservation(db, { tenantId: fixture.tenantId, appointmentId, now: at('2026-10-04', '10:00') });
+    const payments = [approved(deposit.id, deposit.amountCents)];
+    await process(fixture, payments).result;
+
+    expect(await process(fixture, payments).result).toBe('already_processed');
+
+    expect(await handoffsOf(fixture.tenantId)).toHaveLength(1);
+    expect(await customerNotices(fixture.tenantId)).toHaveLength(1);
+  });
+
+  it('otro pago tardío de la misma seña tampoco: la clienta recibe el texto una sola vez por seña', async () => {
+    const { fixture, appointmentId, deposit } = await bookedWithMercadoPago();
+    await expireReservation(db, { tenantId: fixture.tenantId, appointmentId, now: at('2026-10-04', '10:00') });
+    await process(fixture, [approved(deposit.id, deposit.amountCents)]).result;
+
+    expect(await process(fixture, [approved(deposit.id, deposit.amountCents)]).result).toBe('not_applied');
+
+    expect(await customerNotices(fixture.tenantId)).toHaveLength(1);
   });
 });

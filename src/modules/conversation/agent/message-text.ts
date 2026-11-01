@@ -26,6 +26,9 @@ export const SYSTEM_NOTICE_LABELS = {
   appointment_short_reminder: '[Aviso del sistema, no lo escribiste vos: el recordatorio del turno de hoy]',
   reservation_expired:
     '[Aviso del sistema, no lo escribiste vos: la reserva venció porque no llegó la seña a tiempo; el horario quedó libre]',
+  // H11 (4.5): un pago de Mercado Pago que no se pudo aplicar al turno; lo atiende una persona.
+  payment_not_applied:
+    '[Aviso del sistema, no lo escribiste vos: llegó un pago de Mercado Pago que no se pudo aplicar al turno; la conversación pasó a una persona del equipo]',
 } as const;
 
 export type SystemNoticeKind = keyof typeof SYSTEM_NOTICE_LABELS;
