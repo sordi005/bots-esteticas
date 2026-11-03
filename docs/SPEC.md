@@ -913,10 +913,12 @@ Detalle (H9):
   - Requisitos (revisados el 29/10/2026 en la documentación oficial): una aplicación del servicio en "Tus integraciones" de Mercado Pago, con su `client_id` y `client_secret` y la URL de redirección registrada (tiene que ser fija). Para cobrar en la cuenta del negocio sin comisión no hace falta ningún programa de integradores ni aprobación. El código de autorización vale 10 minutos y una sola vez; el token de acceso, 180 días; el de renovación se puede reusar.
   - **[D]** En desarrollo, `pnpm mercadopago:connect <negocio>` imprime el link de autorización (desde H15, el panel). El link lleva un `state` firmado por el servidor con el negocio y un vencimiento de 15 minutos: así la vuelta sabe de qué negocio es sin guardar nada, y nadie puede conectar su cuenta a otro negocio. Sin PKCE: el secreto de la aplicación vive en el servidor.
   - **[D]** La vuelta (`/mercadopago/oauth/callback`) verifica el `state`, canjea el código por los tokens y los guarda cifrados con su vencimiento (`tenant_credentials`), y le muestra a la dueña una página que dice que quedó conectado.
-  - **[S]** Las pruebas usan cuentas de prueba de Mercado Pago (vendedor y comprador) y piden los tokens con `test_token: true` (`MERCADOPAGO_TEST_TOKEN=true`, solo en desarrollo: en producción el servidor no arranca con esa variable).
+  - **[S]** Las pruebas usan cuentas de prueba de Mercado Pago, todas creadas desde la aplicación del servicio: una **integradora** («Marketplace» en el panel), que es la dueña de una aplicación de prueba aparte, una **vendedora** que la autoriza por OAuth y una **compradora** que paga. Así lo pide el modelo marketplace, y lo es: una preferencia creada con el token OAuth de un negocio queda como `marketplace` de la aplicación. Con la aplicación de una cuenta real y vendedora y compradora de prueba, el checkout falla al pagar (prueba manual de H11). En desarrollo el `.env` lleva la aplicación de prueba; en producción, la real: mismas variables, otro entorno.
+  - **[S]** Los tokens se piden sin `test_token`: los de una vendedora de prueba ya operan en el mundo de prueba, y los pagos hechos con credenciales de prueba no mandan avisos (documentación de notificaciones de Checkout Pro). `MERCADOPAGO_TEST_TOKEN=true` queda solo para desarrollo: en producción el servidor no arranca con esa variable.
+  - La aplicación necesita, en «Configuración avanzada», la URL de redirección, PKCE marcado en «No» (sin elegir, Mercado Pago muestra «La aplicación no está preparada para conectarse») y los permisos read, offline access y write; y en «Producto integrado», Checkout Pro con la API de Preferencias.
 - Cobros con preferencias de **Checkout Pro**: `external_reference` = id de la seña, `notification_url` = nuestro webhook con el id del negocio, vencimiento de la preferencia igual al de la reserva provisoria.
 - **[D]** Sin el SDK de Mercado Pago: los pocos pedidos que hacen falta (token, preferencia, pago, búsqueda de pagos) van con `fetch` y sus respuestas se validan con Zod, como con Meta.
-- **[D]** Al recibir un webhook, se valida la firma (`x-signature`: HMAC-SHA256 de `id:{data.id};request-id:{x-request-id};ts:{ts};` con la clave secreta de la aplicación) y se **consulta el pago a la API** antes de confirmar nada. Solo se procesan los avisos de tipo `payment`; el resto se contesta 200 y se ignora.
+- **[D]** Al recibir un webhook, se valida la firma (`x-signature`: HMAC-SHA256 de `id:{data.id};request-id:{x-request-id};ts:{ts};` con la clave secreta de la aplicación) y se **consulta el pago a la API** antes de confirmar nada. Solo se procesan los avisos de tipo `payment`; el resto se contesta 200 y se ignora, **antes** de validar la firma: no disparan nada. Comprobado en la prueba manual de H11: los avisos a la `notification_url` de una preferencia creada por OAuth llegan firmados con la clave de Webhooks de la aplicación. Mercado Pago manda además el mismo pago en el formato viejo (IPN: `?id=…&topic=payment`, también `merchant_order`), sin `data.id` y con una firma que no valida: se ignora con 200, porque con 401 lo reintenta cada 15 minutos.
 - **[D]** El webhook guarda el aviso programando la tarea "procesar un pago de Mercado Pago" con el id del pago como clave (6.7): la fila de la tarea es el registro, y un aviso repetido es la misma fila. La tarea consulta el pago con el token del negocio y verifica que la seña sea de ese negocio, el estado, el monto y la moneda (4.5).
 - **[D]** Los tokens se guardan cifrados y se renuevan antes de vencer: la tarea "renovar el token de Mercado Pago" corre 30 días antes del vencimiento. Si la renovación falla en todos los intentos, queda un error en el log (la alerta a Yordi llega en H14, 10.3).
 
@@ -1078,7 +1080,7 @@ Se hace en una reunión de 30 a 45 minutos. Las respuestas cargan la configuraci
 - [ ] Conectar el número a la Cloud API con coexistencia
 - [ ] Cargar un medio de pago en la cuenta de Meta del negocio
 - [ ] Crear y aprobar las plantillas
-- [ ] Conectar Mercado Pago (OAuth) y hacer un cobro de prueba
+- [ ] Conectar Mercado Pago (OAuth, `pnpm mercadopago:connect`) con la aplicación real del servicio y hacer un cobro de prueba (8.3)
 - [ ] Compartir el calendario de cada profesional con la cuenta de servicio
 - [ ] Cargar catálogo, horarios, información y políticas
 - [ ] Registrar el número de la dueña para recibir avisos
@@ -1209,7 +1211,6 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | Pregunta | Antes de |
 |---|---|
 | Disponibilidad de coexistencia para números de Argentina | Vender |
-| Si Mercado Pago firma (`x-signature`) los avisos que manda a la `notification_url` de una preferencia creada con el token OAuth de un negocio, y con qué clave. La documentación solo habla de la clave de "Webhooks" de la aplicación. Se verifica con una prueba en sandbox antes de escribir el webhook; si no llegan firmados, se propone el cambio a 8.3 | H11 |
 | Calendario compartido con cuenta de servicio usando Gmail personal | H12 |
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
