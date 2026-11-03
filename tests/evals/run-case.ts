@@ -1,14 +1,20 @@
+import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { createAgentResponder } from '../../src/modules/conversation/agent/agent-responder.js';
 import type { LlmClient } from '../../src/modules/conversation/agent/llm-client.js';
 import { agentRuns } from '../../src/modules/conversation/schema.js';
 import { resolveChoice } from '../../src/modules/conversation/tools/choices.js';
+import type { ToolContext } from '../../src/modules/conversation/tools/tool.js';
+import type { MercadoPagoClient } from '../../src/modules/mercadopago/client.js';
+import { saveCredential } from '../../src/modules/tenants/credentials.js';
+import { tenantCredentials, tenantSettings } from '../../src/modules/tenants/schema.js';
 import type { FreeFormMessage } from '../../src/modules/whatsapp/outgoing.js';
 import { createLogger } from '../../src/shared/logger.js';
 import { EVAL_NOW, EVAL_TIME_ZONE } from './clock.js';
 import type { EvalCase, EvalOption, EvalResult } from './evaluate.js';
 import { parseLocalStart } from './local-time.js';
+import { EVAL_PAYMENT_LINK } from './payment-link.js';
 import { prepareCase } from './prepare.js';
 import { deleteAppointmentsOf, readEvalState } from './state.js';
 
@@ -31,6 +37,45 @@ export { EvalPreparationError } from './prepare.js';
  * el error sea "se canceló por tiempo" y no el genérico del test.
  */
 export const EVAL_CASE_TIMEOUT_MS = 55_000;
+
+
+const unused = () => Promise.reject(new Error('Las evaluaciones no usan este pedido a Mercado Pago'));
+
+/** Mercado Pago sin red: crea siempre la misma preferencia. */
+const evalMercadoPagoClient: MercadoPagoClient = {
+  exchangeCode: unused,
+  refreshToken: unused,
+  createPreference: () => Promise.resolve({ preferenceId: 'eval-sena', paymentUrl: EVAL_PAYMENT_LINK }),
+  getPayment: unused,
+  searchPayments: unused,
+};
+
+/**
+ * Pone al negocio a cobrar la seña con Mercado Pago, con la cuenta conectada. Devuelve con qué crear el link y
+ * cómo dejarlo como estaba: los casos corren de a uno y comparten el negocio.
+ */
+async function useMercadoPago(db: NodePgDatabase, tenantId: string) {
+  const credentialsKey = randomBytes(32);
+  await db.update(tenantSettings).set({ depositPaymentOptions: 'mercadopago' }).where(eq(tenantSettings.tenantId, tenantId));
+  await saveCredential(db, credentialsKey, {
+    tenantId,
+    kind: 'mercadopago',
+    value: { accessToken: 'APP_USR-evaluaciones', refreshToken: 'TG-evaluaciones', userId: '1', liveMode: false },
+  });
+  const tools: NonNullable<ToolContext['mercadoPago']> = {
+    client: evalMercadoPagoClient,
+    credentialsKey,
+    publicBaseUrl: 'https://evaluaciones.example',
+    logger: createLogger({ logLevel: 'silent' }),
+  };
+  const restore = async () => {
+    await db.update(tenantSettings).set({ depositPaymentOptions: 'transfer' }).where(eq(tenantSettings.tenantId, tenantId));
+    await db
+      .delete(tenantCredentials)
+      .where(and(eq(tenantCredentials.tenantId, tenantId), eq(tenantCredentials.kind, 'mercadopago')));
+  };
+  return { tools, restore };
+}
 
 export interface RunCaseDependencies {
   db: NodePgDatabase;
@@ -56,10 +101,26 @@ function optionsOf(message: FreeFormMessage): Omit<EvalOption, 'resuelta'>[] {
 }
 
 export async function runEvalCase(deps: RunCaseDependencies, evalCase: EvalCase): Promise<EvalResult> {
-  const { db, tenantId, llm } = deps;
+  const { db, tenantId } = deps;
   const now = evalCase.ahora ? parseLocalStart(evalCase.ahora, EVAL_TIME_ZONE) : (deps.now ?? EVAL_NOW);
   const signal = deps.signal ?? AbortSignal.timeout(EVAL_CASE_TIMEOUT_MS);
 
+  // Antes de preparar: los turnos del caso guardan el medio de la seña al reservar.
+  const mercadoPago = evalCase.negocio?.sena === 'mercadopago' ? await useMercadoPago(db, tenantId) : null;
+  try {
+    return await runPrepared(deps, evalCase, { now, signal, mercadoPago: mercadoPago?.tools });
+  } finally {
+    await mercadoPago?.restore();
+  }
+}
+
+async function runPrepared(
+  deps: RunCaseDependencies,
+  evalCase: EvalCase,
+  setup: { now: Date; signal: AbortSignal; mercadoPago: ToolContext['mercadoPago'] },
+): Promise<EvalResult> {
+  const { db, tenantId, llm } = deps;
+  const { now, signal } = setup;
   const prepared = await prepareCase({ db, tenantId }, evalCase, now);
   const { customerId, conversationId, received } = prepared;
 
@@ -69,6 +130,7 @@ export async function runEvalCase(deps: RunCaseDependencies, evalCase: EvalCase)
       llm,
       logger: createLogger({ logLevel: 'silent' }),
       now: () => now,
+      ...(setup.mercadoPago ? { mercadoPago: setup.mercadoPago } : {}),
     });
     const message = await respond({ tenantId, conversationId, customerId, messages: received }, { signal });
 

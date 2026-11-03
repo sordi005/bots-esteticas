@@ -1,0 +1,50 @@
+{
+  "collector_id": 202809963,
+  "items": [
+    {
+      "title": "Dummy Item",
+      "description": "Multicolor Item",
+      "currency_id": "ARS",
+      "quantity": 1,
+      "unit_price": "24.50"
+    }
+  ],
+  "payer": {
+    "email": "test@testuser.com",
+    "phone": {},
+    "identification": {
+      "type": "DNI"
+    },
+    "address": {}
+  },
+  "back_urls": {
+    "success": "https://test.com/success",
+    "pending": "https://test.com/pending",
+    "failure": "https://test.com/failure"
+  },
+  "auto_return": "approved",
+  "payment_methods": {
+    "excluded_payment_methods": [
+      {}
+    ],
+    "excluded_payment_types": [
+      {}
+    ]
+  },
+  "client_id": "6295877106812064",
+  "marketplace": "MP-MKT-6295877106812064",
+  "marketplace_fee": 0,
+  "shipments": {
+    "receiver_address": {}
+  },
+  "notification_url": "https://notificationurl.com",
+  "statement_descriptor": "MERCADOPAGO",
+  "expiration_date_from": "2022-11-17T09:37:52.000-04:00",
+  "expiration_date_to": "2022-11-17T10:37:52.000-05:00",
+  "date_created": "2022-11-17T10:37:52.000-05:00",
+  "id": "202809963-920c288b-4ebb-40be-966f-700250fa5370",
+  "init_point": "https://www.mercadopago.com/mla/checkout/start?pref_id=202809963-920c288b-4ebb-40be-966f-700250fa5370",
+  "preference_expired": true,
+  "sandbox_init_point": "https://sandbox.mercadopago.com/mla/checkout/pay?pref_id=202809963-920c288b-4ebb-40be-966f-700250fa5370",
+  "metadata": {}
+}

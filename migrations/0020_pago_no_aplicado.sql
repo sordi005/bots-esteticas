@@ -1,0 +1,3 @@
+ALTER TYPE "public"."notification_kind" ADD VALUE 'payment_not_applied';--> statement-breakpoint
+ALTER TABLE "notifications" DROP CONSTRAINT "notifications_recipient_matches_kind";--> statement-breakpoint
+ALTER TABLE "notifications" ADD CONSTRAINT "notifications_recipient_matches_kind" CHECK (("notifications"."recipient" = 'customer') = ("notifications"."kind"::text in ('deposit_confirmed', 'deposit_rejected', 'appointment_reminder', 'appointment_short_reminder', 'reservation_expired', 'payment_not_applied')));

@@ -1,4 +1,4 @@
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { LlmRequest } from '../../src/modules/conversation/agent/llm-client.js';
 import { CONVERSATION_STARTED_BY_NOTICE, SYSTEM_NOTICE_LABELS } from '../../src/modules/conversation/agent/message-text.js';
@@ -6,11 +6,13 @@ import { agentRuns, conversations, messages } from '../../src/modules/conversati
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
 import { consultationTools } from '../../src/modules/conversation/tools/index.js';
 import { runTool, type ToolContext } from '../../src/modules/conversation/tools/tool.js';
+import { tenantCredentials, tenantSettings } from '../../src/modules/tenants/schema.js';
 import { DEMO_TENANT_ID, seedEsteticaEjemplo } from '../../src/seeds/estetica-ejemplo.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { evalCases } from '../evals/cases.js';
 import { EVAL_NOW, EVAL_TIME_ZONE } from '../evals/clock.js';
 import { evaluateCase, type EvalCase } from '../evals/evaluate.js';
+import { EVAL_PAYMENT_LINK } from '../evals/payment-link.js';
 import { runEvalCase } from '../evals/run-case.js';
 import { callTools, finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.js';
 import { testDatabaseUrl } from './support/database.js';
@@ -450,5 +452,56 @@ describe('runEvalCase: recordatorios y vencimientos (H10)', () => {
     const texts = requestAt(requests, 0).messages.map((message) => ('text' in message ? message.text : ''));
     expect(texts.some((text) => text.startsWith(SYSTEM_NOTICE_LABELS.reservation_expired))).toBe(true);
     expect(evaluated.estado.turnos).toMatchObject([{ clave: 'martes', estado: 'EXPIRED', asistenciaConfirmada: false }]);
+  });
+});
+
+describe('runEvalCase: un negocio que cobra la seña con Mercado Pago (H11)', () => {
+  const tuesday = { clave: 'martes', servicio: 'Esmaltado semipermanente', profesional: 'Mica', inicio: '2026-10-13 17:00' };
+  const evalCase: EvalCase = {
+    nombre: 'sena_mercadopago_falso',
+    negocio: { sena: 'mercadopago' },
+    preparar: { nombre: 'Caro Pérez', turnos: [tuesday] },
+    mensajes: ['me pasás el link para pagar la seña?'],
+    espera: {},
+  };
+
+  const depositMethod = async () =>
+    single(
+      await db
+        .select({ method: tenantSettings.depositPaymentOptions })
+        .from(tenantSettings)
+        .where(eq(tenantSettings.tenantId, DEMO_TENANT_ID)),
+    ).method;
+
+  it('durante el caso el negocio cobra con Mercado Pago: el prompt y el link de las herramientas son los de Mercado Pago', async () => {
+    let turnoId = '';
+    const { result, requests } = run(evalCase, [
+      callTools([{ name: 'listar_turnos_de_la_clienta', input: {} }]),
+      (request) => {
+        const [listed] = lastToolOutputs(request);
+        turnoId = String((listed?.turnos as { turnoId: string }[] | undefined)?.[0]?.turnoId);
+        return callTools([{ name: 'generar_pago_sena', input: { turno_id: turnoId } }]);
+      },
+      (request) => {
+        const [payment] = lastToolOutputs(request);
+        return finalAnswer(String((payment?.pago as { texto?: string } | undefined)?.texto));
+      },
+    ]);
+    const evaluated = await result;
+
+    expect(requestAt(requests, 0).system).toMatch(/pasale el link de «pago» tal cual/);
+    expect(evaluated.texto).toContain(EVAL_PAYMENT_LINK);
+    expect(evaluated.herramientas).toEqual(['listar_turnos_de_la_clienta', 'generar_pago_sena']);
+  });
+
+  it('al terminar, el negocio vuelve a cobrar por transferencia y sin cuenta de Mercado Pago', async () => {
+    await run(evalCase, [finalAnswer('Te lo paso.')]).result;
+
+    expect(await depositMethod()).toBe('transfer');
+    const mercadoPagoCredentials = await db
+      .select({ total: count() })
+      .from(tenantCredentials)
+      .where(and(eq(tenantCredentials.tenantId, DEMO_TENANT_ID), eq(tenantCredentials.kind, 'mercadopago')));
+    expect(mercadoPagoCredentials[0]?.total).toBe(0);
   });
 });

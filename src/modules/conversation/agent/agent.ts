@@ -63,10 +63,10 @@ export const UNCONFIRMED_CHANGE_NOTICE =
 
 /**
  * Lo que se le dice al modelo cuando una herramienta devolvió los datos para pagar la seña y su respuesta no
- * los trae (4.5): sin el alias, la clienta no puede pagar. Se le hace notar una sola vez.
+ * los trae (4.5): sin el alias o el link, la clienta no puede pagar. Se le hace notar una sola vez.
  */
 export const PAYMENT_DETAILS_NOTICE =
-  'Una herramienta devolvió los datos para pagar la seña («pago»), pero tu respuesta no los trae: sin el alias o el CBU la clienta no puede pagar. Volvé a escribir la respuesta con los datos de «pago» tal cual (sirve «pago.texto») y pedile la foto del comprobante.';
+  'Una herramienta devolvió los datos para pagar la seña («pago»), pero tu respuesta no los trae: sin el alias o el CBU, o el link de Mercado Pago, la clienta no puede pagar. Volvé a escribir la respuesta con los datos de «pago» tal cual (sirve «pago.texto») y seguí lo que dice el «mensaje» de la herramienta.';
 
 /**
  * El horario que la clienta eligió en esta vuelta con un botón o una lista y que sigue libre (5.3, 6.4): elegirlo ya

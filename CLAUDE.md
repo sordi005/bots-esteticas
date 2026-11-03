@@ -62,6 +62,7 @@ pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
 pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
+pnpm mercadopago:connect <negocio>  # link para que la dueña conecte Mercado Pago (vence en 15 min; necesita MERCADOPAGO_* y el túnel)
 ```
 
 Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba. Como la dueña y la clienta son el mismo celular, el 131047 no se da solo: para probar los avisos con plantilla, `WHATSAPP_PREFER_TEMPLATES=true` (solo desarrollo).
@@ -84,7 +85,7 @@ En producción, con el código compilado: `node dist/migrate.js` y, para la demo
 src/
   modules/
     tenants/  catalog/  scheduling/  customers/  payments/
-    whatsapp/  conversation/  notifications/  calendar/
+    whatsapp/  mercadopago/  conversation/  notifications/  calendar/
     jobs/  reporting/  admin/
     # cada módulo declara sus tablas en su schema.ts
   shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
@@ -137,6 +138,14 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
 - Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
 - Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
+
+## Mercado Pago
+
+- Sin SDK: `fetch` y Zod en `modules/mercadopago/client.ts` (decisión 39). Los formatos, de la documentación oficial; los ejemplos, en `tests/contracts/mercadopago/`.
+- Una sola aplicación del servicio (`MERCADOPAGO_*` y `PUBLIC_BASE_URL`, las cuatro juntas). Cada negocio conecta su cuenta por OAuth: los tokens viven cifrados en `tenant_credentials` (tipo `mercadopago`) y la tarea `refresh_mercadopago_token` los renueva 30 días antes de vencer.
+- El webhook (`/webhooks/mercadopago/:tenantId`) solo valida `x-signature`, programa `process_mercadopago_payment` con el id del pago como clave y responde 200. La tarea consulta el pago a la API: el cuerpo del aviso no se cree.
+- El link de la seña lo crea `ensurePaymentLink` después de reservar, una vez por seña. Confirmar o no un pago: solo con `applyMercadoPagoPayment` de `booking.ts`.
+- `deposits.mercadopago_payment_id` es único en toda la base, como en Mercado Pago: en los tests, ids de pago aleatorios.
 
 ## Tareas programadas
 

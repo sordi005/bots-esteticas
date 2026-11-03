@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.14 · 21/10/2026 · Autor: Yordi
+> **Estado:** borrador v0.16 · 01/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -271,7 +271,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 | ¿Se pide seña? | Nunca / siempre / solo clientas nuevas / solo clientas con ausencias previas | Siempre |
 | Monto | Porcentaje del precio o monto fijo | 30 % |
 | Plazo para pagar | Minutos desde que se crea la reserva provisoria | 60 minutos |
-| Medio | Link de Mercado Pago / transferencia al alias. **[D]** Uno solo: lo elige el negocio, no la clienta | Transferencia (Mercado Pago llega en H11) |
+| Medio | Link de Mercado Pago / transferencia al alias. **[D]** Uno solo: lo elige el negocio, no la clienta | Transferencia |
 | Cancelación con devolución o traspaso | Con al menos X horas de anticipación | 24 horas |
 | Reprogramaciones que conservan la seña | Cantidad | 1 |
 
@@ -283,6 +283,23 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 4. Mercado Pago avisa por webhook. El sistema **consulta el pago a la API** (nunca confía solo en el cuerpo del webhook), verifica monto y estado, y pasa el turno a `CONFIRMADO`.
 5. El asistente confirma a la clienta y el turno aparece en el Google Calendar de la profesional.
 
+Detalle del flujo con Mercado Pago (H11):
+
+- **[D]** `crear_reserva` primero reserva (la transacción se confirma) y después crea la preferencia: un pedido a otra API no queda dentro de una transacción de la base. El link lo escribe el código, se guarda en la seña y sale en la misma respuesta que la reserva. `generar_pago_sena` vuelve a dar el mismo link. Si en la vuelta se reservó con seña y el texto no incluye el link, el ciclo del agente se lo hace notar al modelo **una vez**, como con el alias.
+- **[D]** Si el negocio cobra con Mercado Pago y no lo tiene conectado, o Mercado Pago no crea la preferencia, la herramienta no inventa nada: deriva sola con motivo "pago". El turno queda pendiente de seña y vence como cualquier otro.
+- **[S]** La preferencia se crea en modo binario (el pago queda aprobado o rechazado, nunca "pendiente") y sin medios en efectivo (Rapipago, Pago Fácil, cajeros): se acreditan en horas o días y el plazo de la seña es de 60 minutos. Un pago rechazado no cambia nada: la clienta puede volver a intentar con el mismo link hasta el vencimiento.
+- **[D]** Al confirmar, la clienta recibe el mismo texto fijo que con la transferencia ("¡Seña recibida! …", con su plantilla `sena_confirmada`). La dueña no recibe aviso: el cobro lo ve en su cuenta de Mercado Pago.
+- **[D]** Un pago aprobado que llega cuando el turno ya no está pendiente de seña (venció, se canceló, ya estaba confirmado por otro pago), o con un monto menor que la seña o en otra moneda, no cambia el turno. Se guarda el id del pago en la seña (si no tiene otro) y la conversación se deriva con motivo "pago" y un resumen fijo para la dueña. La clienta recibe un texto fijo. Los dos dependen del caso (propuesto en H11, decisión 43):
+
+  | Caso | Resumen para la dueña | Texto para la clienta |
+  |---|---|---|
+  | El turno venció o se canceló | "Pagó la seña por Mercado Pago, pero el turno ya estaba vencido (o cancelado). Si corresponde, la devolución la hacés vos." | "Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá." |
+  | Ya estaba confirmado por otro pago | "Pagó la seña dos veces por Mercado Pago: el turno ya estaba confirmado. Si corresponde, la devolución la hacés vos." | "Nos llegó otro pago de la seña, pero tu turno ya estaba confirmado. Una persona del equipo te escribe por acá." |
+  | Monto menor o en otra moneda | "Pagó por Mercado Pago $X, que no cubre la seña de $Y: el turno sigue pendiente de seña. Revisalo vos." (o "en otra moneda (USD)") | "Nos llegó tu pago, pero no coincide con la seña. Una persona del equipo te escribe por acá." |
+
+  La derivación y el texto salen una sola vez por seña: Mercado Pago avisa más de una vez del mismo pago, y un segundo pago tardío ya lo ve la persona que atiende. El texto no lleva plantilla: llega minutos después de que la clienta pagó con el link del chat, dentro de la ventana de 24 horas. Las devoluciones nunca son automáticas.
+- **[D]** Por si un webhook se pierde: antes de vencer una seña de Mercado Pago, la tarea de vencimiento busca en Mercado Pago un pago con su `external_reference`. Si hay uno aprobado, se procesa como si hubiera llegado el webhook, en vez de vencer el turno. **[S]** Si Mercado Pago no responde a la búsqueda, el turno vence igual: reintentar dejaría a la clienta sin el aviso de vencimiento, y si el pago existe su webhook llega después y se trata como un pago tardío. La búsqueda la hace solo la tarea: una reserva que vence una provisoria que pisa su horario (6.6) no busca nada.
+
 **Flujo con transferencia [D]:**
 
 1. Reserva provisoria igual que arriba. El asistente envía el alias o CBU del negocio y el monto.
@@ -293,7 +310,7 @@ Configuración por negocio, con posibilidad de pisarla por servicio:
 Detalle del flujo con transferencia (H9):
 
 - **[D]** `crear_reserva` devuelve los datos para pagar (alias, CBU, titular, monto y plazo, escritos por el código) cuando el turno queda pendiente de seña: así salen en la misma respuesta que la reserva. `generar_pago_sena` los vuelve a dar si la clienta los pide después. Si en la vuelta se reservó con seña y el texto no incluye el alias, el ciclo del agente se lo hace notar al modelo **una vez** (como en 6.4).
-- **[D]** El medio de la seña se guarda al reservar, con el que tiene el negocio en ese momento (como el precio). Si el negocio cobra con Mercado Pago (hasta H11) o no tiene cargados los datos de transferencia, la herramienta no inventa nada: deriva sola con motivo "pago".
+- **[D]** El medio de la seña se guarda al reservar, con el que tiene el negocio en ese momento (como el precio). Si no tiene cargados los datos de transferencia, la herramienta no inventa nada: deriva sola con motivo "pago".
 - **[D]** Qué imagen es un comprobante lo decide el código, no el modelo, antes de llamarlo. La primera imagen de la vuelta es el comprobante si la clienta tiene **una sola** seña por transferencia pendiente y su turno sigue en `PENDIENTE_SEÑA` (4.5: cancelar no cambia la seña, por eso se mira el turno). Se acepta aunque haya pasado el plazo, mientras el turno no haya vencido: la dueña igual verifica el pago. Con varias señas pendientes, deriva con motivo "pago". Sin seña pendiente, o con la seña ya en verificación, la imagen se deriva como cualquier otra (4.8).
 - **[D]** El comprobante se registra (turno en verificación, id de la imagen en la seña) en la misma transacción que el aviso a la dueña. Después el agente contesta con ese hecho en el contexto de la vuelta: que lo recibió y que una persona del equipo lo verifica. El asistente nunca dice que la seña o el turno quedaron confirmados si en esa vuelta no lo confirmó una herramienta (6.4).
 - **[D]** El comprobante también se registra con el asistente pausado por una derivación (4.8): turno en verificación, aviso a la dueña con los botones y recordatorio, igual que siempre, pero sin llamar al modelo ni contestarle a la clienta, porque la está atendiendo una persona. Con varias señas pendientes no se vuelve a derivar: la conversación ya está en manos de una persona. Sin esto, una clienta que paga durante la pausa quedaba con el turno pendiente de seña y se le vencía (lo encontró la prueba manual de H9).
@@ -607,7 +624,8 @@ Un solo proceso de Node con módulos bien separados, y una base Postgres. **No**
 | `catalog` | Servicios, profesionales, horarios, excepciones, información del negocio | `tenants` |
 | `scheduling` | Disponibilidad (función pura), turnos, máquina de estados | `catalog` |
 | `customers` | Clientas, historial, consentimientos | `tenants`, `catalog` (profesional preferida) |
-| `payments` | Señas, Mercado Pago, verificación de transferencias | `scheduling` |
+| `payments` | Señas: el monto según la política, verificación de transferencias | `scheduling` |
+| `mercadopago` | Adaptador de Mercado Pago (H11): OAuth, preferencias, webhook con firma, procesar pagos, renovar tokens | `tenants`, `payments`, `scheduling`, `notifications` |
 | `whatsapp` | Adaptador de la API: recibir, enviar, plantillas, firma | — |
 | `conversation` | Agente de IA, herramientas, pausa por derivación, agrupado de mensajes | todos los de dominio |
 | `notifications` | Avisos a la dueña | `whatsapp` |
@@ -731,7 +749,7 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 **[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
 
-Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
+Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), procesar un pago de Mercado Pago (H11), renovar el token de Mercado Pago (H11), resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
 
 **[D] Avisos (H9):** un aviso (a la dueña o a la clienta, fuera de la respuesta del asistente) se guarda en la tabla `notifications` **en la misma transacción** que el cambio que lo origina: la derivación, el comprobante, la cancelación, la respuesta de la dueña. Lo envía después la tarea "enviar un aviso", con los reintentos de siempre. Así un cambio y su aviso no pueden quedar desparejos aunque falle la red en el medio. **[D]** Desde H10, junto con el mensaje se guarda su versión con plantilla (8.1), escrita también por el código: si Meta rechaza el mensaje libre por estar fuera de la ventana de 24 horas (error 131047), la misma ejecución envía la plantilla. Los recordatorios salen siempre con plantilla.
 
@@ -891,10 +909,18 @@ Detalle (H9):
 
 ### 8.3 Mercado Pago
 
-- **[S]** Conexión por **OAuth**: la dueña autoriza desde un link y el sistema obtiene un token para crear cobros en su cuenta. Es más seguro que pedirle que copie credenciales. **[?]** Revisar los requisitos actuales del programa de integradores y si hace falta registrar la aplicación.
+- **[S]** Conexión por **OAuth**: la dueña autoriza desde un link y el sistema obtiene un token para crear cobros en su cuenta. Es más seguro que pedirle que copie credenciales.
+  - Requisitos (revisados el 29/10/2026 en la documentación oficial): una aplicación del servicio en "Tus integraciones" de Mercado Pago, con su `client_id` y `client_secret` y la URL de redirección registrada (tiene que ser fija). Para cobrar en la cuenta del negocio sin comisión no hace falta ningún programa de integradores ni aprobación. El código de autorización vale 10 minutos y una sola vez; el token de acceso, 180 días; el de renovación se puede reusar.
+  - **[D]** En desarrollo, `pnpm mercadopago:connect <negocio>` imprime el link de autorización (desde H15, el panel). El link lleva un `state` firmado por el servidor con el negocio y un vencimiento de 15 minutos: así la vuelta sabe de qué negocio es sin guardar nada, y nadie puede conectar su cuenta a otro negocio. Sin PKCE: el secreto de la aplicación vive en el servidor.
+  - **[D]** La vuelta (`/mercadopago/oauth/callback`) verifica el `state`, canjea el código por los tokens y los guarda cifrados con su vencimiento (`tenant_credentials`), y le muestra a la dueña una página que dice que quedó conectado.
+  - **[S]** Las pruebas usan cuentas de prueba de Mercado Pago, todas creadas desde la aplicación del servicio: una **integradora** («Marketplace» en el panel), que es la dueña de una aplicación de prueba aparte, una **vendedora** que la autoriza por OAuth y una **compradora** que paga. Así lo pide el modelo marketplace, y lo es: una preferencia creada con el token OAuth de un negocio queda como `marketplace` de la aplicación. Con la aplicación de una cuenta real y vendedora y compradora de prueba, el checkout falla al pagar (prueba manual de H11). En desarrollo el `.env` lleva la aplicación de prueba; en producción, la real: mismas variables, otro entorno.
+  - **[S]** Los tokens se piden sin `test_token`: los de una vendedora de prueba ya operan en el mundo de prueba, y los pagos hechos con credenciales de prueba no mandan avisos (documentación de notificaciones de Checkout Pro). `MERCADOPAGO_TEST_TOKEN=true` queda solo para desarrollo: en producción el servidor no arranca con esa variable.
+  - La aplicación necesita, en «Configuración avanzada», la URL de redirección, PKCE marcado en «No» (sin elegir, Mercado Pago muestra «La aplicación no está preparada para conectarse») y los permisos read, offline access y write; y en «Producto integrado», Checkout Pro con la API de Preferencias.
 - Cobros con preferencias de **Checkout Pro**: `external_reference` = id de la seña, `notification_url` = nuestro webhook con el id del negocio, vencimiento de la preferencia igual al de la reserva provisoria.
-- **[D]** Al recibir un webhook, se valida la firma y se **consulta el pago a la API** antes de confirmar nada.
-- **[D]** Los tokens se guardan cifrados y se renuevan antes de vencer. Si la renovación falla, se alerta a Yordi.
+- **[D]** Sin el SDK de Mercado Pago: los pocos pedidos que hacen falta (token, preferencia, pago, búsqueda de pagos) van con `fetch` y sus respuestas se validan con Zod, como con Meta.
+- **[D]** Al recibir un webhook, se valida la firma (`x-signature`: HMAC-SHA256 de `id:{data.id};request-id:{x-request-id};ts:{ts};` con la clave secreta de la aplicación) y se **consulta el pago a la API** antes de confirmar nada. Solo se procesan los avisos de tipo `payment`; el resto se contesta 200 y se ignora, **antes** de validar la firma: no disparan nada. Comprobado en la prueba manual de H11: los avisos a la `notification_url` de una preferencia creada por OAuth llegan firmados con la clave de Webhooks de la aplicación. Mercado Pago manda además el mismo pago en el formato viejo (IPN: `?id=…&topic=payment`, también `merchant_order`), sin `data.id` y con una firma que no valida: se ignora con 200, porque con 401 lo reintenta cada 15 minutos.
+- **[D]** El webhook guarda el aviso programando la tarea "procesar un pago de Mercado Pago" con el id del pago como clave (6.7): la fila de la tarea es el registro, y un aviso repetido es la misma fila. La tarea consulta el pago con el token del negocio y verifica que la seña sea de ese negocio, el estado, el monto y la moneda (4.5).
+- **[D]** Los tokens se guardan cifrados y se renuevan antes de vencer: la tarea "renovar el token de Mercado Pago" corre 30 días antes del vencimiento. Si la renovación falla en todos los intentos, queda un error en el log (la alerta a Yordi llega en H14, 10.3).
 
 ### 8.4 Google Calendar
 
@@ -1054,7 +1080,7 @@ Se hace en una reunión de 30 a 45 minutos. Las respuestas cargan la configuraci
 - [ ] Conectar el número a la Cloud API con coexistencia
 - [ ] Cargar un medio de pago en la cuenta de Meta del negocio
 - [ ] Crear y aprobar las plantillas
-- [ ] Conectar Mercado Pago (OAuth) y hacer un cobro de prueba
+- [ ] Conectar Mercado Pago (OAuth, `pnpm mercadopago:connect`) con la aplicación real del servicio y hacer un cobro de prueba (8.3)
 - [ ] Compartir el calendario de cada profesional con la cuenta de servicio
 - [ ] Cargar catálogo, horarios, información y políticas
 - [ ] Registrar el número de la dueña para recibir avisos
@@ -1159,6 +1185,11 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 36 | Las plantillas las define el código y se crean igual en Meta | Guardarlas editables en la base | El código escribe los textos de los avisos (8.2): tenerlos en el código permite mostrar en el historial lo que se envió y verificar que la plantilla aprobada coincida |
 | 37 | "Confirmo" lo registra el código antes de llamar al modelo | Una herramienta "confirmar asistencia" | Igual que el comprobante (decisión 31): el toque siempre queda registrado, aunque el modelo no llame a nada |
 | 38 | "Cancelar" y "Reprogramar" del recordatorio los contesta el código con textos fijos | Que el modelo llame a la herramienta, con un aviso del ciclo si no lo hace | En la prueba manual el modelo los contestó sin la herramienta tres veces, aun con el aviso. La respuesta correcta es siempre la misma (pedir la confirmación, preguntar el día): no hace falta el modelo |
+| 39 | Mercado Pago con `fetch` y Zod | El SDK oficial de Mercado Pago | Son cuatro pedidos; una dependencia menos que vigilar (cadena de suministro) y el mismo patrón que con Meta |
+| 40 | El webhook de Mercado Pago guarda programando una tarea con el id del pago como clave | Una tabla aparte de avisos de pago | La tabla de tareas ya garantiza una fila por clave: el aviso repetido no duplica nada y no hay otra tabla que mantener |
+| 41 | `state` de OAuth firmado, sin PKCE | Guardar cada intento en una tabla, o sumar PKCE | El `state` firmado identifica al negocio y vence solo; PKCE protege a clientes que no pueden guardar un secreto, y el nuestro lo guarda en el servidor |
+| 42 | Antes de vencer una seña de Mercado Pago se busca el pago | Confiar solo en el webhook | Un webhook perdido haría vencer el turno de una clienta que pagó; la búsqueda es un pedido por seña vencida |
+| 43 | Un texto por caso cuando un pago de Mercado Pago no se aplica | Un solo texto ("el turno ya se había liberado") | Ese texto es falso si el turno estaba confirmado por otro pago o si el monto no cubre la seña: el turno no se liberó |
 
 ---
 
@@ -1180,7 +1211,6 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | Pregunta | Antes de |
 |---|---|
 | Disponibilidad de coexistencia para números de Argentina | Vender |
-| Requisitos actuales de OAuth y del programa de integradores de Mercado Pago | H11 |
 | Calendario compartido con cuenta de servicio usando Gmail personal | H12 |
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |

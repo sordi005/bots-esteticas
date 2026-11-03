@@ -1,4 +1,5 @@
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import { mercadoPagoRoutes, type MercadoPagoRoutesOptions } from './modules/mercadopago/routes.js';
 import {
   whatsappWebhookRoutes,
   type WhatsAppWebhookOptions,
@@ -14,6 +15,8 @@ export interface ServerDependencies {
   logger?: FastifyBaseLogger;
   /** Sin la app de Meta configurada, el webhook de WhatsApp no se registra. */
   whatsappWebhook?: WhatsAppWebhookOptions;
+  /** Sin la aplicación de Mercado Pago configurada, la vuelta de OAuth y su webhook no se registran. */
+  mercadoPago?: MercadoPagoRoutesOptions;
 }
 
 /** Arma Fastify y registra las rutas. No escucha en ningún puerto: eso lo hace main.ts. */
@@ -34,6 +37,9 @@ export function buildServer(dependencies: ServerDependencies): FastifyInstance {
 
   if (dependencies.whatsappWebhook) {
     void server.register(whatsappWebhookRoutes, dependencies.whatsappWebhook);
+  }
+  if (dependencies.mercadoPago) {
+    void server.register(mercadoPagoRoutes, dependencies.mercadoPago);
   }
 
   return server;

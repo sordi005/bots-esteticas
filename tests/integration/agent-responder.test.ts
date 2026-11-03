@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -32,6 +32,7 @@ import { callTools, finalAnswer, handoffAnswer, scriptedLlm, type ScriptStep } f
 import { at, createCatalogFixture, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
+import { fakeMercadoPago, toolMercadoPago } from './support/mercadopago.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -118,7 +119,13 @@ function interactiveReply(id: string, title: string) {
   };
 }
 
-function build(llm: LlmClient, options: { tools?: AgentTool<unknown>[]; lines?: string[] } = {}) {
+interface BuildOptions {
+  tools?: AgentTool<unknown>[];
+  lines?: string[];
+  mercadoPago?: ToolContext['mercadoPago'];
+}
+
+function build(llm: LlmClient, options: BuildOptions = {}) {
   const lines = options.lines;
   const destination = lines
     ? {
@@ -133,6 +140,7 @@ function build(llm: LlmClient, options: { tools?: AgentTool<unknown>[]; lines?: 
     logger: createLogger({ logLevel: lines ? 'debug' : 'silent' }, destination),
     now: () => NOW,
     ...(options.tools ? { tools: options.tools } : {}),
+    ...(options.mercadoPago ? { mercadoPago: options.mercadoPago } : {}),
   });
 }
 
@@ -140,7 +148,7 @@ function reply(
   f: Fixture,
   pending: ReceivedMessage[],
   script: ScriptStep[],
-  options: { tools?: AgentTool<unknown>[]; lines?: string[] } = {},
+  options: BuildOptions = {},
 ) {
   const { llm, requests } = scriptedLlm(script);
   const respond = build(llm, options);
@@ -335,6 +343,45 @@ describe('createAgentResponder: conversación nueva y contexto de la vuelta (5.1
       timeZone: 'America/Argentina/Mendoza',
       signal,
     });
+  });
+});
+
+describe('createAgentResponder: la seña según el medio del negocio (H11, 4.5)', () => {
+  it('el prompt del sistema es el del medio de la seña del negocio', async () => {
+    const transfer = await setup();
+    const mercadoPago = await setup(null, { settings: { depositPaymentOptions: 'mercadopago' } });
+
+    const withTransfer = reply(transfer, await pendingTexts(transfer, 'Hola'), [finalAnswer('Dale')]);
+    const withMercadoPago = reply(mercadoPago, await pendingTexts(mercadoPago, 'Hola'), [finalAnswer('Dale')]);
+    await Promise.all([withTransfer.result, withMercadoPago.result]);
+
+    expect(withTransfer.requests[0]?.system).toMatch(/foto del comprobante/);
+    expect(withMercadoPago.requests[0]?.system).toMatch(/pasale el link de «pago» tal cual/);
+    expect(withMercadoPago.requests[0]?.system).not.toMatch(/foto del comprobante/);
+  });
+
+  it('con Mercado Pago configurado, las herramientas reciben con qué crear el link', async () => {
+    const f = await setup();
+    const mercadoPago = toolMercadoPago(fakeMercadoPago().client, randomBytes(32));
+    const seen: ToolContext[] = [];
+    const spy: AgentTool<unknown> = {
+      name: 'generar_pago_sena',
+      description: 'Espía.',
+      input: z.object({}),
+      run: (_input, ctx) => {
+        seen.push(ctx);
+        return Promise.resolve({ content: { ok: true }, options: [] });
+      },
+    };
+    const pending = await pendingTexts(f, '¿Me pasás el link?');
+
+    const { result } = reply(f, pending, [callTools([{ name: 'generar_pago_sena' }]), finalAnswer('Listo')], {
+      tools: [spy],
+      mercadoPago,
+    });
+    await result;
+
+    expect(seen[0]?.mercadoPago).toBe(mercadoPago);
   });
 });
 
@@ -1144,6 +1191,8 @@ describe('createAgentResponder: el comprobante de la seña lo reconoce el códig
       'user: hola',
     ]);
     expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/no lo escribiste vos/);
+    // La seña confirmada sale igual con los dos medios (H11): la etiqueta no dice que fue una transferencia.
+    expect(SYSTEM_NOTICE_LABELS.deposit_confirmed).toMatch(/la verificó la dueña o la acreditó Mercado Pago/);
   });
 
   it.each([

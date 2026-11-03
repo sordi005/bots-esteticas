@@ -134,6 +134,20 @@
       "when": 1793057731179,
       "tag": "0018_respuesta_del_boton_del_recordatorio",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793293381202,
+      "tag": "0019_mercado_pago",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793552553370,
+      "tag": "0020_pago_no_aplicado",
+      "breakpoints": true
     }
   ]
 }

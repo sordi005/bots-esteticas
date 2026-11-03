@@ -39,6 +39,7 @@ describe('loadConfig', () => {
       notificationsNumber: null,
       anthropicApiKey: null,
       anthropicModel: 'claude-haiku-5-5',
+      mercadoPago: null,
     });
   });
 
@@ -58,6 +59,7 @@ describe('loadConfig', () => {
       notificationsNumber: null,
       anthropicApiKey: 'sk-ant-clave-de-prueba',
       anthropicModel: 'claude-haiku-5-5',
+      mercadoPago: null,
     });
   });
 
@@ -265,6 +267,76 @@ describe('loadConfig', () => {
       expect(() =>
         loadConfig({ DATABASE_URL: databaseUrl, NOTIFICATIONS_PHONE_NUMBER_ID: '+54 261', NOTIFICATIONS_ACCESS_TOKEN: 'x' }),
       ).toThrow(ConfigError);
+    });
+  });
+
+  describe('Mercado Pago (8.3)', () => {
+    const MERCADOPAGO = {
+      MERCADOPAGO_CLIENT_ID: '4934588586838432',
+      MERCADOPAGO_CLIENT_SECRET: 'secreto-de-la-aplicacion',
+      MERCADOPAGO_WEBHOOK_SECRET: 'clave-de-webhooks',
+      PUBLIC_BASE_URL: 'https://ejemplo.ngrok-free.dev',
+    };
+
+    it('con la aplicación y la URL pública, lee todo lo que hace falta para cobrar', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO });
+
+      expect(config.mercadoPago).toEqual({
+        clientId: '4934588586838432',
+        clientSecret: 'secreto-de-la-aplicacion',
+        webhookSecret: 'clave-de-webhooks',
+        publicBaseUrl: 'https://ejemplo.ngrok-free.dev',
+        testToken: false,
+      });
+    });
+
+    it('la URL pública se guarda sin la barra final', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO, PUBLIC_BASE_URL: 'https://ejemplo.ngrok-free.dev/' });
+
+      expect(config.mercadoPago?.publicBaseUrl).toBe('https://ejemplo.ngrok-free.dev');
+    });
+
+    it('sin configurar (vacías en .env), no hay Mercado Pago', () => {
+      const config = loadConfig({
+        DATABASE_URL: databaseUrl,
+        MERCADOPAGO_CLIENT_ID: '',
+        MERCADOPAGO_CLIENT_SECRET: '',
+        MERCADOPAGO_WEBHOOK_SECRET: '',
+        PUBLIC_BASE_URL: '',
+      });
+
+      expect(config.mercadoPago).toBeNull();
+    });
+
+    it.each(['MERCADOPAGO_CLIENT_ID', 'MERCADOPAGO_CLIENT_SECRET', 'MERCADOPAGO_WEBHOOK_SECRET', 'PUBLIC_BASE_URL'] as const)(
+      'sin %s no arranca: se configuran juntas, y el error no muestra los secretos',
+      (missing) => {
+        const error = captureError(() => loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO, [missing]: '' }));
+
+        expect(error.message).toContain(missing);
+        expect(error.message).not.toContain('secreto-de-la-aplicacion');
+        expect(error.message).not.toContain('clave-de-webhooks');
+      },
+    );
+
+    it('la URL pública tiene que ser https: Mercado Pago no avisa a una URL sin cifrar', () => {
+      expect(() =>
+        loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO, PUBLIC_BASE_URL: 'http://ejemplo.ngrok-free.dev' }),
+      ).toThrow(ConfigError);
+    });
+
+    it('en desarrollo se pueden pedir tokens de prueba; por defecto no', () => {
+      const withTestToken = loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO, MERCADOPAGO_TEST_TOKEN: 'true' });
+      const empty = loadConfig({ DATABASE_URL: databaseUrl, ...MERCADOPAGO, MERCADOPAGO_TEST_TOKEN: '' });
+
+      expect(withTestToken.mercadoPago?.testToken).toBe(true);
+      expect(empty.mercadoPago?.testToken).toBe(false);
+    });
+
+    it('en producción no se aceptan tokens de prueba: cobrarían con las cuentas de prueba', () => {
+      const error = captureError(() => loadConfig({ ...PRODUCTION, ...MERCADOPAGO, MERCADOPAGO_TEST_TOKEN: 'true' }));
+
+      expect(error.message).toContain('MERCADOPAGO_TEST_TOKEN');
     });
   });
 });

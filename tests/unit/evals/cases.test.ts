@@ -56,7 +56,7 @@ describe('la hora fija de las evaluaciones', () => {
 });
 
 describe('evalCases', () => {
-  it('son las 11 de H7, las 26 de H8 (reservar, cancelar, reprogramar, derivar y consultar una hora puntual), las 8 de H9 (la seña y otro turno con la seña aprobada) y las 9 de H10 (recordatorio y reserva vencida), en orden', () => {
+  it('son las 11 de H7, las 26 de H8 (reservar, cancelar, reprogramar, derivar y consultar una hora puntual), las 8 de H9 (la seña y otro turno con la seña aprobada), las 9 de H10 (recordatorio y reserva vencida) y las 3 de H11 (la seña por Mercado Pago), en orden', () => {
     expect(evalCases.map((evalCase) => evalCase.nombre)).toEqual([
       'presentacion',
       'precio_semi_simple',
@@ -112,11 +112,14 @@ describe('evalCases', () => {
       'reprogramar_elige_horario_despues_del_recordatorio',
       'reprogramar_contesta_el_dia',
       'reserva_vencida_otro_horario',
+      'sena_mercadopago_link_en_reserva',
+      'sena_mercadopago_pide_link_de_nuevo',
+      'sena_mercadopago_ya_pague',
     ]);
   });
 
-  it('el criterio de H8 son 30 evaluaciones o más (54 desde H10)', () => {
-    expect(evalCases).toHaveLength(54);
+  it('el criterio de H8 son 30 evaluaciones o más (57 desde H11)', () => {
+    expect(evalCases).toHaveLength(57);
     expect(evalCases.length).toBeGreaterThanOrEqual(30);
   });
 

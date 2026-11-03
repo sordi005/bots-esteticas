@@ -3,7 +3,13 @@ import { buildSystemPrompt, type PromptTenant } from '../../../../src/modules/co
 import { MODEL_HANDOFF_REASON_NAMES } from '../../../../src/modules/conversation/handoff-reasons.js';
 import { agentTools } from '../../../../src/modules/conversation/tools/index.js';
 
-const example: PromptTenant = { name: 'Estética Ejemplo', assistantName: 'Luna', emojiUsage: 'low', usesVoseo: true };
+const example: PromptTenant = {
+  name: 'Estética Ejemplo',
+  assistantName: 'Luna',
+  emojiUsage: 'low',
+  usesVoseo: true,
+  depositMethod: 'transfer',
+};
 
 describe('buildSystemPrompt: se arma por negocio desde la configuración (8.5)', () => {
   it('nombra al negocio y al asistente', () => {
@@ -279,6 +285,33 @@ describe('buildSystemPrompt: reservar, cancelar y reprogramar turnos (H8)', () =
   it('seña (H9): si ya pagó sin mandar la foto, se la pide; si la herramienta derivó, no inventa datos', () => {
     expect(booking).toMatch(/ya pagó pero no mandó la foto, pedile la foto del comprobante/);
     expect(booking).toMatch(/derivada=true por la seña[^\n]*«derivar» va null/);
+  });
+
+  describe('seña por Mercado Pago (H11, 4.5): el prompt cambia con el medio del negocio', () => {
+    const mercadoPago = buildSystemPrompt({ ...example, depositMethod: 'mercadopago' });
+    const mercadoPagoBooking = mercadoPago.slice(
+      mercadoPago.indexOf('## Reservar, cancelar y reprogramar turnos'),
+      mercadoPago.indexOf('## Mensajes que no son texto'),
+    );
+
+    it('es otro prompt que el de transferencia', () => {
+      expect(mercadoPago).not.toBe(buildSystemPrompt(example));
+    });
+
+    it('pasa el link de «pago» en la misma respuesta que la reserva y nunca pide comprobante', () => {
+      expect(mercadoPagoBooking).toMatch(/pendiente de seña, en esa misma respuesta pasale el link de «pago» tal cual/);
+      expect(mercadoPagoBooking).toMatch(/nunca inventes alias, cbu, links ni datos de pago/i);
+      expect(mercadoPagoBooking).not.toMatch(/foto del comprobante/);
+    });
+
+    it('si dice que ya pagó, no lo da por confirmado: el sistema le avisa cuando Mercado Pago lo acredita', () => {
+      expect(mercadoPagoBooking).toMatch(/Si dice que ya pagó[^\n]*el sistema le avisa por acá/);
+      expect(mercadoPagoBooking).toMatch(/Nunca digas que la seña llegó, que se acreditó o que el turno quedó confirmado/);
+    });
+
+    it('si la herramienta derivó, no inventa datos', () => {
+      expect(mercadoPagoBooking).toMatch(/derivada=true por la seña[^\n]*«derivar» va null/);
+    });
   });
 
   it('cancelar: identifica el turno, pide confirmación con confirmada=false y cancela solo cuando la clienta confirmó', () => {

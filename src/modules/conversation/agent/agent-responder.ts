@@ -7,7 +7,7 @@ import { loadNoticeAppointment } from '../../notifications/notice-data.js';
 import { notifications } from '../../notifications/schema.js';
 import { deposits } from '../../payments/schema.js';
 import { appointments } from '../../scheduling/schema.js';
-import { tenants } from '../../tenants/schema.js';
+import { tenantSettings, tenants } from '../../tenants/schema.js';
 import type { FreeFormMessage } from '../../whatsapp/outgoing.js';
 import { inboundImageId } from '../../whatsapp/webhook-payload.js';
 import { registerTransferReceipt } from '../deposit-receipts.js';
@@ -20,7 +20,7 @@ import { agentRuns, conversations, messages } from '../schema.js';
 import { choiceIds, parseChoiceId } from '../tools/choice-ids.js';
 import { resolveChoice, type ResolvedChoice } from '../tools/choices.js';
 import { agentTools } from '../tools/index.js';
-import type { AgentTool } from '../tools/tool.js';
+import type { AgentTool, ToolContext } from '../tools/tool.js';
 import {
   isFallbackOutcome,
   notUnderstoodHandoffText,
@@ -81,6 +81,8 @@ export interface AgentResponderDependencies {
   tools?: AgentTool<unknown>[];
   /** Reloj monotónico para medir la latencia (se inyecta en los tests). */
   monotonicNow?: () => number;
+  /** Sin esto las señas por Mercado Pago derivan a una persona: la aplicación no está configurada (4.5). */
+  mercadoPago?: ToolContext['mercadoPago'];
 }
 
 export function createAgentResponder(deps: AgentResponderDependencies): Responder {
@@ -127,8 +129,10 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
         assistantName: tenants.assistantName,
         emojiUsage: tenants.emojiUsage,
         usesVoseo: tenants.usesVoseo,
+        depositMethod: tenantSettings.depositPaymentOptions,
       })
       .from(tenants)
+      .leftJoin(tenantSettings, eq(tenantSettings.tenantId, tenants.id))
       .where(eq(tenants.id, tenantId));
     const [customer] = await db
       .select({
@@ -215,7 +219,17 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     // Y lo que eligió antes, en las últimas 24 horas y después de reanudarse: crear_reserva y reprogramar_turno solo actúan sobre eso.
     for (const id of await loadEarlierChoiceIds(db, turn, since)) chosenOptionIds.add(id);
 
-    const toolContext = { db, tenantId, customerId, conversationId, now: at, timeZone: tenant.timeZone, chosenOptionIds, signal };
+    const toolContext: ToolContext = {
+      db,
+      tenantId,
+      customerId,
+      conversationId,
+      now: at,
+      timeZone: tenant.timeZone,
+      chosenOptionIds,
+      signal,
+      ...(deps.mercadoPago ? { mercadoPago: deps.mercadoPago } : {}),
+    };
 
     // «Cancelar» y «Reprogramar» del recordatorio los contesta el código, sin el modelo (4.7, decisión 38).
     const reminderChoice = choices.findLast((choice) => choice.tipo === 'recordatorio' && choice.accion !== 'confirmar');
@@ -240,7 +254,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     const { message, handoff, run } = await runAgent(
       { llm, tools, logger, ...(deps.monotonicNow ? { monotonicNow: deps.monotonicNow } : {}) },
       {
-        system: buildSystemPrompt(tenant),
+        system: buildSystemPrompt({ ...tenant, depositMethod: tenant.depositMethod ?? 'transfer' }),
         turnContext: buildTurnContext({
           now: at,
           timeZone: tenant.timeZone,

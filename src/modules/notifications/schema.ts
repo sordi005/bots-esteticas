@@ -15,7 +15,8 @@ export const notificationRecipient = pgEnum('notification_recipient', ['owner', 
  * Qué avisa (4.5, 4.6, 4.8). A la dueña: un comprobante (también sus recordatorios), una
  * derivación, una cancelación o una reprogramación del asistente, y qué pasó con el botón que
  * tocó. A la clienta: la seña confirmada o rechazada y, desde H10, los recordatorios del turno y el
- * vencimiento de la reserva provisoria (4.5, 4.7).
+ * vencimiento de la reserva provisoria (4.5, 4.7) y, desde H11, un pago de Mercado Pago que no se
+ * pudo aplicar al turno (4.5).
  */
 export const notificationKind = pgEnum('notification_kind', [
   'deposit_receipt',
@@ -28,6 +29,7 @@ export const notificationKind = pgEnum('notification_kind', [
   'appointment_reminder',
   'appointment_short_reminder',
   'reservation_expired',
+  'payment_not_applied',
 ]);
 
 /** Los avisos a la clienta. Comparados como texto en las restricciones: ver la migración 0017. */
@@ -37,6 +39,7 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'appointment_reminder',
   'appointment_short_reminder',
   'reservation_expired',
+  'payment_not_applied',
 ] as const satisfies readonly (typeof notificationKind.enumValues)[number][];
 
 /** Los que salen una sola vez por turno e inicio del turno: los recordatorios y el vencimiento (4.5, 4.7). */

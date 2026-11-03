@@ -130,6 +130,12 @@ export interface EvalCase {
   /** Lo que escribe la clienta, en la misma vuelta (en orden). */
   mensajes: EvalInbound[];
   preparar?: EvalSetup;
+  /**
+   * Cambia la configuración del negocio durante el caso. `sena: 'mercadopago'`: cobra la seña con Mercado Pago, con
+   * la cuenta conectada y un cliente falso que devuelve siempre el mismo link (`EVAL_PAYMENT_LINK`). Al terminar,
+   * vuelve a transferencia (H11).
+   */
+  negocio?: { sena: 'mercadopago' };
   /** Mueve la hora de la vuelta (por defecto, la hora fija de `clock.ts`): "AAAA-MM-DD HH:MM" en hora local. */
   ahora?: string;
   espera: {

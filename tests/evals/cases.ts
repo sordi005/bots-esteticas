@@ -1,4 +1,5 @@
 import { EVAL_TIME_ZONE } from './clock.js';
+import { EVAL_PAYMENT_LINK } from './payment-link.js';
 import type { EvalAppointmentSetup, EvalCase, EvalChoice, EvalHistoryEntry } from './evaluate.js';
 import {
   verifyCancelButtonOffered,
@@ -952,6 +953,58 @@ export const evalCases: EvalCase[] = [
             { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-13 17:00', estado: 'EXPIRED' },
           ]),
           verifyNotHandedOff(resultado),
+        ),
+    },
+  },
+
+  // ─── H11: la seña por Mercado Pago ─────────────────────────────────────────────────────────
+
+  {
+    // 4.5: el negocio cobra con Mercado Pago. Toca un horario: la reserva sale con el link en la misma respuesta, escrito
+    // por el código, y no se le pide comprobante.
+    nombre: 'sena_mercadopago_link_en_reserva',
+    negocio: { sena: 'mercadopago' },
+    mensajes: [{ eleccion: FRIDAY_15_WITH_MICA, titulo: 'vie 9/10 15:00' }],
+    preparar: { nombre: CLIENT_NAME },
+    espera: {
+      herramientas: ['crear_reserva'],
+      menciona: ['5.400', EVAL_PAYMENT_LINK],
+      noMenciona: ['comprobante', 'alias'],
+      verifica: (resultado) =>
+        verifyAppointmentsOf(resultado, 'clienta', [
+          { servicio: SEMI, profesional: 'Mica', inicio: '2026-10-09 15:00', estado: 'PENDING_DEPOSIT' },
+        ]),
+    },
+  },
+  {
+    // 4.5: pide de nuevo el link de su turno pendiente: generar_pago_sena devuelve el mismo.
+    nombre: 'sena_mercadopago_pide_link_de_nuevo',
+    negocio: { sena: 'mercadopago' },
+    mensajes: ['me pasás de nuevo el link para pagar la seña?'],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      herramientas: ['generar_pago_sena'],
+      menciona: [EVAL_PAYMENT_LINK],
+      noMenciona: ['comprobante', 'alias'],
+      verifica: (resultado) =>
+        combineChecks(verifyReplied(resultado), verifyNotHandedOff(resultado), verifyNoFalseConfirmation(resultado)),
+    },
+  },
+  {
+    // 4.5: dice que ya pagó y Mercado Pago todavía no avisó: el turno sigue pendiente. No lo da por confirmado, no pide
+    // comprobante (el pago lo confirma el sistema) y no deriva.
+    nombre: 'sena_mercadopago_ya_pague',
+    negocio: { sena: 'mercadopago' },
+    mensajes: ['ya pagué la seña por mercado pago'],
+    preparar: { nombre: CLIENT_NAME, turnos: [TUESDAY_APPOINTMENT] },
+    espera: {
+      noMenciona: ['comprobante', 'alias'],
+      verifica: (resultado) =>
+        combineChecks(
+          verifyAppointment(resultado, 'martes', { estado: 'PENDING_DEPOSIT' }),
+          verifyNotHandedOff(resultado),
+          verifyNoFalseConfirmation(resultado),
+          verifyReplied(resultado),
         ),
     },
   },

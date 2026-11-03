@@ -335,3 +335,38 @@ export function shortAppointmentReminder(input: { appointment: NoticeAppointment
     },
   });
 }
+
+/**
+ * Por qué un pago aprobado de Mercado Pago no se aplicó al turno (4.5, H11): el turno ya se liberó
+ * (venció o se canceló), ya estaba confirmado por otro pago, o el pago no cubre la seña.
+ */
+export type UnappliedPayment =
+  | { kind: 'released'; status: 'vencido' | 'cancelado' }
+  | { kind: 'already_confirmed' }
+  | { kind: 'amount_mismatch'; paidCents: number; currency: string; depositCents: number };
+
+/** A la clienta: llegó su pago y no se aplicó al turno. Una persona del equipo la atiende (4.5). */
+export function customerPaymentNotApplied(payment: UnappliedPayment): TextMessage {
+  switch (payment.kind) {
+    case 'released':
+      return text('Nos llegó tu pago, pero el turno ya se había liberado. Una persona del equipo te escribe por acá.');
+    case 'already_confirmed':
+      return text('Nos llegó otro pago de la seña, pero tu turno ya estaba confirmado. Una persona del equipo te escribe por acá.');
+    case 'amount_mismatch':
+      return text('Nos llegó tu pago, pero no coincide con la seña. Una persona del equipo te escribe por acá.');
+  }
+}
+
+/** El resumen de la derivación, para la dueña: las devoluciones nunca son automáticas (4.5). */
+export function paymentNotAppliedSummary(payment: UnappliedPayment): string {
+  switch (payment.kind) {
+    case 'released':
+      return `Pagó la seña por Mercado Pago, pero el turno ya estaba ${payment.status}. Si corresponde, la devolución la hacés vos.`;
+    case 'already_confirmed':
+      return 'Pagó la seña dos veces por Mercado Pago: el turno ya estaba confirmado. Si corresponde, la devolución la hacés vos.';
+    case 'amount_mismatch':
+      return payment.currency === 'ARS'
+        ? `Pagó por Mercado Pago ${formatPesos(payment.paidCents)}, que no cubre la seña de ${formatPesos(payment.depositCents)}: el turno sigue pendiente de seña. Revisalo vos.`
+        : `Pagó por Mercado Pago en otra moneda (${payment.currency}): el turno sigue pendiente de seña. Revisalo vos.`;
+  }
+}

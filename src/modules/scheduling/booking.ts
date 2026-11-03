@@ -472,7 +472,10 @@ async function lockDeposit(tx: Queryable, input: { tenantId: string; depositId: 
       appointmentStatus: appointments.status,
       customerId: appointments.customerId,
       depositStatus: deposits.status,
+      depositMethod: deposits.method,
+      depositAmountCents: deposits.amountCents,
       receiptMediaId: deposits.receiptMediaId,
+      mercadopagoPaymentId: deposits.mercadopagoPaymentId,
     })
     .from(deposits)
     .innerJoin(
@@ -597,6 +600,98 @@ export async function reviewDeposit(
       .where(and(eq(deposits.tenantId, tenantId), eq(deposits.id, depositId)));
     await inTransaction?.(tx, { appointmentId, customerId, status: to });
     return { ok: true, appointmentId, status: to } as const;
+  });
+}
+
+// ─── Pago por Mercado Pago ─────────────────────────────────────────────────────
+
+/** Un pago aprobado de Mercado Pago, tal como lo devolvió la API (nunca el cuerpo del aviso). */
+export interface ApprovedPayment {
+  id: string;
+  amountCents: number;
+  currency: string;
+}
+
+export type PaymentRefusal =
+  /** El turno ya no espera la seña: venció, se canceló o ya estaba confirmado. */
+  | 'not_pending'
+  /** Menos que la seña, o en otra moneda. */
+  | 'amount_mismatch';
+
+export type PaymentResult =
+  | { ok: true; appointmentId: string; customerId: string }
+  | { ok: false; reason: 'not_found' }
+  /** Ese pago ya se procesó: Mercado Pago avisa más de una vez del mismo pago. */
+  | { ok: false; reason: 'already_processed'; appointmentId: string }
+  | { ok: false; reason: PaymentRefusal; appointmentId: string; customerId: string; status: AppointmentStatus };
+
+export interface PaymentRefused {
+  appointmentId: string;
+  customerId: string;
+  depositAmountCents: number;
+  reason: PaymentRefusal;
+  status: AppointmentStatus;
+}
+
+/**
+ * Llegó un pago aprobado de Mercado Pago para una seña (4.5, H11). Con el turno bloqueado: si sigue
+ * pendiente de seña y el pago cubre la seña en pesos, el turno pasa a `CONFIRMED` y la seña a aprobada,
+ * con el id del pago. Si no, el turno no cambia: se guarda el id del pago en la seña (si no tiene otro)
+ * y `onRefused` corre en la misma transacción. Las devoluciones nunca son automáticas.
+ */
+export async function applyMercadoPagoPayment(
+  db: NodePgDatabase,
+  input: {
+    tenantId: string;
+    depositId: string;
+    payment: ApprovedPayment;
+    now: Date;
+    inTransaction?: InTransaction<{ appointmentId: string; customerId: string }>;
+    onRefused?: InTransaction<PaymentRefused>;
+  },
+): Promise<PaymentResult> {
+  const { tenantId, depositId, payment, now } = input;
+
+  return db.transaction(async (tx) => {
+    const current = await lockDeposit(tx, { tenantId, depositId });
+    if (!current) return { ok: false, reason: 'not_found' } as const;
+    const { appointmentId, customerId } = current;
+    if (current.mercadopagoPaymentId === payment.id) {
+      return { ok: false, reason: 'already_processed', appointmentId } as const;
+    }
+
+    const pending =
+      current.appointmentStatus === 'PENDING_DEPOSIT' && current.depositStatus === 'pending' && current.depositMethod === 'mercadopago';
+    const covers = payment.currency === 'ARS' && payment.amountCents >= current.depositAmountCents;
+    const thisDeposit = and(eq(deposits.tenantId, tenantId), eq(deposits.id, depositId));
+
+    if (pending && covers) {
+      await applyStatusChange(tx, {
+        tenantId,
+        appointmentId,
+        from: 'PENDING_DEPOSIT',
+        to: 'CONFIRMED',
+        actor: 'system',
+        reason: 'Mercado Pago acreditó la seña',
+        now,
+      });
+      await tx.update(deposits).set({ status: 'approved', mercadopagoPaymentId: payment.id }).where(thisDeposit);
+      await input.inTransaction?.(tx, { appointmentId, customerId });
+      return { ok: true, appointmentId, customerId } as const;
+    }
+
+    const reason: PaymentRefusal = pending ? 'amount_mismatch' : 'not_pending';
+    if (current.mercadopagoPaymentId === null) {
+      await tx.update(deposits).set({ mercadopagoPaymentId: payment.id }).where(thisDeposit);
+    }
+    await input.onRefused?.(tx, {
+      appointmentId,
+      customerId,
+      depositAmountCents: current.depositAmountCents,
+      reason,
+      status: current.appointmentStatus,
+    });
+    return { ok: false, reason, appointmentId, customerId, status: current.appointmentStatus } as const;
   });
 }
 

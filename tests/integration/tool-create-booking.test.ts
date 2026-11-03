@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 import { choiceIds } from '../../src/modules/conversation/tools/choice-ids.js';
@@ -12,6 +13,7 @@ import { createDatabase } from '../../src/shared/db.js';
 import { at, createCatalogFixture, toolContext, type CatalogFixture } from './support/catalog-fixture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { single } from './support/fixtures.js';
+import { connectMercadoPago, fakeMercadoPago, paymentUrl, toolMercadoPago } from './support/mercadopago.js';
 import { expectChangeMarkOnlyOnSuccess, expectOptionsShownToModel } from './support/tool-options.js';
 
 const database = createDatabase(testDatabaseUrl());
@@ -86,7 +88,7 @@ describe('crear_reserva: los datos para pagar la seña (H9, 4.5)', () => {
 
   it.each([
     ['sin alias ni CBU cargados', { transferAlias: null, transferCbu: null }],
-    ['con Mercado Pago, que todavía no está conectado (H11)', { depositPaymentOptions: 'mercadopago' as const }],
+    ['con Mercado Pago, sin la aplicación configurada en el servidor', { depositPaymentOptions: 'mercadopago' as const }],
   ])('%s: reserva igual, no inventa datos y deriva sola con «pago»', async (_case, settings) => {
     const f = await createCatalogFixture(db, {
       settings: {
@@ -111,6 +113,74 @@ describe('crear_reserva: los datos para pagar la seña (H9, 4.5)', () => {
     expect(await db.select().from(handoffs).where(eq(handoffs.conversationId, conversationId))).toMatchObject([
       { reason: 'payment_issue', status: 'open' },
     ]);
+  });
+});
+
+describe('crear_reserva: la seña por Mercado Pago (H11, 4.5)', () => {
+  const credentialsKey = randomBytes(32);
+
+  async function bookWithMercadoPago(options: { connected?: boolean; fail?: Error } = {}) {
+    const f = await createCatalogFixture(db, {
+      settings: {
+        depositPaymentOptions: 'mercadopago',
+        humanAttentionHours: [1, 2, 3, 4, 5].map((weekday) => ({ weekday, start: '09:00', end: '18:00' })),
+      },
+    });
+    if (options.connected ?? true) await connectMercadoPago(db, credentialsKey, f.tenantId);
+    const { id: conversationId } = single(
+      await db.insert(conversations).values({ tenantId: f.tenantId, customerId: f.customerId }).returning({ id: conversations.id }),
+    );
+    const mercadoPago = fakeMercadoPago(options.fail ? { fail: options.fail } : {});
+    const horarioId = slot(f);
+    const result = await runTool(
+      createBookingTool,
+      { horario_id: horarioId, nombre: 'Caro Pérez' },
+      toolContext(db, f, {
+        conversationId,
+        chosenOptionIds: new Set([horarioId]),
+        mercadoPago: toolMercadoPago(mercadoPago.client, credentialsKey),
+      }),
+    );
+    const handoffsOf = () => db.select().from(handoffs).where(eq(handoffs.conversationId, conversationId));
+    return { f, result, created: mercadoPago.created, handoffsOf };
+  }
+
+  it('reserva y en la misma respuesta da el link de pago, escrito por el código', async () => {
+    const { f, result, created } = await bookWithMercadoPago();
+
+    expect(result.content).toMatchObject({
+      reservado: true,
+      estado: 'pendiente de seña',
+      sena: { medio: 'Mercado Pago' },
+      pago: {
+        medio: 'Mercado Pago',
+        monto: '$5.400',
+        pagarHasta: 'hoy a las 10:00',
+        link: paymentUrl('pref-1'),
+        texto: `Para confirmarlo, pagá la seña de $5.400 con Mercado Pago hasta hoy a las 10:00 en este link: ${paymentUrl('pref-1')}`,
+      },
+    });
+    expect(JSON.stringify(result.content)).not.toMatch(/foto del comprobante/);
+    expect(result.mustMention).toBe(paymentUrl('pref-1'));
+    expect(result.changedAppointment).toBe(true);
+    expect(created.map((input) => input.preference.title)).toEqual(['Seña: Esmaltado semipermanente']);
+    const appointment = single(await appointmentsOf(f));
+    expect(single(await db.select().from(deposits).where(eq(deposits.appointmentId, appointment.id)))).toMatchObject({
+      method: 'mercadopago',
+      mercadopagoPaymentUrl: paymentUrl('pref-1'),
+    });
+  });
+
+  it.each([
+    ['el negocio no conectó su cuenta', { connected: false }],
+    ['Mercado Pago no crea la preferencia', { fail: new Error('fetch failed') }],
+  ])('si %s, reserva igual, no inventa un link y deriva sola con «pago»', async (_case, options) => {
+    const { result, handoffsOf } = await bookWithMercadoPago(options);
+
+    expect(result.content).toMatchObject({ reservado: true, derivada: true, cuando: 'el lunes 5/10 a las 9:00' });
+    expect(result.content).not.toHaveProperty('pago');
+    expect(result.mustMention).toBeUndefined();
+    expect(await handoffsOf()).toMatchObject([{ reason: 'payment_issue', status: 'open' }]);
   });
 });
 
@@ -175,22 +245,6 @@ describe('crear_reserva: el camino feliz', () => {
     const result = await book(f, { horario_id: slot(f), nombre: 'Caro Pérez' });
 
     expect(result.content).toMatchObject({ sena: { pagarHasta: 'el lunes 5/10 a las 9:00' } });
-  });
-
-  it('dice el medio que eligió el negocio (con Mercado Pago, hasta H11, además deriva por la seña)', async () => {
-    const f = await createCatalogFixture(db, { settings: { depositPaymentOptions: 'mercadopago' } });
-    const { id: conversationId } = single(
-      await db.insert(conversations).values({ tenantId: f.tenantId, customerId: f.customerId }).returning({ id: conversations.id }),
-    );
-    const horarioId = slot(f);
-
-    const result = await runTool(
-      createBookingTool,
-      { horario_id: horarioId, nombre: 'Caro Pérez' },
-      toolContext(db, f, { conversationId, chosenOptionIds: new Set([horarioId]) }),
-    );
-
-    expect(result.content).toMatchObject({ sena: { medio: 'Mercado Pago' }, derivada: true });
   });
 
   it('el id del horario puede ser el de otra profesional que hace el servicio', async () => {

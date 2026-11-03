@@ -1,6 +1,12 @@
 import { createAgentResponder } from './modules/conversation/agent/agent-responder.js';
 import { createAnthropicLlmClient } from './modules/conversation/agent/anthropic-client.js';
+import type { ToolContext } from './modules/conversation/tools/tool.js';
 import { recordWebhookEvents } from './modules/conversation/inbox.js';
+import { createMercadoPagoClient } from './modules/mercadopago/client.js';
+import { completeMercadoPagoConnection } from './modules/mercadopago/connection.js';
+import { recordPaymentNotification } from './modules/mercadopago/notification.js';
+import { oauthRedirectUri } from './modules/mercadopago/oauth.js';
+import type { MercadoPagoRoutesOptions } from './modules/mercadopago/routes.js';
 import { createWhatsAppClient } from './modules/whatsapp/client.js';
 import { withRecipientOverride } from './modules/whatsapp/recipient-override.js';
 import type { WhatsAppWebhookOptions } from './modules/whatsapp/webhook-routes.js';
@@ -49,6 +55,37 @@ const whatsappClient = withRecipientOverride(
   config.whatsappTestRecipient ?? undefined,
 );
 
+// Mercado Pago (8.3): una sola aplicación del servicio para todos los negocios. Sin ella, o sin la clave
+// de cifrado para guardar los tokens, no se conecta ningún negocio y los que cobran así derivan (4.5).
+let mercadoPago: WorkerDependencies['mercadoPago'];
+let mercadoPagoTools: ToolContext['mercadoPago'];
+let mercadoPagoRoutes: MercadoPagoRoutesOptions | undefined;
+if (config.mercadoPago && config.credentialsKey) {
+  const { clientId, clientSecret, webhookSecret, publicBaseUrl, testToken } = config.mercadoPago;
+  const credentialsKey = config.credentialsKey;
+  const client = createMercadoPagoClient({ clientId, clientSecret, testToken });
+  mercadoPago = { client, credentialsKey };
+  mercadoPagoTools = { client, credentialsKey, publicBaseUrl, logger };
+  mercadoPagoRoutes = {
+    webhookSecret,
+    connect: ({ code, state }) =>
+      completeMercadoPagoConnection(
+        { db: database.db, logger, client, credentialsKey, now: () => new Date() },
+        // El state lo firma la misma aplicación: el CLI que arma el link usa este secreto.
+        { code, state, redirectUri: oauthRedirectUri(publicBaseUrl), stateSecret: clientSecret },
+      ),
+    onPayment: (notification) => recordPaymentNotification(database.db, { ...notification, now: new Date() }),
+  };
+  logger[testToken ? 'warn' : 'info'](
+    { testToken },
+    testToken ? 'Mercado Pago con las cuentas de prueba (solo desarrollo)' : 'Mercado Pago configurado',
+  );
+} else if (config.mercadoPago) {
+  logger.warn('Sin CREDENTIALS_ENCRYPTION_KEY no se puede usar Mercado Pago');
+} else {
+  logger.info('Mercado Pago no está configurado: las señas por Mercado Pago derivan a una persona');
+}
+
 // Worker de tareas programadas, en el mismo proceso (sección 6.7). Las conversaciones las contesta
 // el agente (8.5), también en producción desde H8; en desarrollo, solo con las claves puestas.
 let conversations: WorkerDependencies['conversations'];
@@ -76,6 +113,7 @@ switch (conversationMode.kind) {
         }),
         logger,
         now: () => new Date(),
+        ...(mercadoPagoTools ? { mercadoPago: mercadoPagoTools } : {}),
       }),
     };
     logger.info(
@@ -114,12 +152,14 @@ const worker = buildWorker({
   logger,
   ...(conversations ? { conversations } : {}),
   ...(notifications ? { notifications } : {}),
+  ...(mercadoPago ? { mercadoPago } : {}),
 });
 
 const server = buildServer({
   logger,
   healthChecks: { database: database.ping, worker: worker.check },
   ...(whatsappWebhook ? { whatsappWebhook } : {}),
+  ...(mercadoPagoRoutes ? { mercadoPago: mercadoPagoRoutes } : {}),
 });
 server.addHook('onClose', () => database.close());
 

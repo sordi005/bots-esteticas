@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { ensurePaymentLink } from '../../mercadopago/payment-link.js';
 import type { CustomerAppointment } from '../../scheduling/customer-appointments.js';
 import { tenantSettings } from '../../tenants/schema.js';
 import { formatPesos } from '../format.js';
@@ -11,16 +12,20 @@ import type { ToolContext } from './tool.js';
  * `crear_reserva` (en la misma respuesta que la reserva) y `generar_pago_sena` (si los pide de nuevo).
  */
 
-/** Lo que el modelo le pasa a la clienta. */
+/** Lo que el modelo le pasa a la clienta, según el medio. */
 export const PAYMENT_INSTRUCTIONS =
   'En esta misma respuesta pasale los datos de «pago» tal cual (sirve «pago.texto») y pedile la foto del comprobante. No inventes otros datos.';
+export const MERCADOPAGO_PAYMENT_INSTRUCTIONS =
+  'En esta misma respuesta pasale el link de «pago» tal cual (sirve «pago.texto»). No le pidas comprobante: cuando Mercado Pago acredita el pago, el sistema le avisa por acá. No inventes otros datos.';
 
 export type DepositPayment =
   | {
-      kind: 'transfer';
+      kind: 'transfer' | 'mercadopago';
       /** Lo que lee el modelo, en `pago`. */
       content: Record<string, string>;
-      /** Lo que tiene que aparecer en la respuesta: el alias, o el CBU si no hay alias (D4). */
+      /** Qué hacer con `pago`: va en el `mensaje` de la herramienta. */
+      instructions: string;
+      /** Lo que tiene que aparecer en la respuesta: el alias (o el CBU si no hay alias, D4), o el link. */
       mustMention: string;
     }
   /** No hay cómo cobrarla por acá: ya derivó a una persona (motivo «pago»). */
@@ -28,11 +33,24 @@ export type DepositPayment =
 
 /** Lo que se le cuenta a la dueña en la derivación. */
 const NO_TRANSFER_DATA = 'Reservó un turno con seña y no hay alias ni CBU cargados para cobrarla';
-const MERCADOPAGO_PENDING = 'Reservó un turno con seña por Mercado Pago, que todavía no está conectado';
+const MERCADOPAGO_NOT_CONNECTED = 'Reservó un turno con seña por Mercado Pago, que no está conectado';
+const MERCADOPAGO_FAILED = 'Reservó un turno con seña y Mercado Pago no generó el link de pago';
+
+async function derive(ctx: ToolContext, reason: string): Promise<DepositPayment> {
+  const { when } = await handOff(ctx.db, {
+    tenantId: ctx.tenantId,
+    conversationId: ctx.conversationId,
+    reason: 'payment_issue',
+    summary: reason,
+    now: ctx.now,
+  });
+  return { kind: 'derived', when, reason };
+}
 
 /**
- * Cómo pagar la seña pendiente de un turno. Con transferencia y datos cargados, los datos; si no
- * (Mercado Pago llega en H11, o faltan el alias y el CBU), deriva sola: el modelo no inventa nada.
+ * Cómo pagar la seña pendiente de un turno, con el medio que se guardó al reservar: el link de
+ * Mercado Pago o los datos de la transferencia. Si no hay cómo cobrarla por acá (Mercado Pago sin
+ * conectar o sin link, o sin alias ni CBU), deriva sola: el modelo no inventa nada.
  */
 export async function depositPayment(
   ctx: ToolContext,
@@ -40,6 +58,31 @@ export async function depositPayment(
 ): Promise<DepositPayment | null> {
   const { deposit } = appointment;
   if (deposit?.status !== 'pending') return null;
+
+  const amount = formatPesos(deposit.amountCents);
+  const deadline = formatDeadline(deposit.expiresAt, ctx.now, ctx.timeZone);
+
+  if (deposit.method === 'mercadopago') {
+    if (!ctx.mercadoPago) return derive(ctx, MERCADOPAGO_NOT_CONNECTED);
+    const link = await ensurePaymentLink(
+      { db: ctx.db, ...ctx.mercadoPago },
+      { tenantId: ctx.tenantId, appointmentId: appointment.id, title: `Seña: ${appointment.serviceName}`, now: ctx.now },
+    );
+    if (link.kind === 'not_connected') return derive(ctx, MERCADOPAGO_NOT_CONNECTED);
+    if (link.kind !== 'link') return derive(ctx, MERCADOPAGO_FAILED);
+    return {
+      kind: 'mercadopago',
+      content: {
+        medio: 'Mercado Pago',
+        monto: amount,
+        pagarHasta: deadline,
+        link: link.url,
+        texto: `Para confirmarlo, pagá la seña de ${amount} con Mercado Pago hasta ${deadline} en este link: ${link.url}`,
+      },
+      instructions: MERCADOPAGO_PAYMENT_INSTRUCTIONS,
+      mustMention: link.url,
+    };
+  }
 
   const [settings] = await ctx.db
     .select({
@@ -52,20 +95,8 @@ export async function depositPayment(
 
   const alias = settings?.alias ?? null;
   const cbu = settings?.cbu ?? null;
-  const reason = deposit.method === 'mercadopago' ? MERCADOPAGO_PENDING : !alias && !cbu ? NO_TRANSFER_DATA : null;
-  if (reason) {
-    const { when } = await handOff(ctx.db, {
-      tenantId: ctx.tenantId,
-      conversationId: ctx.conversationId,
-      reason: 'payment_issue',
-      summary: reason,
-      now: ctx.now,
-    });
-    return { kind: 'derived', when, reason };
-  }
+  if (!alias && !cbu) return derive(ctx, NO_TRANSFER_DATA);
 
-  const amount = formatPesos(deposit.amountCents);
-  const deadline = formatDeadline(deposit.expiresAt, ctx.now, ctx.timeZone);
   const holder = settings?.holder ?? null;
   const destination = [
     alias ? `al alias ${alias}` : null,
@@ -86,6 +117,7 @@ export async function depositPayment(
       ...(holder ? { titular: holder } : {}),
       texto: `Para confirmarlo, transferí la seña de ${amount} ${destination} hasta ${deadline} y mandame por acá la foto del comprobante.`,
     },
+    instructions: PAYMENT_INSTRUCTIONS,
     mustMention: alias ?? cbu ?? '',
   };
 }

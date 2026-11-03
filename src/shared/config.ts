@@ -87,8 +87,49 @@ const envSchema = z
       (value) => (value === '' ? undefined : value),
       z.string().trim().min(1).default(DEFAULT_ANTHROPIC_MODEL),
     ),
+    /** La aplicación del servicio en Mercado Pago (8.3): una sola para todos los negocios. */
+    MERCADOPAGO_CLIENT_ID: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().regex(/^\d+$/, 'Solo dígitos, como lo da Mercado Pago').optional(),
+    ),
+    MERCADOPAGO_CLIENT_SECRET: optionalSecret,
+    /** La clave secreta de Webhooks de la aplicación: valida la firma de los avisos (8.3). */
+    MERCADOPAGO_WEBHOOK_SECRET: optionalSecret,
+    /** SOLO desarrollo (8.3): tokens de las cuentas de prueba de Mercado Pago. */
+    MERCADOPAGO_TEST_TOKEN: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
+    ),
+    /** Dónde nos encuentra Mercado Pago: la vuelta de OAuth y los avisos de pago (8.3). */
+    PUBLIC_BASE_URL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z
+        .url({ protocol: /^https$/, error: 'Tiene que ser una URL https' })
+        .transform((value) => value.replace(/\/+$/, ''))
+        .optional(),
+    ),
   })
   .superRefine((env, context) => {
+    const mercadoPagoVariables = [
+      'MERCADOPAGO_CLIENT_ID',
+      'MERCADOPAGO_CLIENT_SECRET',
+      'MERCADOPAGO_WEBHOOK_SECRET',
+      'PUBLIC_BASE_URL',
+    ] as const;
+    if (mercadoPagoVariables.some((name) => env[name])) {
+      for (const name of mercadoPagoVariables) {
+        if (!env[name]) {
+          context.addIssue({
+            code: 'custom',
+            path: [name],
+            message: 'Mercado Pago se configura completo: la aplicación, su clave de Webhooks y la URL pública',
+          });
+        }
+      }
+    }
     if (Boolean(env.WHATSAPP_APP_SECRET) !== Boolean(env.WHATSAPP_VERIFY_TOKEN)) {
       context.addIssue({
         code: 'custom',
@@ -117,6 +158,13 @@ const envSchema = z
         code: 'custom',
         path: ['WHATSAPP_PREFER_TEMPLATES'],
         message: 'Es solo para la prueba manual: en producción los avisos prueban primero el mensaje libre',
+      });
+    }
+    if (env.MERCADOPAGO_TEST_TOKEN) {
+      context.addIssue({
+        code: 'custom',
+        path: ['MERCADOPAGO_TEST_TOKEN'],
+        message: 'Es solo para desarrollo: en producción cobraría con las cuentas de prueba',
       });
     }
     for (const name of REQUIRED_IN_PRODUCTION) {
@@ -153,6 +201,15 @@ export interface Config {
   /** Null: sin clave el worker no contesta conversaciones (sección 8.5). En producción es obligatoria. */
   anthropicApiKey: string | null;
   anthropicModel: string;
+  /** Null: sin la aplicación de Mercado Pago no se conecta ningún negocio ni se registra el webhook (8.3). */
+  mercadoPago: {
+    clientId: string;
+    clientSecret: string;
+    webhookSecret: string;
+    /** Sin barra final. */
+    publicBaseUrl: string;
+    testToken: boolean;
+  } | null;
 }
 
 export class ConfigError extends Error {
@@ -196,5 +253,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         : null,
     anthropicApiKey: data.ANTHROPIC_API_KEY ?? null,
     anthropicModel: data.ANTHROPIC_MODEL,
+    mercadoPago:
+      data.MERCADOPAGO_CLIENT_ID && data.MERCADOPAGO_CLIENT_SECRET && data.MERCADOPAGO_WEBHOOK_SECRET && data.PUBLIC_BASE_URL
+        ? {
+            clientId: data.MERCADOPAGO_CLIENT_ID,
+            clientSecret: data.MERCADOPAGO_CLIENT_SECRET,
+            webhookSecret: data.MERCADOPAGO_WEBHOOK_SECRET,
+            publicBaseUrl: data.PUBLIC_BASE_URL,
+            testToken: data.MERCADOPAGO_TEST_TOKEN,
+          }
+        : null,
   };
 }
