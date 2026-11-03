@@ -184,6 +184,25 @@ describe('POST /webhooks/mercadopago/:tenantId', () => {
     expect(await paymentJobs(tenantId)).toEqual([]);
   });
 
+  it.each([
+    ['de un pago', 'id=186474674153&topic=payment'],
+    ['de una orden', 'id=45782807547&topic=merchant_order'],
+  ])('un aviso en el formato viejo (IPN) %s responde 200 y se ignora, aunque la firma no valide', async (_case, query) => {
+    // Lo encontró la prueba manual de H11: Mercado Pago manda además estos avisos, sin data.id, y la firma
+    // no valida. Con 401 los reintenta cada 15 minutos; el aviso nuevo (data.id, type=payment) ya trae el pago.
+    const { tenantId } = await createTenantFixture(db);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: `/webhooks/mercadopago/${tenantId}?${query}`,
+      headers: { 'content-type': 'application/json', 'x-request-id': randomUUID(), 'x-signature': 'ts=1,v1=abc' },
+      payload: JSON.stringify({ resource: '186474674153', topic: 'payment' }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(await paymentJobs(tenantId)).toEqual([]);
+  });
+
   it('un negocio que no existe responde 200 sin guardar nada (Mercado Pago no reintenta para siempre)', async () => {
     const response = await notify(randomUUID());
 

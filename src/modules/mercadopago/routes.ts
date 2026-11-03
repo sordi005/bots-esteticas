@@ -61,6 +61,14 @@ export const mercadoPagoRoutes: FastifyPluginAsync<MercadoPagoRoutesOptions> = (
       const { tenantId } = request.params;
       if (!z.uuid().safeParse(tenantId).success) return reply.code(404).send();
 
+      // Lo que no es un aviso de pago se contesta 200 sin mirar la firma: no dispara nada. Incluye el formato
+      // viejo (IPN, `?id=…&topic=…`), que Mercado Pago manda además del nuevo y cuya firma no valida.
+      const notification = parseMercadoPagoNotification(request.query, request.body);
+      if (notification.kind === 'ignored') {
+        request.log.info({ tenantId, type: notification.type }, 'Aviso de Mercado Pago ignorado');
+        return reply.code(200).send();
+      }
+
       const valid = isValidMercadoPagoSignature(
         {
           signature: header(request.headers['x-signature']),
@@ -72,12 +80,6 @@ export const mercadoPagoRoutes: FastifyPluginAsync<MercadoPagoRoutesOptions> = (
       if (!valid) {
         request.log.warn({ tenantId }, 'Webhook de Mercado Pago con firma inválida: descartado');
         return reply.code(401).send();
-      }
-
-      const notification = parseMercadoPagoNotification(request.query, request.body);
-      if (notification.kind === 'ignored') {
-        request.log.info({ tenantId, type: notification.type }, 'Aviso de Mercado Pago ignorado');
-        return reply.code(200).send();
       }
 
       const recorded = await options.onPayment({ tenantId, paymentId: notification.paymentId }, request.log);
