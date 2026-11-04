@@ -19,7 +19,7 @@ import {
   type AvailabilityQuery,
   type ProfessionalSchedule,
 } from './availability.js';
-import { appointments } from './schema.js';
+import { appointments, calendarBlocks } from './schema.js';
 
 /**
  * Lee de la base todo lo que necesita el cálculo de disponibilidad (función pura) para un
@@ -64,10 +64,9 @@ export async function loadRescheduleContext(
     appointment: AppointmentToMove;
     window: TimestampRange;
     now: Date;
-    calendarBusy?: ReadonlyMap<string, TimestampRange[]>;
   },
 ): Promise<AvailabilityContext | null> {
-  const { tenantId, appointment, window, now, calendarBusy } = input;
+  const { tenantId, appointment, window, now } = input;
   const context = await loadAvailabilityContext(db, {
     tenantId,
     serviceId: appointment.serviceId,
@@ -75,7 +74,6 @@ export async function loadRescheduleContext(
     excludeAppointmentId: appointment.id,
     window,
     now,
-    ...(calendarBusy ? { calendarBusy } : {}),
   });
   if (!context) return null;
   return {
@@ -103,8 +101,6 @@ export async function loadAvailabilityContext(
     professionalIds?: string[];
     /** Un turno que no cuenta como ocupado: el que se está reprogramando. */
     excludeAppointmentId?: string;
-    /** Eventos ocupados de Google Calendar por profesional (H12). */
-    calendarBusy?: ReadonlyMap<string, TimestampRange[]>;
   },
 ): Promise<AvailabilityContext | null> {
   const { tenantId, serviceId, window, now } = input;
@@ -151,9 +147,9 @@ export async function loadAvailabilityContext(
   };
   const teamIds = team.map((professional) => professional.id);
 
-  const [hours, exceptions, holidayRows, booked] =
+  const [hours, exceptions, holidayRows, booked, blocks] =
     teamIds.length === 0
-      ? [[], [], [], []]
+      ? [[], [], [], [], []]
       : await Promise.all([
           db
             .select()
@@ -208,6 +204,16 @@ export async function loadAvailabilityContext(
                   : undefined,
               ),
             ),
+          db
+            .select({ professionalId: calendarBlocks.professionalId, timeRange: calendarBlocks.timeRange })
+            .from(calendarBlocks)
+            .where(
+              and(
+                eq(calendarBlocks.tenantId, tenantId),
+                inArray(calendarBlocks.professionalId, teamIds),
+                overlaps(calendarBlocks.timeRange, around),
+              ),
+            ),
         ]);
 
   const schedules: ProfessionalSchedule[] = team.map((professional) => ({
@@ -221,7 +227,7 @@ export async function loadAvailabilityContext(
         booked.filter((appointment) => appointment.professionalId === professional.id),
         now,
       ),
-      ...(input.calendarBusy?.get(professional.id) ?? []),
+      ...blocks.filter((block) => block.professionalId === professional.id).map((block) => block.timeRange),
     ],
   }));
 
