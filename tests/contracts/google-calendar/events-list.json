@@ -1,0 +1,45 @@
+{
+ "timeZone": "America/Argentina/Mendoza",
+ "items": [
+  {
+   "id": "7kq2c0h1d9s6o8v3m5t1a2b4c6",
+   "status": "confirmed",
+   "start": { "dateTime": "2026-11-05T10:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+   "end": { "dateTime": "2026-11-05T11:00:00-03:00", "timeZone": "America/Argentina/Mendoza" }
+  },
+  {
+   "id": "1fj9h3k5m7p0r2t4v6b8d0f2h4",
+   "status": "confirmed",
+   "start": { "dateTime": "2026-11-05T12:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+   "end": { "dateTime": "2026-11-05T13:00:00-03:00", "timeZone": "America/Argentina/Mendoza" }
+  },
+  {
+   "id": "3lb5n7p9r1t3v5d7f9h1j3l5n7",
+   "status": "confirmed",
+   "transparency": "transparent",
+   "start": { "dateTime": "2026-11-05T16:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+   "end": { "dateTime": "2026-11-05T17:00:00-03:00", "timeZone": "America/Argentina/Mendoza" }
+  },
+  {
+   "id": "5ad7f9h1j3l5n7p9r1t3v5b7d9",
+   "status": "confirmed",
+   "transparency": "transparent",
+   "start": { "date": "2026-11-05" },
+   "end": { "date": "2026-11-06" }
+  },
+  {
+   "id": "cffcb42eef8b4a0e9f9b9b555253f017",
+   "status": "tentative",
+   "start": { "dateTime": "2026-11-05T18:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+   "end": { "dateTime": "2026-11-05T19:10:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+   "extendedProperties": { "private": { "appointmentId": "cffcb42e-ef8b-4a0e-9f9b-9b555253f017" } }
+  },
+  {
+   "id": "9pe1g3i5k7m9o1q3s5u7a9c1e3",
+   "status": "confirmed",
+   "start": { "dateTime": "2026-11-05T20:00:00-03:00", "timeZone": "America/Argentina/Buenos_Aires" },
+   "end": { "dateTime": "2026-11-05T21:00:00-03:00", "timeZone": "America/Argentina/Buenos_Aires" },
+   "attendees": [ { "self": true, "responseStatus": "declined" } ]
+  }
+ ]
+}
