@@ -16,7 +16,7 @@ import {
   type Actor,
   type AppointmentStatus,
 } from './appointment-state-machine.js';
-import { scheduleReminders, scheduleReservationExpiry } from './appointment-jobs.js';
+import { scheduleCalendarSync, scheduleReminders, scheduleReservationExpiry } from './appointment-jobs.js';
 import {
   loadAvailabilityContext,
   loadRescheduleContext,
@@ -133,6 +133,7 @@ async function applyStatusChange(
 
   await tx.update(appointments).set({ status: to }).where(thisAppointment);
   await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
+  await scheduleCalendarSync(tx, { tenantId, appointmentId, now });
 
   if (to === 'EXPIRED') {
     await tx
@@ -270,6 +271,7 @@ export async function bookAppointment(
       if (!appointment) throw new Error('La base no devolvió el turno creado');
 
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId: appointment.id, ...creation });
+      await scheduleCalendarSync(tx, { tenantId, appointmentId: appointment.id, now });
       // Los recordatorios y el vencimiento quedan programados con la reserva (4.5, 4.7).
       await scheduleReminders(tx, {
         tenantId,
@@ -770,6 +772,7 @@ export async function rescheduleAppointment(
       });
       await tx.update(appointments).set({ timeRange: newRange }).where(thisAppointment);
       await tx.insert(appointmentEvents).values({ tenantId, appointmentId, ...event });
+      await scheduleCalendarSync(tx, { tenantId, appointmentId, now });
       // Para los recordatorios, el turno se reservó ahora: la clienta acaba de elegir el horario (4.7).
       await scheduleReminders(tx, {
         tenantId,
