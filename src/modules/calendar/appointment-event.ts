@@ -12,7 +12,7 @@ export const APPOINTMENT_EVENT_DESCRIPTION =
 const MINUTE_MS = 60_000;
 
 /** D8: tienen evento los confirmados y los que tienen la seña en verificación (la clienta ya pagó). */
-const WITH_EVENT: readonly AppointmentStatus[] = ['CONFIRMED', 'DEPOSIT_REVIEW'];
+export const STATUSES_WITH_EVENT: readonly AppointmentStatus[] = ['CONFIRMED', 'DEPOSIT_REVIEW'];
 /** Completado o ausente: el evento queda en la agenda como historial. */
 const KEPT: readonly AppointmentStatus[] = ['COMPLETED', 'NO_SHOW'];
 
@@ -37,7 +37,7 @@ export function appointmentEventAction(appointment: {
 }): AppointmentEventAction {
   const { appointmentId, status } = appointment;
   if (KEPT.includes(status)) return { kind: 'keep' };
-  if (!WITH_EVENT.includes(status)) return { kind: 'delete', eventId: eventIdFor(appointmentId) };
+  if (!STATUSES_WITH_EVENT.includes(status)) return { kind: 'delete', eventId: eventIdFor(appointmentId) };
 
   const tentative = status === 'DEPOSIT_REVIEW';
   const name = appointment.customerName ?? appointment.profileName ?? 'Clienta';

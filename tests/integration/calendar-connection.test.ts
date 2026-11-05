@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { connectProfessionalCalendar } from '../../src/modules/calendar/connection.js';
 import { GoogleApiError } from '../../src/modules/calendar/google-auth.js';
 import { professionals } from '../../src/modules/catalog/schema.js';
+import { bookAppointment, changeAppointmentStatus } from '../../src/modules/scheduling/booking.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { tenants } from '../../src/modules/tenants/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
@@ -110,5 +111,57 @@ describe('connectProfessionalCalendar (D11)', () => {
         { tenantSlug: 'no-existe', professionalName: 'Mica', calendarId: CALENDAR },
       ),
     ).toEqual({ status: 'tenant_not_found' });
+  });
+
+  it('los turnos futuros que ya estaban tomados también se reflejan (D13)', async () => {
+    const fixture = await createBookableFixture(db, { settings: { depositRequirement: 'never' } });
+    const book = async (start: Date, now: Date) => {
+      const result = await bookAppointment(db, {
+        tenantId: fixture.tenantId,
+        customerId: fixture.customerId,
+        serviceId: fixture.serviceId,
+        professionalId: fixture.professionalId,
+        start,
+        actor: 'assistant',
+        now,
+      });
+      if (!result.ok) throw new Error(result.reason);
+      return result.appointmentId;
+    };
+    // Martes 10/11 a las 10 y a las 15 (futuros; el lunes 9 es feriado); lunes 2/11 a las 10 (ya pasó).
+    const upcoming = await book(new Date('2026-11-10T13:00:00Z'), NOW);
+    const cancelled = await book(new Date('2026-11-10T18:00:00Z'), NOW);
+    await changeAppointmentStatus(db, { tenantId: fixture.tenantId, appointmentId: cancelled, to: 'CANCELLED_BY_CUSTOMER', actor: 'assistant', now: NOW });
+    await book(new Date('2026-11-02T13:00:00Z'), new Date('2026-11-01T13:00:00Z'));
+
+    expect((await connect(fixture)).result).toEqual({ status: 'connected' });
+
+    const jobs = await db
+      .select({ key: scheduledJobs.key, runAt: scheduledJobs.runAt })
+      .from(scheduledJobs)
+      .where(and(eq(scheduledJobs.tenantId, fixture.tenantId), eq(scheduledJobs.kind, 'sync_appointment_event')));
+    expect(jobs).toEqual([{ key: upcoming, runAt: NOW }]);
+  });
+
+  it('si no se pudo conectar, no programa los turnos', async () => {
+    const fixture = await createBookableFixture(db, { settings: { depositRequirement: 'never' } });
+    const booked = await bookAppointment(db, {
+      tenantId: fixture.tenantId,
+      customerId: fixture.customerId,
+      serviceId: fixture.serviceId,
+      professionalId: fixture.professionalId,
+      start: new Date('2026-11-10T13:00:00Z'),
+      actor: 'assistant',
+      now: NOW,
+    });
+    expect(booked.ok).toBe(true);
+
+    await connect(fixture, fakeGoogleCalendar({ fail: new GoogleApiError('Not Found', 404, 'notFound'), failOn: 'list' }));
+
+    const jobs = await db
+      .select({ key: scheduledJobs.key })
+      .from(scheduledJobs)
+      .where(and(eq(scheduledJobs.tenantId, fixture.tenantId), eq(scheduledJobs.kind, 'sync_appointment_event')));
+    expect(jobs).toEqual([]);
   });
 });

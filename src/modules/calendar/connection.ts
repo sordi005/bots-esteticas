@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, sql } from 'drizzle-orm';
 import { professionals } from '../catalog/schema.js';
 import { scheduleJob } from '../jobs/queue.js';
 import { tenants } from '../tenants/schema.js';
-import { eventIdFor } from './appointment-event.js';
+import { appointments } from '../scheduling/schema.js';
+import { eventIdFor, STATUSES_WITH_EVENT } from './appointment-event.js';
 import type { CalendarDependencies } from './appointment-sync.js';
 import { GoogleApiError } from './google-auth.js';
 
@@ -22,8 +23,9 @@ const HOUR_MS = 3_600_000;
 /**
  * Conecta el calendario de una profesional (8.4, D11). Antes de guardarlo verifica con Google que
  * la cuenta de servicio puede leerlo y escribir en él: escribe un evento de ayer (en el pasado no
- * dispara recordatorios) y lo borra en el momento. Después programa la primera copia de bloqueos,
- * en la misma transacción que guarda el calendario.
+ * dispara recordatorios) y lo borra en el momento. Después, en la misma transacción que guarda el
+ * calendario, programa la primera copia de bloqueos y la tarea de cada turno futuro que ya estaba
+ * tomado (D13): así también aparecen los turnos de antes de conectar.
  */
 export async function connectProfessionalCalendar(
   deps: CalendarDependencies,
@@ -81,6 +83,26 @@ export async function connectProfessionalCalendar(
       payload: { professionalId: professional.id },
       runAt: now,
     });
+    const upcoming = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.tenantId, tenant.id),
+          eq(appointments.professionalId, professional.id),
+          inArray(appointments.status, [...STATUSES_WITH_EVENT]),
+          gt(sql`upper(${appointments.timeRange})`, now),
+        ),
+      );
+    for (const appointment of upcoming) {
+      await scheduleJob(tx, {
+        tenantId: tenant.id,
+        kind: 'sync_appointment_event',
+        key: appointment.id,
+        payload: { appointmentId: appointment.id },
+        runAt: now,
+      });
+    }
   });
   return { status: 'connected' };
 }

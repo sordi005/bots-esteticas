@@ -8,6 +8,7 @@ import { overlaps } from '../scheduling/availability-context.js';
 import { replaceCalendarBlocks } from '../scheduling/calendar-sync.js';
 import { appointments } from '../scheduling/schema.js';
 import { tenants, tenantSettings } from '../tenants/schema.js';
+import { STATUSES_WITH_EVENT } from './appointment-event.js';
 import type { CalendarDependencies } from './appointment-sync.js';
 import { busyBlocks } from './busy-blocks.js';
 import type { CalendarEvent } from './client.js';
@@ -86,7 +87,7 @@ async function manualEdits(
         eq(appointments.tenantId, tenantId),
         eq(appointments.professionalId, input.professionalId),
         isNotNull(appointments.calendarEventId),
-        inArray(appointments.status, ['CONFIRMED', 'DEPOSIT_REVIEW']),
+        inArray(appointments.status, [...STATUSES_WITH_EVENT]),
         overlaps(appointments.timeRange, input.window),
       ),
     );
