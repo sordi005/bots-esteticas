@@ -1,15 +1,18 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import type { Queryable } from '../../shared/db.js';
 import { customers } from '../customers/schema.js';
 import { parseOwnerButtonId } from '../notifications/owner-buttons.js';
 import { storeOwnerReply } from '../notifications/replies.js';
 import { tenants } from '../tenants/schema.js';
 import {
+  type EchoEvent,
   inboundContent,
   type InboundMessageEvent,
   type MessageStatusEvent,
   type WebhookEvent,
 } from '../whatsapp/webhook-payload.js';
+import { HANDOFF_PAUSE_MS } from './handoff.js';
 import { scheduleConversation } from './processing.js';
 import { conversations, messages } from './schema.js';
 
@@ -23,6 +26,8 @@ import { conversations, messages } from './schema.js';
  */
 export interface InboxSummary {
   stored: number;
+  /** Mensajes que la dueña mandó desde su app (coexistencia, 8.1), guardados por primera vez. */
+  echoes: number;
   duplicates: number;
   /** Botones de avisos que tocó la dueña, guardados para procesar. */
   ownerReplies: number;
@@ -55,6 +60,7 @@ export async function recordWebhookEvents(
 ): Promise<InboxSummary> {
   const summary: InboxSummary = {
     stored: 0,
+    echoes: 0,
     duplicates: 0,
     ownerReplies: 0,
     ownerIgnored: 0,
@@ -117,7 +123,15 @@ export async function recordWebhookEvents(
       } else {
         summary.duplicates += 1;
       }
-    } else if (event.kind === 'status') {
+    } else if (event.kind === 'echo') {
+      if (!WA_ID.test(event.to)) {
+        summary.invalid += 1;
+      } else if (await storeEcho(db, tenantId, event, options.now)) {
+        summary.echoes += 1;
+      } else {
+        summary.duplicates += 1;
+      }
+    } else {
       if (await recordStatus(db, tenantId, event)) summary.statusesUpdated += 1;
       if (event.status === 'failed') {
         summary.failedDeliveries.push({ messageId: event.messageId, errors: event.errors });
@@ -126,6 +140,62 @@ export async function recordWebhookEvents(
   }
 
   return summary;
+}
+
+/**
+ * Guarda el mensaje recibido en la conversación de la clienta, creando las dos si hace falta.
+ * Devuelve la conversación, o null si ese id de mensaje ya estaba guardado (Meta reintenta).
+ */
+async function storeInConversation(
+  tx: Queryable,
+  tenantId: string,
+  input: {
+    /** wa_id de la clienta: la que escribió o a la que le escribió la dueña. */
+    customerWaId: string;
+    profileName: string | null;
+    direction: 'inbound' | 'echo';
+    event: { messageId: string; timestamp: Date; type: string; message: Record<string, unknown> };
+  },
+): Promise<string | null> {
+  const { event } = input;
+  const [customer] = await tx
+    .insert(customers)
+    .values({ tenantId, phone: `+${input.customerWaId}`, whatsappProfileName: input.profileName })
+    .onConflictDoUpdate({
+      target: [customers.tenantId, customers.phone],
+      set: {
+        whatsappProfileName: sql`coalesce(excluded.whatsapp_profile_name, ${customers.whatsappProfileName})`,
+      },
+    })
+    .returning({ id: customers.id });
+  if (!customer) throw new Error('La base no devolvió la clienta');
+
+  const [conversation] = await tx
+    .insert(conversations)
+    .values({ tenantId, customerId: customer.id, lastMessageAt: event.timestamp })
+    .onConflictDoUpdate({
+      target: [conversations.tenantId, conversations.customerId],
+      set: {
+        lastMessageAt: sql`greatest(${conversations.lastMessageAt}, excluded.last_message_at)`,
+      },
+    })
+    .returning({ id: conversations.id });
+  if (!conversation) throw new Error('La base no devolvió la conversación');
+
+  const inserted = await tx
+    .insert(messages)
+    .values({
+      tenantId,
+      conversationId: conversation.id,
+      direction: input.direction,
+      type: event.type,
+      content: event.message,
+      whatsappMessageId: event.messageId,
+      occurredAt: event.timestamp,
+    })
+    .onConflictDoNothing({ target: messages.whatsappMessageId })
+    .returning({ id: messages.id });
+  return inserted.length > 0 ? conversation.id : null;
 }
 
 /**
@@ -140,46 +210,57 @@ async function storeInboundMessage(
   receivedAt: Date,
 ): Promise<boolean> {
   return db.transaction(async (tx) => {
-    const [customer] = await tx
-      .insert(customers)
-      .values({ tenantId, phone: `+${event.from}`, whatsappProfileName: event.profileName })
-      .onConflictDoUpdate({
-        target: [customers.tenantId, customers.phone],
-        set: {
-          whatsappProfileName: sql`coalesce(excluded.whatsapp_profile_name, ${customers.whatsappProfileName})`,
-        },
-      })
-      .returning({ id: customers.id });
-    if (!customer) throw new Error('La base no devolvió la clienta');
+    const conversationId = await storeInConversation(tx, tenantId, {
+      customerWaId: event.from,
+      profileName: event.profileName,
+      direction: 'inbound',
+      event,
+    });
+    if (!conversationId) return false;
 
-    const [conversation] = await tx
-      .insert(conversations)
-      .values({ tenantId, customerId: customer.id, lastMessageAt: event.timestamp })
-      .onConflictDoUpdate({
-        target: [conversations.tenantId, conversations.customerId],
-        set: {
-          lastMessageAt: sql`greatest(${conversations.lastMessageAt}, excluded.last_message_at)`,
-        },
-      })
-      .returning({ id: conversations.id });
-    if (!conversation) throw new Error('La base no devolvió la conversación');
+    await scheduleConversation(tx, { tenantId, conversationId, receivedAt });
+    return true;
+  });
+}
 
-    const inserted = await tx
-      .insert(messages)
-      .values({
-        tenantId,
-        conversationId: conversation.id,
-        direction: 'inbound',
-        type: event.type,
-        content: event.message,
-        whatsappMessageId: event.messageId,
-        occurredAt: event.timestamp,
-      })
-      .onConflictDoNothing({ target: messages.whatsappMessageId })
-      .returning({ id: messages.id });
-    if (inserted.length === 0) return false;
+/**
+ * Guarda el mensaje que la dueña mandó desde su app y, en la misma transacción, pausa el asistente
+ * en esa conversación hasta 12 horas después del eco (4.8): si la dueña escribió, el asistente se
+ * calla. No programa la vuelta de la conversación (no hay nada que contestar) ni crea una
+ * derivación. true si el eco es nuevo.
+ */
+async function storeEcho(
+  db: NodePgDatabase,
+  tenantId: string,
+  event: EchoEvent,
+  now: Date,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    // El eco no trae el nombre de perfil de la clienta: si ya lo teníamos, queda.
+    const conversationId = await storeInConversation(tx, tenantId, {
+      customerWaId: event.to,
+      profileName: null,
+      direction: 'echo',
+      event,
+    });
+    if (!conversationId) return false;
 
-    await scheduleConversation(tx, { tenantId, conversationId: conversation.id, receivedAt });
+    const pausedUntil = new Date(event.timestamp.getTime() + HANDOFF_PAUSE_MS);
+    // Un eco que llegó tan tarde que sus 12 horas ya pasaron se guarda, pero no pausa.
+    if (pausedUntil.getTime() <= now.getTime()) return true;
+
+    const until = sql`${pausedUntil.toISOString()}::timestamptz`;
+    await tx
+      .update(conversations)
+      .set({
+        assistantStatus: 'paused',
+        // Una pausa más larga no se acorta, y una sin fecha (hasta que se reanude a mano) sigue sin fecha.
+        pausedUntil: sql`case
+          when ${conversations.assistantStatus} = 'paused' and ${conversations.pausedUntil} is null then null
+          else greatest(${conversations.pausedUntil}, ${until})
+        end`,
+      })
+      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
     return true;
   });
 }
