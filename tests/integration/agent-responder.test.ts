@@ -1551,7 +1551,7 @@ describe('createAgentResponder: la respuesta que deriva a una persona (4.8, deci
 });
 
 describe('createAgentResponder: el asistente se reanudó después de una derivación (4.8)', () => {
-  const RESUMED_LINE_PATTERN = /El asistente se reanudó después de una derivación/;
+  const RESUMED_LINE_PATTERN = /El asistente se reanudó después de que una persona del equipo atendió esta conversación/;
   const resumedAt = (f: Fixture, when: Date) =>
     db.update(conversations).set({ resumedAt: when }).where(eq(conversations.id, f.conversationId));
 
@@ -1661,7 +1661,7 @@ describe('createAgentResponder: el historial arranca en la reanudación (4.8)', 
     const request = await sentToTheModel(f);
 
     expect(conversationOf(request?.messages ?? [])).toEqual([`user: ${NEW_REQUEST}`]);
-    expect(request?.turnContext).toMatch(/El asistente se reanudó después de una derivación/);
+    expect(request?.turnContext).toMatch(/El asistente se reanudó después de que una persona del equipo atendió esta conversación/);
     // Nada de lo anterior se filtra por otro lado.
     expect(JSON.stringify(request?.messages)).not.toMatch(/persona/);
   });
