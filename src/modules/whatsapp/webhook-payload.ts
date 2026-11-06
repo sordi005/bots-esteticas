@@ -32,7 +32,20 @@ export interface MessageStatusEvent {
   errors: { code: number; title: string }[];
 }
 
-export type WebhookEvent = InboundMessageEvent | MessageStatusEvent;
+/** Un mensaje que la dueña mandó desde su app de WhatsApp Business (coexistencia, 8.1). */
+export interface EchoEvent {
+  kind: 'echo';
+  phoneNumberId: string;
+  /** wa_id de la clienta a la que le escribió la dueña. */
+  to: string;
+  messageId: string;
+  timestamp: Date;
+  /** text, image, video, document… y también edit o revoke (editó o borró un mensaje). */
+  type: string;
+  message: Record<string, unknown>;
+}
+
+export type WebhookEvent = InboundMessageEvent | MessageStatusEvent | EchoEvent;
 
 const unixSeconds = z.string().regex(/^\d+$/);
 
@@ -62,6 +75,21 @@ const valueSchema = z.looseObject({
   statuses: z.array(statusSchema).optional(),
 });
 
+/** Sin `to` (la clienta solo tiene nombre de usuario) no se sabe de qué conversación es: se ignora. */
+const echoSchema = z.looseObject({
+  to: z.string().min(1),
+  id: z.string().min(1),
+  timestamp: unixSeconds,
+  type: z.string().min(1),
+});
+
+const echoValueSchema = z.looseObject({
+  messaging_product: z.literal('whatsapp'),
+  metadata: z.looseObject({ phone_number_id: z.string().min(1) }),
+  // Cada eco se valida por separado: uno que no se entiende no tira los demás.
+  message_echoes: z.array(z.unknown()),
+});
+
 const envelopeSchema = z.object({
   object: z.literal('whatsapp_business_account'),
   entry: z.array(
@@ -79,7 +107,32 @@ export function parseWebhook(body: unknown): { events: WebhookEvent[]; ignored: 
   let ignored = 0;
 
   for (const change of envelope.data.entry.flatMap((entry) => entry.changes)) {
-    // Otros campos (ecos de la coexistencia, cambios de la cuenta) llegan en hitos futuros.
+    if (change.field === 'smb_message_echoes') {
+      const value = echoValueSchema.safeParse(change.value);
+      if (!value.success) {
+        ignored += 1;
+        continue;
+      }
+      for (const raw of value.data.message_echoes) {
+        const echo = echoSchema.safeParse(raw);
+        if (!echo.success) {
+          ignored += 1;
+          continue;
+        }
+        events.push({
+          kind: 'echo',
+          phoneNumberId: value.data.metadata.phone_number_id,
+          to: echo.data.to,
+          messageId: echo.data.id,
+          timestamp: fromUnixSeconds(echo.data.timestamp),
+          type: echo.data.type,
+          message: echo.data,
+        });
+      }
+      continue;
+    }
+
+    // Otros campos (cambios de la cuenta, H14) llegan en hitos futuros.
     const value = change.field === 'messages' ? valueSchema.safeParse(change.value) : null;
     if (!value?.success) {
       ignored += 1;

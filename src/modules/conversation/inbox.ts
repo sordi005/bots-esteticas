@@ -117,7 +117,7 @@ export async function recordWebhookEvents(
       } else {
         summary.duplicates += 1;
       }
-    } else {
+    } else if (event.kind === 'status') {
       if (await recordStatus(db, tenantId, event)) summary.statusesUpdated += 1;
       if (event.status === 'failed') {
         summary.failedDeliveries.push({ messageId: event.messageId, errors: event.errors });
