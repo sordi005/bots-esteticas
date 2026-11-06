@@ -789,7 +789,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[S]** Una respuesta guardada que no se pudo enviar en 5 minutos se descarta, con un aviso en el log: los reintentos son a los 30 segundos y a los 2 minutos, y más tarde ya no tiene sentido.
 - Si el envío sale pero falla borrar la respuesta guardada, el reintento puede repetirla: es preferible contestar dos veces a no contestar. La excepción es la pausa: si la dueña escribió, el asistente se calla (4.8).
 - **[D]** Si el asistente está pausado por una derivación o un eco (4.8), los mensajes se marcan como procesados sin llamar al modelo. Antes, el código registra el comprobante si una imagen lo es (4.5).
-- **[D]** Si la conversación se pausó mientras el modelo armaba la respuesta (llegó un eco, H13), la respuesta no se guarda ni se envía: la transacción que la guarda bloquea la conversación y vuelve a mirar la pausa. Lo mismo al reenviar una respuesta guardada: si la conversación se pausó, se descarta.
+- **[D]** Si llegó un eco mientras el modelo armaba la respuesta (H13), la respuesta no se guarda ni se envía: la transacción que la guarda bloquea la conversación y vuelve a contar los ecos. No alcanza con mirar la pausa: una derivación de esa misma vuelta también pausa, y su mensaje ("una persona te va a responder") sí tiene que salir. Una respuesta guardada sin enviar la borra el eco mismo, en la transacción que pausa.
 - **[S]** Solo contestan los negocios activos. Los mensajes de un negocio pausado o dado de baja se marcan como procesados sin respuesta, con un aviso en el log.
 - **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 

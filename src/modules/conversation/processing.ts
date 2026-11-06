@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, isNull } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { z } from 'zod';
@@ -89,6 +89,21 @@ export async function scheduleConversation(
   });
 }
 
+/** Cuántos mensajes mandó la dueña desde su app en esta conversación (ecos, 8.1). */
+async function countEchoes(db: Queryable, tenantId: string, conversationId: string): Promise<number> {
+  const [row] = await db
+    .select({ total: count() })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.tenantId, tenantId),
+        eq(messages.conversationId, conversationId),
+        eq(messages.direction, 'echo'),
+      ),
+    );
+  return row?.total ?? 0;
+}
+
 /** Lo que hace falta para enviar una respuesta de esta conversación. */
 interface ReplyTarget {
   tenantId: string;
@@ -140,7 +155,7 @@ async function clearPendingReply(db: Queryable, target: ReplyTarget, savedAt: Da
 /**
  * Si quedó una respuesta guardada de una vuelta anterior, la envía (o la descarta si es vieja).
  * Devuelve si se envió. Se envía aunque la conversación esté pausada: puede ser el mensaje de la
- * derivación (4.8).
+ * derivación (4.8). Si la dueña escribió desde su app, el eco ya la borró (inbox.ts).
  */
 async function sendLeftoverReply(
   deps: ConversationDependencies,
@@ -279,6 +294,8 @@ export async function processConversation(
       );
   }
 
+  // Los ecos de antes de pensar: si mientras el modelo piensa llega otro, la dueña tomó el chat.
+  const echoesBefore = await countEchoes(db, tenantId, conversationId);
   const reply = await deps.respond(
     { tenantId, conversationId, customerId, messages: pending },
     { signal },
@@ -290,13 +307,29 @@ export async function processConversation(
 
   // La respuesta se guarda junto con la marca de procesados, y recién después se envía (6.7).
   const savedAt = deps.now();
-  await db.transaction(async (tx) => {
+  const saved = await db.transaction(async (tx) => {
+    // Bloquear la conversación ordena esta vuelta con el eco, que la actualiza al pausarla (inbox.ts).
+    await tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)))
+      .for('update');
+    if ((await countEchoes(tx, tenantId, conversationId)) !== echoesBefore) {
+      // No alcanza con mirar la pausa: una derivación de esta misma vuelta también pausa, y su mensaje sí sale.
+      await markProcessed(tx);
+      return false;
+    }
     await tx
       .update(conversations)
       .set({ pendingReply: reply, pendingReplyAt: savedAt })
       .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
     await markProcessed(tx);
+    return true;
   });
+  if (!saved) {
+    target.logger.info('La dueña escribió mientras el asistente armaba la respuesta: no se envía');
+    return 'paused';
+  }
   await deliverPendingReply(deps, target, { message: reply, savedAt }, signal);
 
   return 'replied';

@@ -259,6 +259,9 @@ async function storeEcho(
           when ${conversations.assistantStatus} = 'paused' and ${conversations.pausedUntil} is null then null
           else greatest(${conversations.pausedUntil}, ${until})
         end`,
+        // La respuesta que el asistente tenía guardada sin enviar ya no sale: se pisaría con la dueña (6.7).
+        pendingReply: null,
+        pendingReplyAt: null,
       })
       .where(and(eq(conversations.tenantId, tenantId), eq(conversations.id, conversationId)));
     return true;
