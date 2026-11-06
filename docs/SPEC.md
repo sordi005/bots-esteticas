@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.17 · 04/11/2026 · Autor: Yordi
+> **Estado:** borrador v0.18 · 06/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -406,12 +406,20 @@ Detalle de la derivación (H8):
 **Cómo se reanuda:**
 
 - **[D]** Si la dueña responde desde su app de WhatsApp Business, el sistema lo detecta (mensajes "eco" de la coexistencia, sección 8.1) y **mantiene pausado** el asistente mientras ella esté conversando.
-- **[S]** El asistente se reanuda solo después de 12 horas sin mensajes de la dueña en esa conversación. Hasta que lleguen los ecos (H13), las 12 horas se cuentan desde la derivación (`paused_until`); en H13 cada eco las corre.
+- **[S]** El asistente se reanuda solo después de 12 horas sin mensajes de la dueña en esa conversación. Las 12 horas se cuentan desde la derivación (`paused_until`) y cada eco las corre.
+
+Detalle de los ecos (H13):
+
+- **[D]** Todo mensaje de la dueña desde su app pausa el asistente en esa conversación, haya o no una derivación: la pausa dura hasta 12 horas después del eco, o más si ya estaba pausado por más tiempo. Una pausa sin fecha (hasta que se reanude a mano) sigue sin fecha. Cuenta cualquier eco, también editar o borrar un mensaje: es la dueña atendiendo ese chat.
+- **[D]** Si la dueña le escribe primero a alguien que todavía no es clienta, se crea la clienta y su conversación, ya pausada: cuando conteste, el asistente no se mete.
+- **[D]** Un eco que llega con tanta demora que sus 12 horas ya pasaron se guarda, pero no pausa.
+- **[D]** El eco no crea una derivación ni avisa a la dueña (es ella la que escribe), y no resuelve una derivación abierta: eso lo hace solo "Ya la atendí", la señal explícita.
+- **[D]** Si el eco llega mientras el asistente arma una respuesta (el modelo está pensando), esa respuesta no se envía (6.7). Lo que ya hicieron las herramientas en esa vuelta queda hecho.
 - **[D]** La pausa vence sola por fecha: no hace falta una tarea programada. Al procesar una conversación con la pausa vencida, el asistente vuelve a estar activo y contesta normalmente.
 - **[D]** Mientras el asistente está pausado, los mensajes de la clienta se marcan como procesados sin llamar al modelo ni contestar. Así no se acumulan para cuando se reanude: los atiende la persona. La única excepción es el comprobante de una seña, que el código registra igual (4.5).
 - **[D]** Que venza la pausa no resuelve la derivación: queda abierta hasta que la resuelva una persona.
 - **[D]** La dueña la resuelve con el botón "Ya la atendí" del aviso (H9; desde H15 también desde el panel). Resolverla **reanuda el asistente** en esa conversación en ese momento, igual que cuando vence la pausa (`resumed_at`): es la señal más explícita de que terminó. Si el asistente ya se había reanudado, o en esa conversación hay una derivación más nueva abierta, solo la marca como resuelta. Tocar el botón de una derivación ya resuelta no cambia nada.
-- **[D]** Al reanudarse, el asistente no ve lo que se habló antes: eso ya lo atendió (o lo está atendiendo) una persona. Se guarda cuándo se reanudó (`resumed_at`), el historial que ve el modelo arranca ahí (también las opciones elegidas que habilitan reservar o reprogramar: una elección de antes de la derivación ya no cuenta) y el contexto de la vuelta le avisa que se reanudó después de una derivación, para que atienda solo el pedido nuevo. Sin esto, la prueba manual con Meta mostró un ciclo: al vencer la pausa, el modelo veía en el historial a la clienta pidiendo una persona sin respuesta ("¿qué pasó con la persona?") y volvía a derivar, sin atender el turno que pedía. Los mensajes que la dueña manda desde su app (ecos, H13) no entran en ese historial, así que el ciclo no se cortaría solo.
+- **[D]** Al reanudarse, el asistente no ve lo que se habló antes: eso ya lo atendió (o lo está atendiendo) una persona. Se guarda cuándo se reanudó (`resumed_at`), el historial que ve el modelo arranca ahí (también las opciones elegidas que habilitan reservar o reprogramar: una elección de antes de la derivación ya no cuenta) y el contexto de la vuelta le avisa que se reanudó después de que la atendió una persona del equipo (con o sin derivación: la pausa puede venir de un eco), para que atienda solo el pedido nuevo. Sin esto, la prueba manual con Meta mostró un ciclo: al vencer la pausa, el modelo veía en el historial a la clienta pidiendo una persona sin respuesta ("¿qué pasó con la persona?") y volvía a derivar, sin atender el turno que pedía. Los mensajes que la dueña manda desde su app (ecos, H13) no entran en ese historial, así que el ciclo no se cortaría solo.
 - **[D]** Regla de oro: **si la dueña escribió en una conversación, el asistente se calla.** Es preferible que el asistente no conteste a que se pise con ella.
 
 **Aviso diario a la dueña [S]:** a las 8 de la mañana, un resumen con los turnos del día, los turnos sin confirmar y las derivaciones pendientes. A las 21, un mensaje con los turnos del día para marcar ausentes con un botón.
@@ -716,7 +724,8 @@ Detalles del webhook **[D]**:
 - Si falla el guardado (por ejemplo, la base no responde), el webhook responde `500` y Meta reintenta. Por eso guardar tiene que ser idempotente.
 - Una clienta nueva se crea con su número como `+` seguido del `wa_id` y su nombre de perfil. Una conversación por clienta.
 - Los estados de los mensajes enviados guardan la categoría de precio de Meta en el mensaje. Un envío fallido queda en el log como advertencia; la alerta a Yordi llega en H14.
-- Los cambios de otros campos se ignoran hasta su hito, por ejemplo los ecos de la coexistencia (H13).
+- Los ecos de la coexistencia (campo `smb_message_echoes`, H13) se guardan en `messages` con dirección eco, una sola vez por id de mensaje, y pausan el asistente en la misma transacción (4.8). No programan la vuelta de la conversación: no hay nada que contestar. La clienta es el destinatario del eco (`to`); un eco sin teléfono (solo nombre de usuario) se descarta como inválido, igual que un mensaje (8.1). Lo que llega al número de avisos (8.2) no son ecos de un negocio y se ignora.
+- Los cambios de otros campos se ignoran hasta su hito, por ejemplo `account_update` (H14, 10.3).
 - Meta llama con un `GET` al registrar el webhook: se responde el `hub.challenge` si el `hub.verify_token` coincide.
 
 ### 6.6 Turnos simultáneos
@@ -778,8 +787,9 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 
 - **[D]** La respuesta se guarda en la conversación (`pending_reply`) en la misma transacción que marca los mensajes como procesados, y recién después se envía. Si el envío falla, el reintento **solo reenvía la respuesta guardada**: no vuelve a llamar al modelo. Desde H8 las herramientas cambian cosas (reservan, cancelan, derivan), y volver a correr el agente daría otra respuesta: después de cancelar un turno, el segundo intento ya no lo encuentra y contestaría "no tenés turnos".
 - **[S]** Una respuesta guardada que no se pudo enviar en 5 minutos se descarta, con un aviso en el log: los reintentos son a los 30 segundos y a los 2 minutos, y más tarde ya no tiene sentido.
-- Si el envío sale pero falla borrar la respuesta guardada, el reintento puede repetirla: es preferible contestar dos veces a no contestar.
-- **[D]** Si el asistente está pausado por una derivación (4.8), los mensajes se marcan como procesados sin llamar al modelo. Antes, el código registra el comprobante si una imagen lo es (4.5).
+- Si el envío sale pero falla borrar la respuesta guardada, el reintento puede repetirla: es preferible contestar dos veces a no contestar. La excepción es la pausa: si la dueña escribió, el asistente se calla (4.8).
+- **[D]** Si el asistente está pausado por una derivación o un eco (4.8), los mensajes se marcan como procesados sin llamar al modelo. Antes, el código registra el comprobante si una imagen lo es (4.5).
+- **[D]** Si la conversación se pausó mientras el modelo armaba la respuesta (llegó un eco, H13), la respuesta no se guarda ni se envía: la transacción que la guarda bloquea la conversación y vuelve a mirar la pausa. Lo mismo al reenviar una respuesta guardada: si la conversación se pausó, se descarta.
 - **[S]** Solo contestan los negocios activos. Los mensajes de un negocio pausado o dado de baja se marcan como procesados sin respuesta, con un aviso en el log.
 - **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 
@@ -868,12 +878,18 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 ### 8.1 WhatsApp Cloud API
 
 - **[D] Coexistencia como requisito del MVP.** La dueña sigue usando su app de WhatsApp Business con el mismo número, y los mensajes que ella manda desde la app le llegan al sistema como "ecos". Eso es lo que permite la regla "si la dueña escribió, el asistente se calla" (4.8).
-- Condiciones de la coexistencia a tener en cuenta en el onboarding:
-  - Meta exige que el número venga usándose de forma activa en la app de WhatsApp Business. Una cuenta recién creada no califica de inmediato.
-  - La dueña tiene que abrir la app al menos una vez cada 14 días o la sincronización puede dejar de funcionar. **Hay que monitorearlo** (sección 10.3).
-  - Al conectar, se desvinculan los dispositivos acompañantes (como WhatsApp Web) y hay que volver a vincular los compatibles.
-  - Los mensajes que la dueña manda desde la app son gratis. Los que manda el sistema se cobran según las reglas de Meta.
-  - **[?]** Confirmar que la coexistencia esté disponible para números de Argentina antes de vender.
+- Condiciones de la coexistencia a tener en cuenta en el onboarding (documentación oficial de Meta, "Registrar usuarios de la app de WhatsApp Business", revisada el 06/11/2026):
+  - **[D]** Un número se conecta con coexistencia solo con el **registro insertado** (Embedded Signup) de un socio de soluciones o un **proveedor de tecnología**. Para serlo, Yordi tiene que verificar su negocio en Meta y pasar la revisión de la app, que da el acceso avanzado a `whatsapp_business_messaging` y `whatsapp_business_management` (sección 15, antes de vender). En modo desarrollo, el registro insertado funciona para quien tiene un rol en la app: así se hace la prueba de H13. El flujo del registro entra en el panel (H15).
+  - La dueña tiene que usar la app de WhatsApp Business 2.24.17 o posterior.
+  - Si el celular principal de la dueña queda inactivo unos 14 días, Meta desconecta el número de la API (webhook `account_update`, evento `PARTNER_REMOVED`, motivo `PRIMARY_INACTIVITY`); un dispositivo vinculado inactivo 30 días, igual. **Hay que monitorearlo** (sección 10.3).
+  - Al conectar, se desvinculan los dispositivos acompañantes (como WhatsApp Web) y hay que volver a vincular los compatibles (todos menos WhatsApp para Windows y para WearOS).
+  - En la app de la dueña se apagan los mensajes temporales, los de visualización única y la ubicación en tiempo real en los chats individuales, y las listas de difusión quedan de solo lectura. Los grupos no se sincronizan. Contárselo antes de conectar.
+  - Los mensajes que la dueña manda desde la app son gratis y **no abren ni extienden la ventana de 24 horas** (8.2): solo la abre la clienta al escribir. Los que manda el sistema se cobran según las reglas de Meta.
+  - El número queda con un rendimiento fijo de 20 mensajes por segundo: sobra para una estética.
+  - La documentación oficial no excluye ningún país; Argentina no figura con restricciones. Lo confirma la prueba manual de H13 con un número argentino.
+- **[D] Ecos (H13):** el campo `smb_message_echoes` trae los mensajes que la dueña manda desde la app o un dispositivo vinculado: texto, imagen, video, documento, y también editar (`edit`) o borrar (`revoke`) un mensaje. Cada eco dice a quién se mandó (`to`, el teléfono de la clienta, que falta si ella solo tiene nombre de usuario) y cuándo. Los mensajes que manda la API no llegan como eco. Qué se hace con ellos: 4.8 y 6.5.
+- **[D]** No se sincroniza el historial ni los contactos de la app (campos `history` y `smb_app_state_sync`): las clientas se crean cuando escriben, y no se copian a nuestra base seis meses de chats con datos que no necesitamos (9.2). Meta solo permite sincronizar dentro de las 24 horas del registro; cambiar de idea después obliga a registrar el número de nuevo.
+- **[D]** `pnpm whatsapp:connect` informa si el número está en coexistencia: Meta lo confirma con `is_on_biz_app` en `true` y `platform_type` en `CLOUD_API`.
 - **[D]** Si un negocio no califica para coexistencia, no entra al MVP. Queda en espera hasta la fase 3, cuando exista el panel de la dueña para responder conversaciones.
 - **Plantillas:** se crean y aprueban en la cuenta de cada negocio durante el onboarding. Mínimo: recordatorio del día anterior (utilidad, con 3 botones) y aviso de reserva vencida (utilidad).
 - **[D] Plantillas (H10):** las define el código (`whatsapp/templates.ts`): nombre, categoría, idioma `es_AR`, texto, variables con nombre (`{{servicio}}`) y botones. El texto sirve para mostrar en el historial del modelo lo que se envió (los avisos del sistema se marcan como tales, 4.5) y para verificar la plantilla aprobada.
@@ -886,7 +902,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
   - La lista de permitidos compara el número como texto. A un celular argentino WhatsApp lo identifica como `549` + área + número, pero la lista lo guarda como `54` + área + `15` + número, y contestarle al `wa_id` da el error 131030. Es solo del modo de prueba: en producción no hay lista. Para probar en desarrollo, `WHATSAPP_TEST_RECIPIENT` en `.env` con el número como figura en la lista: todo envío va a ese número. En producción el servidor no arranca con esa variable.
   - El token de acceso que da el panel de prueba vence en pocas horas. Para cualquier uso que no sea una prueba corta hace falta un token que no venza (usuario del sistema o el que entrega el registro del negocio).
 - **[D] El webhook necesita dos suscripciones** (aprendido en la prueba de H5: el panel mostró el paso como hecho sin haber guardado ninguna):
-  1. La app, al objeto `whatsapp_business_account` con el campo `messages`: `POST /{app-id}/subscriptions`. Es una sola vez para todo el servicio.
+  1. La app, al objeto `whatsapp_business_account` con los campos `messages` y `smb_message_echoes` (desde H13): `POST /{app-id}/subscriptions`. Es una sola vez para todo el servicio.
   2. **La cuenta de WhatsApp Business de cada negocio, a la app**: `POST /{waba-id}/subscribed_apps`. Va en el onboarding de cada negocio (H15) y se verifica con un `GET` al mismo endpoint.
 - **[?] Identificación sin número de teléfono.** Los webhooks reales ya traen `user_id` / `from_user_id` además de `wa_id`: es el identificador que Meta asocia a los nombres de usuario de WhatsApp. Si una clienta con nombre de usuario puede escribir sin que llegue su número, hoy el mensaje se descarta como inválido (las clientas se identifican por teléfono, sección 7). Revisar la documentación oficial de Meta y decidir el modelo de identidad antes del piloto.
 - **[D]** Se registra el costo estimado de cada mensaje enviado por categoría, para el reporte y para detectar abusos. Desde H5 se guarda la categoría que informa Meta. El costo en dólares necesita la tabla de precios vigente (sección 15) y se calcula cuando exista.
@@ -1005,7 +1021,8 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 | Token de Meta, Mercado Pago o Google inválido o por vencer | Un módulo deja de funcionar en silencio |
 | Plantilla rechazada o pausada por Meta | Los recordatorios dejan de salir |
 | Calendario de una profesional sin sincronizar, o un evento de turno editado o borrado a mano (8.4) | El asistente ofrece horarios bloqueados, o la profesional ve un turno donde no está |
-| Sin mensajes eco de un negocio por más de 10 días | La dueña quizás no abrió la app y la coexistencia se puede caer |
+| Sin mensajes eco de un negocio por más de 10 días (se calcula con los ecos guardados en `messages`) | La dueña quizás no abrió la app: a los 14 días Meta desconecta el número |
+| Número desconectado de la coexistencia (webhook `account_update` con `PARTNER_REMOVED`, 8.1) | El asistente deja de recibir y enviar mensajes de ese negocio |
 | Derivación sin resolver por más de 4 horas en horario de atención | Una clienta está esperando |
 | Al 1 de diciembre, feriados del año siguiente sin cargar | Sin ellos, el asistente ofrecería turnos en feriados |
 | Tasa de derivaciones de un negocio mayor al 30 % en una semana | Falta información cargada |
@@ -1094,8 +1111,8 @@ Se hace en una reunión de 30 a 45 minutos. Las respuestas cargan la configuraci
 
 ### 12.2 Checklist técnica
 
-- [ ] Verificar que el número califica para coexistencia
-- [ ] Conectar el número a la Cloud API con coexistencia
+- [ ] Verificar que el número califica para coexistencia (app de WhatsApp Business 2.24.17 o posterior) y contarle a la dueña qué funciones de la app se apagan (8.1)
+- [ ] Conectar el número a la Cloud API con coexistencia (registro insertado, 8.1) y confirmarlo con `pnpm whatsapp:connect`
 - [ ] Cargar un medio de pago en la cuenta de Meta del negocio
 - [ ] Crear y aprobar las plantillas
 - [ ] Conectar Mercado Pago (OAuth, `pnpm mercadopago:connect`) con la aplicación real del servicio y hacer un cobro de prueba (8.3)
@@ -1155,7 +1172,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H12 | Google Calendar: escritura y bloqueos | Turno aparece y bloqueo se respeta |
 | H13 | Coexistencia: ecos y pausa automática | Prueba manual con un número real |
 | H14 | Observabilidad: Sentry, alertas de 10.3, monitor externo | Alerta de prueba recibida |
-| H15 | Panel admin mínimo para cargar un negocio sin tocar la base a mano | Onboarding de un negocio de prueba desde el panel |
+| H15 | Panel admin mínimo para cargar un negocio sin tocar la base a mano, con el registro insertado de Meta para conectar el número con coexistencia (8.1) | Onboarding de un negocio de prueba desde el panel |
 | H16 | Resumen diario y reporte mensual | Mensajes recibidos en el número de la dueña de prueba |
 | **Piloto** | Primer cliente real | — |
 
@@ -1213,6 +1230,10 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 46 | Google Calendar con `fetch`, Zod y la firma del token con `node:crypto` | La librería oficial `googleapis` | Son cuatro pedidos y una firma; el mismo patrón que con Meta y Mercado Pago (decisión 39) |
 | 47 | La tarea del evento lee el estado actual del turno | Una tarea por cambio con lo que cambió | Repetirla deja el calendario igual, y dos cambios seguidos se resuelven con una sola vuelta |
 | 48 | Los turnos con la seña en verificación tienen evento | Solo los confirmados | La clienta ya pagó y el turno no vence: la profesional tiene que verlo en su agenda |
+| 49 | Todo eco pausa la conversación, con o sin derivación | Pausar solo si había una derivación abierta | La regla de oro (4.8): la dueña puede meterse en cualquier chat, y si el asistente le contesta encima, se pisan |
+| 50 | Un eco no resuelve la derivación | Resolverla cuando la dueña escribe | Que escriba no dice que terminó; "Ya la atendí" sí. Mientras tanto, cada eco corre la pausa |
+| 51 | La respuesta armada se descarta si llegó un eco mientras el modelo pensaba | Enviarla igual | Es justo el caso en que se pisan: la clienta recibiría a la vez lo que dice la dueña y lo que dice el asistente |
+| 52 | No sincronizar el historial ni los contactos de la app | Copiar los últimos seis meses de chats | El asistente no los usa (al reanudarse no ve lo anterior), y son datos personales que no hace falta tener (9.2) |
 
 ---
 
@@ -1233,7 +1254,8 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 
 | Pregunta | Antes de |
 |---|---|
-| Disponibilidad de coexistencia para números de Argentina | Vender |
+| ~~Disponibilidad de coexistencia para números de Argentina~~ Resuelta en H13: la documentación oficial no excluye ningún país (8.1); la prueba manual de H13 se hace con un número argentino | — |
+| Verificación del negocio de Yordi en Meta y revisión de la app como proveedor de tecnología (acceso avanzado a `whatsapp_business_messaging` y `whatsapp_business_management`): sin eso no se puede conectar con coexistencia el número de un negocio real (8.1). La revisión pide videos de la app enviando un mensaje y creando una plantilla | Vender |
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
