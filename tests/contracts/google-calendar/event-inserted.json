@@ -1,0 +1,20 @@
+{
+ "kind": "calendar#event",
+ "etag": "\"3587627779394174\"",
+ "id": "cffcb42eef8b4a0e9f9b9b555253f017",
+ "status": "confirmed",
+ "htmlLink": "https://www.google.com/calendar/event?eid=Y2ZmY2I0MmVlZjhiNGEwZTlmOWI5YjU1NTI1M2YwMTcgZHVlbmFAZ21haWwuY29t",
+ "created": "2026-11-04T17:38:09.000Z",
+ "updated": "2026-11-04T17:38:09.697Z",
+ "summary": "Semipermanente · Laura",
+ "description": "Turno reservado por WhatsApp.",
+ "creator": { "email": "calendario@bots-esteticas.iam.gserviceaccount.com" },
+ "organizer": { "email": "duena@gmail.com", "self": true },
+ "start": { "dateTime": "2026-11-03T18:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+ "end": { "dateTime": "2026-11-03T19:00:00-03:00", "timeZone": "America/Argentina/Mendoza" },
+ "iCalUID": "cffcb42eef8b4a0e9f9b9b555253f017@google.com",
+ "sequence": 0,
+ "extendedProperties": { "private": { "appointmentId": "cffcb42e-ef8b-4a0e-9f9b-9b555253f017" } },
+ "reminders": { "useDefault": true },
+ "eventType": "default"
+}

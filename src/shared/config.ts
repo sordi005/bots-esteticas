@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
 import { parseEncryptionKey } from './encryption.js';
 
@@ -21,6 +22,34 @@ function decodesToKey(value: string): boolean {
     return false;
   }
 }
+
+const serviceAccountFields = z.object({ client_email: z.email(), private_key: z.string().min(1) });
+
+/**
+ * La clave de la cuenta de servicio de Google (8.4): el JSON que descarga Google, en base64. Los
+ * mensajes de error nunca muestran su contenido.
+ */
+const googleServiceAccountKey = z.string().transform((value, context) => {
+  let fields: z.infer<typeof serviceAccountFields>;
+  try {
+    const parsed = serviceAccountFields.safeParse(JSON.parse(Buffer.from(value, 'base64').toString('utf8')));
+    if (!parsed.success) {
+      context.addIssue({ code: 'custom', message: 'Al JSON de la cuenta de servicio le falta client_email o private_key' });
+      return z.NEVER;
+    }
+    fields = parsed.data;
+  } catch {
+    context.addIssue({ code: 'custom', message: 'Tiene que ser el JSON de la cuenta de servicio, en base64' });
+    return z.NEVER;
+  }
+  try {
+    createPrivateKey(fields.private_key);
+  } catch {
+    context.addIssue({ code: 'custom', message: 'La clave privada de la cuenta de servicio no sirve para firmar' });
+    return z.NEVER;
+  }
+  return { clientEmail: fields.client_email, privateKey: fields.private_key };
+});
 
 /** Obligatorias en producción; en desarrollo se puede trabajar sin Meta configurado. */
 const REQUIRED_IN_PRODUCTION = [
@@ -102,6 +131,11 @@ const envSchema = z
         .enum(['true', 'false'])
         .default('false')
         .transform((value) => value === 'true'),
+    ),
+    /** La cuenta de servicio de Google Calendar (8.4): una sola para todos los negocios. */
+    GOOGLE_SERVICE_ACCOUNT_KEY: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      googleServiceAccountKey.optional(),
     ),
     /** Dónde nos encuentra Mercado Pago: la vuelta de OAuth y los avisos de pago (8.3). */
     PUBLIC_BASE_URL: z.preprocess(
@@ -210,6 +244,14 @@ export interface Config {
     publicBaseUrl: string;
     testToken: boolean;
   } | null;
+  /** La cuenta de servicio de Google Calendar (8.4). Sin ella, el calendario queda apagado. */
+  googleServiceAccount: GoogleServiceAccount | null;
+}
+
+export interface GoogleServiceAccount {
+  clientEmail: string;
+  /** PEM. Secreta: nunca en logs. */
+  privateKey: string;
 }
 
 export class ConfigError extends Error {
@@ -263,5 +305,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
             testToken: data.MERCADOPAGO_TEST_TOKEN,
           }
         : null,
+    googleServiceAccount: data.GOOGLE_SERVICE_ACCOUNT_KEY ?? null,
   };
 }

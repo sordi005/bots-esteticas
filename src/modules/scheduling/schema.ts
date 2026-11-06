@@ -26,6 +26,30 @@ import {
 import { customers } from '../customers/schema.js';
 import { tenantId } from '../tenants/schema.js';
 
+/**
+ * Los eventos ocupados del Google Calendar de una profesional (4.2, 8.4), copiados por la tarea de
+ * sincronización del calendario. Solo el horario: nunca el título, que puede ser un dato de salud.
+ */
+export const calendarBlocks = pgTable(
+  'calendar_blocks',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: tenantId(),
+    professionalId: uuid('professional_id').notNull(),
+    timeRange: timestampRange('time_range').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'calendar_blocks_professional_fk',
+      columns: [t.tenantId, t.professionalId],
+      foreignColumns: [professionals.tenantId, professionals.id],
+    }).onDelete('cascade'),
+    index('calendar_blocks_professional_idx').on(t.tenantId, t.professionalId),
+    halfOpenRangeCheck('calendar_blocks_time_range_valid', t.timeRange),
+  ],
+);
+
 /** Estados de un turno: se definen en la máquina de estados (CLAUDE.md, regla 4). */
 export const appointmentStatus = pgEnum('appointment_status', APPOINTMENT_STATUSES);
 

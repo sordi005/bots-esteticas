@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../../../src/shared/config.js';
 
@@ -40,6 +41,7 @@ describe('loadConfig', () => {
       anthropicApiKey: null,
       anthropicModel: 'claude-haiku-5-5',
       mercadoPago: null,
+      googleServiceAccount: null,
     });
   });
 
@@ -60,6 +62,7 @@ describe('loadConfig', () => {
       anthropicApiKey: 'sk-ant-clave-de-prueba',
       anthropicModel: 'claude-haiku-5-5',
       mercadoPago: null,
+      googleServiceAccount: null,
     });
   });
 
@@ -337,6 +340,44 @@ describe('loadConfig', () => {
       const error = captureError(() => loadConfig({ ...PRODUCTION, ...MERCADOPAGO, MERCADOPAGO_TEST_TOKEN: 'true' }));
 
       expect(error.message).toContain('MERCADOPAGO_TEST_TOKEN');
+    });
+  });
+
+  describe('Google Calendar (8.4)', () => {
+    const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const keyFile = (fields: Record<string, unknown>) => Buffer.from(JSON.stringify(fields)).toString('base64');
+    const SERVICE_ACCOUNT = {
+      type: 'service_account',
+      project_id: 'bots-esteticas',
+      private_key: PEM,
+      client_email: 'calendario@bots-esteticas.iam.gserviceaccount.com',
+    };
+
+    it('lee el mail y la clave privada de la cuenta de servicio (el JSON de Google, en base64)', () => {
+      const config = loadConfig({ DATABASE_URL: databaseUrl, GOOGLE_SERVICE_ACCOUNT_KEY: keyFile(SERVICE_ACCOUNT) });
+
+      expect(config.googleServiceAccount).toEqual({
+        clientEmail: 'calendario@bots-esteticas.iam.gserviceaccount.com',
+        privateKey: PEM,
+      });
+    });
+
+    it('vacía en .env, el calendario queda apagado', () => {
+      expect(loadConfig({ DATABASE_URL: databaseUrl, GOOGLE_SERVICE_ACCOUNT_KEY: '' }).googleServiceAccount).toBeNull();
+    });
+
+    it.each([
+      ['no es el JSON de una cuenta de servicio', Buffer.from('hola').toString('base64')],
+      ['le falta el mail', keyFile({ ...SERVICE_ACCOUNT, client_email: undefined })],
+      ['la clave privada no sirve para firmar', keyFile({ ...SERVICE_ACCOUNT, private_key: '-----BEGIN PRIVATE KEY-----\nroto\n-----END PRIVATE KEY-----\n' })],
+    ])('si %s, no arranca, y el error no muestra la clave', (_case, value) => {
+      const error = captureError(() => loadConfig({ DATABASE_URL: databaseUrl, GOOGLE_SERVICE_ACCOUNT_KEY: value }));
+
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error.message).toContain('GOOGLE_SERVICE_ACCOUNT_KEY');
+      expect(error.message).not.toContain('PRIVATE KEY');
+      expect(error.message).not.toContain(value);
     });
   });
 });

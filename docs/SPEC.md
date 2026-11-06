@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.16 · 01/11/2026 · Autor: Yordi
+> **Estado:** borrador v0.17 · 04/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -179,6 +179,8 @@ Reglas:
   - Se cargan solo los **feriados nacionales** (inamovibles y trasladables, en su fecha efectiva), según [argentina.gob.ar/feriados](https://www.argentina.gob.ar/feriados). Los **días no laborables** (puentes turísticos, días religiosos, feriados solo regionales) no se cargan: para el sector privado son optativos, y un negocio que cierra esos días carga una excepción de cierre.
   - [D] La lista de cada año se carga con una migración nueva, con la fuente citada, cuando se publica oficialmente. Nunca se cargan fechas que no estén publicadas.
 - **Bloqueos desde Google Calendar [D]:** si la profesional crea un evento "ocupado" en su calendario (médico, trámite), el asistente no ofrece ese horario. Así la dueña bloquea horarios desde el celular sin tocar nada nuestro.
+  - **[D]** "Ocupado" es lo que dice Google: un evento marcado "Disponible" no bloquea. Tampoco bloquean los eventos cancelados, las invitaciones que la profesional rechazó ni los eventos de los turnos que escribe el sistema (8.4). Así un cumpleaños de todo el día no cierra la jornada.
+  - **[D]** Un evento de todo el día bloquea el día entero en la zona horaria del negocio. Google crea los eventos de todo el día como "Disponible": para bloquear unas vacaciones, la profesional los marca "Ocupado" (se explica en la capacitación, 12.2).
 - Si la clienta no elige profesional, el asistente asigna la primera disponible. [D] [S] Si a la misma hora hay más de una libre, primero la profesional preferida de la clienta y después un orden fijo.
 - Si la clienta pide una profesional, se respeta. Si no tiene lugar, se ofrece otra profesional o el próximo horario de la pedida. [D]
 
@@ -629,7 +631,7 @@ Un solo proceso de Node con módulos bien separados, y una base Postgres. **No**
 | `whatsapp` | Adaptador de la API: recibir, enviar, plantillas, firma | — |
 | `conversation` | Agente de IA, herramientas, pausa por derivación, agrupado de mensajes | todos los de dominio |
 | `notifications` | Avisos a la dueña | `whatsapp` |
-| `calendar` | Sincronización con Google Calendar | `scheduling` |
+| `calendar` | Adaptador de Google Calendar (H12): cuenta de servicio, escribir los turnos, copiar los bloqueos | `scheduling`, `catalog`, `jobs` |
 | `jobs` | Cola de tareas programadas y worker | — |
 | `reporting` | Métricas y reporte mensual | todos |
 | `admin` | API y panel mínimo para Yordi | todos |
@@ -749,7 +751,7 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 **[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
 
-Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), procesar un pago de Mercado Pago (H11), renovar el token de Mercado Pago (H11), resumen diario, cierre del día (marcar completados), reporte mensual, sincronizar calendario. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
+Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), procesar un pago de Mercado Pago (H11), renovar el token de Mercado Pago (H11), copiar los bloqueos del calendario de una profesional (H12), reflejar un turno en el calendario (H12), resumen diario, cierre del día (marcar completados), reporte mensual. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
 
 **[D] Avisos (H9):** un aviso (a la dueña o a la clienta, fuera de la respuesta del asistente) se guarda en la tabla `notifications` **en la misma transacción** que el cambio que lo origina: la derivación, el comprobante, la cancelación, la respuesta de la dueña. Lo envía después la tarea "enviar un aviso", con los reintentos de siempre. Así un cambio y su aviso no pueden quedar desparejos aunque falle la red en el medio. **[D]** Desde H10, junto con el mensaje se guarda su versión con plantilla (8.1), escrita también por el código: si Meta rechaza el mensaje libre por estar fuera de la ventana de 24 horas (error 131047), la misma ejecución envía la plantilla. Los recordatorios salen siempre con plantilla.
 
@@ -782,6 +784,11 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[D]** Desde H8, producción procesa conversaciones. En producción el servidor no arranca sin `ANTHROPIC_API_KEY`, igual que sin la clave de cifrado (9.1).
 
 **[D]** Toda tarea es **idempotente**: si se ejecuta dos veces, el resultado es el mismo (por ejemplo, antes de enviar un recordatorio se verifica que no se haya enviado y que el turno siga confirmado o en verificación, 4.7).
+
+**[D] Calendario (H12):**
+
+- **Reflejar un turno:** una tarea por turno (la clave es su id), programada en la misma transacción que lo reserva, le cambia el estado o lo reprograma. No recibe qué cambió: lee el estado y el horario actuales y deja el evento como corresponde (8.4). Si corre dos veces, el calendario queda igual.
+- **Copiar los bloqueos:** una tarea por profesional con calendario (la clave es su id). Lee los eventos desde ahora hasta la anticipación máxima del negocio y reemplaza, en una sola transacción, los bloqueos guardados de esa ventana. Al empezar se programa la próxima vuelta, así la sincronización sigue aunque esta falle. **[S]** Cada 2 minutos. Si Google no responde, la disponibilidad usa los últimos bloqueos copiados.
 
 ### 6.8 Stack
 
@@ -827,9 +834,10 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 |---|---|
 | `tenants` | id, nombre, slug, zona horaria, estado (activo, pausado, baja), paquete, configuración de tono (nombre del asistente, emojis, voseo), `phone_number_id` de WhatsApp (sección 6.5), teléfono de la dueña para avisos (sección 8.2) |
 | `tenant_settings` | reglas de seña (a quién, porcentaje o monto fijo, plazo, medio: uno solo, 4.5), alias, CBU y titular para transferencias, política de cancelación, parámetros de disponibilidad, si trabaja feriados, horario de atención humana, horario de envío de recordatorios, recordatorio corto |
-| `tenant_credentials` | tipo (whatsapp, mercadopago, google), datos cifrados (texto cifrado, vector de inicialización y etiqueta de AES-256-GCM), fecha de vencimiento |
+| `tenant_credentials` | tipo (whatsapp, mercadopago; Google usa una sola cuenta de servicio para todos, 8.4), datos cifrados (texto cifrado, vector de inicialización y etiqueta de AES-256-GCM), fecha de vencimiento |
 | `business_info` | tema (dirección, estacionamiento, medios de pago, promociones, políticas, cuidados), texto. Un texto por tema |
-| `professionals` | nombre, id de Google Calendar, activa |
+| `professionals` | nombre, id de Google Calendar (en una cuenta de Gmail, la dirección de mail), activa |
+| `calendar_blocks` | profesional, `time_range`. Los eventos ocupados de su Google Calendar (4.2), copiados por la tarea de sincronización (8.4). Solo el horario: nunca el título ni la descripción. Se crea en H12 |
 | `services` | campos de la sección 4.1. Las reglas de seña son opcionales: si faltan, hereda las del negocio |
 | `professional_services` | qué profesional hace qué servicio (y si cambia la duración para ella) |
 | `working_hours` | profesional, día de la semana, hora de inicio, hora de fin |
@@ -924,10 +932,18 @@ Detalle (H9):
 
 ### 8.4 Google Calendar
 
-- **[S]** Cada profesional **comparte su calendario** con la cuenta de servicio del sistema, con permiso para hacer cambios. Esto evita el proceso de verificación de Google para OAuth con permisos de calendario. **[?]** Verificar que funcione con cuentas de Gmail personales y qué limitaciones tiene.
-- El sistema **escribe** un evento por turno confirmado (título: servicio y nombre de la clienta, sin teléfono en el título) y lo actualiza o borra si cambia.
-- El sistema **lee** los eventos ocupados de la profesional para bloquear horarios (4.2).
-- **[D]** La base de datos es la fuente de verdad de los turnos. Google Calendar es una vista más una fuente de bloqueos. Si alguien edita a mano un evento de un turno en el calendario, el sistema no lo toma como cambio del turno: avisa a Yordi.
+- **[D]** Cada profesional **comparte su calendario** con la cuenta de servicio del sistema, con el permiso "Hacer cambios en eventos". Esto evita el proceso de verificación de Google para OAuth con permisos de calendario. No hace falta "ver detalles": el sistema solo necesita los horarios, y los títulos ("médico", "kinesiólogo") pueden ser datos de salud (4.9).
+  - Verificado en H12 con la documentación oficial: funciona con cuentas de Gmail personales. El id del calendario es la dirección de Gmail. La delegación de todo el dominio es solo de Google Workspace, y sin ella la cuenta de servicio no puede poner invitados en un evento (no hace falta).
+  - **[D]** Una sola cuenta de servicio para todo el servicio, como la aplicación de Mercado Pago (8.3). Su clave (JSON, en base64) va en la variable `GOOGLE_SERVICE_ACCOUNT_KEY`; sin ella, el calendario queda apagado. La clave no vence; el token de acceso dura una hora y se renueva solo.
+  - Los pedidos a Google se hacen con `fetch` y Zod, sin SDK (decisión 39). La cuota es de 600 pedidos por minuto para la cuenta de servicio, compartida por todos los negocios.
+  - **[D]** La conexión de una profesional se hace con `pnpm calendar:connect <negocio> <profesional> <calendario>`: guarda el id, verifica que puede leer y escribir (con un evento de ayer, que borra en el momento) y programa la primera copia de bloqueos. Si falta compartir o el permiso no alcanza, lo dice.
+  - **[D]** Al conectar, también programa la tarea de cada turno futuro de esa profesional que esté confirmado o con la seña en verificación: los turnos tomados antes de conectar el calendario aparecen igual (lo encontró la prueba manual de H12).
+- El sistema **escribe** un evento por turno, que actualiza o borra si el turno cambia (6.7):
+  - **[D]** Tienen evento los turnos confirmados y los que tienen la seña en verificación (como "provisorio", con "(seña en verificación)" en el título): la clienta ya pagó y ese turno no vence. Un turno pendiente de seña no tiene evento: dura menos de una hora y crearlo y borrarlo sería ruido en el celular de la profesional. Al cancelarse, vencer o rechazarse la seña, el evento se borra. Completado o ausente, queda como está.
+  - **[D]** Título: servicio y nombre de la clienta (o su nombre de perfil), sin teléfono. Descripción fija, escrita por el código: "Turno reservado por WhatsApp. Si lo cambiás acá, el turno no cambia: pedíselo al asistente o avisanos." Usa los recordatorios que la profesional tiene configurados en su calendario.
+  - **[D]** El id del evento sale del id del turno: si un reintento lo vuelve a crear, Google lo rechaza y se actualiza el existente.
+- El sistema **lee** los eventos ocupados de la profesional para bloquear horarios (4.2) y los copia a `calendar_blocks` (6.7). Los eventos de los turnos se reconocen por una marca privada y no bloquean.
+- **[D]** La base de datos es la fuente de verdad de los turnos. Google Calendar es una vista más una fuente de bloqueos. Si alguien edita a mano un evento de un turno en el calendario, el sistema no lo toma como cambio del turno: al copiar los bloqueos, si el horario del evento no coincide con el del turno o lo borraron, deja una advertencia en el log (la alerta a Yordi llega en H14, 10.3). No lo restaura solo, para no pelearse con la dueña.
 
 ### 8.5 Modelo de IA
 
@@ -948,6 +964,7 @@ Detalle (H9):
 
 - Validación de firma en todos los webhooks (Meta y Mercado Pago).
 - Credenciales de terceros cifradas en la base (AES-256-GCM, clave en variable de entorno). Nunca en el código ni en logs. El cifrado lleva como dato asociado el negocio y el tipo de credencial: una credencial copiada a la fila de otro negocio no se puede descifrar. En producción, el servidor no arranca sin clave ni con la clave de ejemplo de `.env.example`.
+- Las credenciales del servicio (la aplicación de Mercado Pago, la cuenta de servicio de Google) van en variables de entorno, no en la base: no son de un negocio.
 - Aislamiento entre negocios: `tenant_id` en toda consulta, y tests que verifican que un negocio no puede ver datos de otro.
 - **[S]** Límite de 30 mensajes por hora por clienta para frenar abusos y costos descontrolados. Si se pasa, el asistente no llama al modelo ni contesta; los mensajes quedan procesados y el aviso va al log.
 - **[S]** Tope de 8 llamadas a herramientas por respuesta para cortar bucles del modelo. Al llegar al tope, se le pide una última respuesta sin herramientas.
@@ -987,6 +1004,7 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 | Tareas programadas con 3 intentos fallidos | Un recordatorio no salió |
 | Token de Meta, Mercado Pago o Google inválido o por vencer | Un módulo deja de funcionar en silencio |
 | Plantilla rechazada o pausada por Meta | Los recordatorios dejan de salir |
+| Calendario de una profesional sin sincronizar, o un evento de turno editado o borrado a mano (8.4) | El asistente ofrece horarios bloqueados, o la profesional ve un turno donde no está |
 | Sin mensajes eco de un negocio por más de 10 días | La dueña quizás no abrió la app y la coexistencia se puede caer |
 | Derivación sin resolver por más de 4 horas en horario de atención | Una clienta está esperando |
 | Al 1 de diciembre, feriados del año siguiente sin cargar | Sin ellos, el asistente ofrecería turnos en feriados |
@@ -1081,12 +1099,12 @@ Se hace en una reunión de 30 a 45 minutos. Las respuestas cargan la configuraci
 - [ ] Cargar un medio de pago en la cuenta de Meta del negocio
 - [ ] Crear y aprobar las plantillas
 - [ ] Conectar Mercado Pago (OAuth, `pnpm mercadopago:connect`) con la aplicación real del servicio y hacer un cobro de prueba (8.3)
-- [ ] Compartir el calendario de cada profesional con la cuenta de servicio
+- [ ] Compartir el calendario de cada profesional con la cuenta de servicio, con "Hacer cambios en eventos", y conectarlo con `pnpm calendar:connect` (8.4)
 - [ ] Cargar catálogo, horarios, información y políticas
 - [ ] Registrar el número de la dueña para recibir avisos
 - [ ] Correr las evaluaciones con los datos del negocio
 - [ ] Prueba de punta a punta completa
-- [ ] Capacitación de 15 minutos a la dueña: cómo se ven los avisos, cómo bloquear horarios, cómo tomar una conversación
+- [ ] Capacitación de 15 minutos a la dueña: cómo se ven los avisos, cómo bloquear horarios (un evento "Ocupado" en el calendario; los de todo el día se crean "Disponible", 4.2), que los turnos se cambian por el asistente y no moviendo el evento, cómo tomar una conversación
 - [ ] Salida a producción y seguimiento cercano la primera semana
 
 ---
@@ -1190,6 +1208,11 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 41 | `state` de OAuth firmado, sin PKCE | Guardar cada intento en una tabla, o sumar PKCE | El `state` firmado identifica al negocio y vence solo; PKCE protege a clientes que no pueden guardar un secreto, y el nuestro lo guarda en el servidor |
 | 42 | Antes de vencer una seña de Mercado Pago se busca el pago | Confiar solo en el webhook | Un webhook perdido haría vencer el turno de una clienta que pagó; la búsqueda es un pedido por seña vencida |
 | 43 | Un texto por caso cuando un pago de Mercado Pago no se aplica | Un solo texto ("el turno ya se había liberado") | Ese texto es falso si el turno estaba confirmado por otro pago o si el monto no cubre la seña: el turno no se liberó |
+| 44 | Una cuenta de servicio con calendarios compartidos | OAuth de cada profesional | Funciona con Gmail personal y evita la verificación de Google para permisos de calendario; la profesional solo comparte su calendario |
+| 45 | Los bloqueos se copian a una tabla cada 2 minutos | Consultar Google al calcular la disponibilidad | La disponibilidad sigue siendo pura y rápida, y la conversación no depende de que Google responda; el costo es hasta 2 minutos de demora en ver un bloqueo nuevo |
+| 46 | Google Calendar con `fetch`, Zod y la firma del token con `node:crypto` | La librería oficial `googleapis` | Son cuatro pedidos y una firma; el mismo patrón que con Meta y Mercado Pago (decisión 39) |
+| 47 | La tarea del evento lee el estado actual del turno | Una tarea por cambio con lo que cambió | Repetirla deja el calendario igual, y dos cambios seguidos se resuelven con una sola vuelta |
+| 48 | Los turnos con la seña en verificación tienen evento | Solo los confirmados | La clienta ya pagó y el turno no vence: la profesional tiene que verlo en su agenda |
 
 ---
 
@@ -1211,12 +1234,12 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | Pregunta | Antes de |
 |---|---|
 | Disponibilidad de coexistencia para números de Argentina | Vender |
-| Calendario compartido con cuenta de servicio usando Gmail personal | H12 |
 | Categoría de Meta para el pedido de reseña | Fase 2 |
 | Inscripción de la base de datos y contrato de encargado de tratamiento | Piloto |
 | Precios vigentes de la API de Meta para Argentina y del modelo de IA | Definir precios del abono |
 | Lista oficial de feriados nacionales 2027 (todavía no publicada al 30/09/2026) | Diciembre de 2026 |
 | Meta clasificó la plantilla `reserva_vencida` como marketing, no como utilidad (8.1), seguramente por la invitación a pedir otro horario: sale más cara y tiene límites de envío por persona. Casi nunca se usa, porque la clienta reservó por chat hace menos de una hora y el aviso entra como mensaje libre; solo saldría con un plazo de seña de casi un día. Decidido en H10: queda así. Revisar con un negocio real si usa plazos largos | Piloto |
+| La dueña no puede ejecutar una cancelación fuera de plazo que decide aceptar (4.6): el aviso de derivación solo tiene "Ya la atendí" y el panel llega en H15. Mientras tanto el turno sigue confirmado, ocupa el horario y la clienta recibe el recordatorio. Borrar el evento del calendario no lo cancela (8.4). Lo encontró la prueba manual de H12. Propuesta: un botón "Cancelar el turno" en el aviso de derivación por cancelación fuera de plazo, que cancela con `booking.ts` (con su evento de auditoría) y así también borra el evento del calendario | Piloto |
 | Mensajes que Meta entrega con demora. Si el servidor no respondió, Meta reintenta el webhook más tarde, y el mensaje puede llegar después de otros más nuevos que ya se contestaron. En la prueba manual de H9, un «quiero reservar un turno» llegó 6 minutos tarde, después de la reserva, y el asistente lo contestó como un pedido nuevo. Propuesta: avisarle al modelo en el historial que ese mensaje llegó con demora y es anterior a su última respuesta. No se descarta, porque puede traer una pregunta real | Piloto |
 
 ---

@@ -2,6 +2,8 @@ import { createAgentResponder } from './modules/conversation/agent/agent-respond
 import { createAnthropicLlmClient } from './modules/conversation/agent/anthropic-client.js';
 import type { ToolContext } from './modules/conversation/tools/tool.js';
 import { recordWebhookEvents } from './modules/conversation/inbox.js';
+import { createGoogleCalendarClient } from './modules/calendar/client.js';
+import { createAccessTokenSource } from './modules/calendar/google-auth.js';
 import { createMercadoPagoClient } from './modules/mercadopago/client.js';
 import { completeMercadoPagoConnection } from './modules/mercadopago/connection.js';
 import { recordPaymentNotification } from './modules/mercadopago/notification.js';
@@ -86,6 +88,21 @@ if (config.mercadoPago && config.credentialsKey) {
   logger.info('Mercado Pago no está configurado: las señas por Mercado Pago derivan a una persona');
 }
 
+// Google Calendar (8.4): una sola cuenta de servicio para todos los negocios. Sin ella, los turnos no
+// se reflejan en el calendario ni se copian los bloqueos.
+let calendar: WorkerDependencies['calendar'];
+if (config.googleServiceAccount) {
+  const tokens = createAccessTokenSource({
+    serviceAccount: config.googleServiceAccount,
+    scope: 'https://www.googleapis.com/auth/calendar.events',
+    now: () => new Date(),
+  });
+  calendar = { client: createGoogleCalendarClient({ tokens }) };
+  logger.info({ serviceAccount: config.googleServiceAccount.clientEmail }, 'Google Calendar configurado');
+} else {
+  logger.info('Google Calendar no está configurado: los turnos no se reflejan en los calendarios');
+}
+
 // Worker de tareas programadas, en el mismo proceso (sección 6.7). Las conversaciones las contesta
 // el agente (8.5), también en producción desde H8; en desarrollo, solo con las claves puestas.
 let conversations: WorkerDependencies['conversations'];
@@ -153,6 +170,7 @@ const worker = buildWorker({
   ...(conversations ? { conversations } : {}),
   ...(notifications ? { notifications } : {}),
   ...(mercadoPago ? { mercadoPago } : {}),
+  ...(calendar ? { calendar } : {}),
 });
 
 const server = buildServer({

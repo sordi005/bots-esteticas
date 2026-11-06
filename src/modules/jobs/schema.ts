@@ -16,6 +16,9 @@ export const jobKind = pgEnum('job_kind', [
   // Mercado Pago (H11): procesar el aviso de un pago y renovar el token de un negocio.
   'process_mercadopago_payment',
   'refresh_mercadopago_token',
+  // Google Calendar (H12): copiar los bloqueos de una profesional y reflejar un turno en su calendario.
+  'sync_calendar_blocks',
+  'sync_appointment_event',
 ]);
 
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);

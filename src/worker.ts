@@ -1,5 +1,8 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
+import { appointmentEventJobHandler } from './modules/calendar/appointment-sync.js';
+import { calendarBlocksJobHandler } from './modules/calendar/blocks-sync.js';
+import type { GoogleCalendarClient } from './modules/calendar/client.js';
 import { depositReminderJobHandler } from './modules/conversation/deposit-receipts.js';
 import { ownerReplyJobHandler } from './modules/conversation/owner-replies.js';
 import { conversationJobHandler, type Responder } from './modules/conversation/processing.js';
@@ -34,6 +37,8 @@ export interface WorkerDependencies {
   >;
   /** Sin esto no se procesan los pagos ni se renuevan los tokens de Mercado Pago (8.3): la aplicación no está configurada. */
   mercadoPago?: { client: MercadoPagoClient; credentialsKey: Buffer };
+  /** Sin esto los turnos no se reflejan en Google Calendar ni se copian los bloqueos (8.4): falta la cuenta de servicio. */
+  calendar?: { client: GoogleCalendarClient };
   /** Para ajustar los valores [S] del worker (sección 6.7). */
   options?: Pick<
     JobRunnerOptions,
@@ -43,7 +48,7 @@ export interface WorkerDependencies {
 
 /** Arma el worker con un handler por tipo de tarea. No arranca: eso lo hace main.ts. */
 export function buildWorker(dependencies: WorkerDependencies): JobRunner {
-  const { db, logger, now = () => new Date(), conversations, notifications, mercadoPago } = dependencies;
+  const { db, logger, now = () => new Date(), conversations, notifications, mercadoPago, calendar } = dependencies;
   const handlers: Partial<Record<JobKind, JobHandler>> = {
     // Los botones de la dueña y los recordatorios solo usan la base: dejan avisos para enviar (H9).
     process_owner_reply: ownerReplyJobHandler({ db, logger, now }),
@@ -64,6 +69,11 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
   if (mercadoPago) {
     handlers.process_mercadopago_payment = paymentJobHandler({ db, logger, now, ...mercadoPago });
     handlers.refresh_mercadopago_token = refreshTokenJobHandler({ db, logger, now, ...mercadoPago });
+  }
+
+  if (calendar) {
+    handlers.sync_appointment_event = appointmentEventJobHandler({ db, logger, now, ...calendar });
+    handlers.sync_calendar_blocks = calendarBlocksJobHandler({ db, logger, now, ...calendar });
   }
 
   return createJobRunner({ db, logger, now, handlers, ...dependencies.options });

@@ -15,6 +15,7 @@ const MVP_TABLES = [
   'appointments',
   'audit_log',
   'business_info',
+  'calendar_blocks',
   'conversations',
   'customers',
   'deposits',

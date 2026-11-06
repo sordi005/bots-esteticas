@@ -63,6 +63,7 @@ pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee d
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
 pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
 pnpm mercadopago:connect <negocio>  # link para que la dueña conecte Mercado Pago (vence en 15 min; necesita MERCADOPAGO_* y el túnel)
+pnpm calendar:connect <negocio> <profesional> <gmail>  # conecta su Google Calendar (necesita GOOGLE_SERVICE_ACCOUNT_KEY)
 ```
 
 Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba. Como la dueña y la clienta son el mismo celular, el 131047 no se da solo: para probar los avisos con plantilla, `WHATSAPP_PREFER_TEMPLATES=true` (solo desarrollo).
@@ -146,6 +147,15 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - El webhook (`/webhooks/mercadopago/:tenantId`) solo valida `x-signature`, programa `process_mercadopago_payment` con el id del pago como clave y responde 200. La tarea consulta el pago a la API: el cuerpo del aviso no se cree.
 - El link de la seña lo crea `ensurePaymentLink` después de reservar, una vez por seña. Confirmar o no un pago: solo con `applyMercadoPagoPayment` de `booking.ts`.
 - `deposits.mercadopago_payment_id` es único en toda la base, como en Mercado Pago: en los tests, ids de pago aleatorios.
+
+## Google Calendar
+
+- Una sola cuenta de servicio del servicio (`GOOGLE_SERVICE_ACCOUNT_KEY`, el JSON de la clave en base64). Cada profesional comparte su calendario con su mail, con "Hacer cambios en eventos", y se conecta con `pnpm calendar:connect` (8.4). El id del calendario es su Gmail.
+- Sin SDK: `fetch`, Zod y el JWT firmado con `node:crypto` en `modules/calendar/` (decisión 46). Los ejemplos, en `tests/contracts/google-calendar/`.
+- Nunca se piden ni se guardan títulos de los eventos de la profesional: pueden ser datos de salud. `calendar_blocks` guarda solo horarios.
+- Un turno se refleja con la tarea `sync_appointment_event` (la programa `booking.ts`); los bloqueos se copian con `sync_calendar_blocks`, que se vuelve a programar cada 2 minutos. Qué estado lleva evento: `calendar/appointment-event.ts`; qué evento bloquea: `calendar/busy-blocks.ts`.
+- El id del evento es el del turno sin guiones: crear un id que ya existe da 409 y se actualiza (también restaura uno borrado).
+- Para probar en desarrollo: `pnpm calendar:connect estetica-ejemplo Mica <tu gmail>`, con el calendario compartido. El servidor tiene que reiniciarse para leer la clave.
 
 ## Tareas programadas
 

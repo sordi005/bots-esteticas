@@ -31,7 +31,8 @@
     "whatsapp:connect": "tsx --env-file-if-exists=.env src/cli/connect-whatsapp.ts",
     "owner:phone": "tsx --env-file-if-exists=.env src/cli/set-owner-phone.ts",
     "whatsapp:templates": "tsx --env-file-if-exists=.env src/cli/check-templates.ts",
-    "mercadopago:connect": "tsx --env-file-if-exists=.env src/cli/connect-mercadopago.ts"
+    "mercadopago:connect": "tsx --env-file-if-exists=.env src/cli/connect-mercadopago.ts",
+    "calendar:connect": "tsx --env-file-if-exists=.env src/cli/connect-calendar.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.131.0",

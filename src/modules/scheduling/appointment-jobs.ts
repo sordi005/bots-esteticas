@@ -1,10 +1,11 @@
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Queryable } from '../../shared/db.js';
-import { businessInfo } from '../catalog/schema.js';
+import { businessInfo, professionals } from '../catalog/schema.js';
 import { scheduleJob } from '../jobs/queue.js';
 import type { tenantSettings } from '../tenants/schema.js';
 import { dayBeforeReminderAt, shortReminderAt } from './reminders.js';
+import { appointments } from './schema.js';
 
 /**
  * Las tareas que deja programadas un turno (4.5, 4.7, H10), siempre en la misma transacción que la
@@ -84,5 +85,36 @@ export async function scheduleReservationExpiry(
     key: input.appointmentId,
     payload: { appointmentId: input.appointmentId },
     runAt: input.expiresAt,
+  });
+}
+
+export const calendarSyncPayloadSchema = z.object({ appointmentId: z.uuid() });
+
+/**
+ * Programa la tarea que refleja el turno en el Google Calendar de su profesional (8.4, D6), si lo
+ * tiene conectado. No lleva qué cambió: la tarea lee el estado actual, así repetirla o juntar dos
+ * cambios deja el calendario igual.
+ */
+export async function scheduleCalendarSync(
+  tx: Queryable,
+  input: { tenantId: string; appointmentId: string; now: Date },
+): Promise<void> {
+  const { tenantId, appointmentId } = input;
+  const [professional] = await tx
+    .select({ calendarId: professionals.googleCalendarId })
+    .from(appointments)
+    .innerJoin(
+      professionals,
+      and(eq(professionals.tenantId, appointments.tenantId), eq(professionals.id, appointments.professionalId)),
+    )
+    .where(and(eq(appointments.tenantId, tenantId), eq(appointments.id, appointmentId)));
+  if (!professional?.calendarId) return;
+
+  await scheduleJob(tx, {
+    tenantId,
+    kind: 'sync_appointment_event',
+    key: appointmentId,
+    payload: { appointmentId },
+    runAt: input.now,
   });
 }
