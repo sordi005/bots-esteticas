@@ -200,6 +200,19 @@ ESLint hace cumplir las reglas 3 y 5 en `src/modules/{scheduling,catalog,custome
 - Preferí la solución más simple que cumpla la especificación. Si creés que algo necesita más complejidad (una cola externa, un cache, otro servicio), justificalo con un requisito concreto antes de agregarlo.
 - Commits chicos y descriptivos, en español.
 
+### Subagentes y sesiones
+
+Este proyecto no usa OpenSpec: la fuente de verdad es `docs/SPEC.md` y se trabaja por hitos, así que el orquestador OPSX de la configuración global no aplica. Lo que sí aplica es delegar lo que engorda el contexto: cada llamada del hilo principal vuelve a leer todo el historial.
+
+- **Se delega** (el subagente devuelve solo la conclusión):
+  - `doc-researcher` (Sonnet, `.claude/agents/`): leer la documentación oficial de Meta, Mercado Pago, Google o Anthropic antes de diseñar, ante un error de un tercero o para traer un ejemplo oficial para `tests/contracts/`.
+  - `checker` (Haiku, `.claude/agents/`): `pnpm check` antes de cada commit y las suites completas. Devuelve el código de salida y solo las fallas.
+  - `Explore` (incorporado, con `model: sonnet`): búsquedas amplias en el código ("¿dónde se programa X?").
+- **Queda en el hilo principal**: el diseño y las decisiones, el ciclo TDD (un solo archivo con `pnpm vitest run <archivo>` es inmediato), git y la prueba manual con el desarrollador.
+- Las evaluaciones (`pnpm test:evals`) cuestan plata: se corren con el OK del desarrollador, y ese OK va escrito en el pedido al `checker`.
+- **Una sesión por etapa del hito**: diseño, código y prueba manual. Al cerrar cada etapa, `mem_save` y resumen de sesión; la siguiente arranca desde engram y la spec, no desde el historial. Si el contexto pasa los 200 mil tokens, compactar o abrir otra sesión.
+- **Navegador**: leer las páginas como texto antes que con capturas. Configurar paneles de terceros (Meta, Mercado Pago, Google) va en una sesión aparte que se cierra al terminar.
+
 ### Git y GitHub
 
 `main` está protegida: solo se entra por Pull Request, con el check de CI ("Lint, tipos, tests y build") en verde y la rama al día con `main`. La regla vale también para administradores. No hay force-push.
