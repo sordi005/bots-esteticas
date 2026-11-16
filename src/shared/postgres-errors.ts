@@ -37,16 +37,45 @@ export function isConstraintViolation(error: unknown, code: string, constraint: 
 }
 
 /**
- * Corre `run` y, si Postgres la abortó por un deadlock, la corre una vez más, como recomienda su
- * documentación. Dos reservas del mismo horario a la vez pueden terminar así en vez de en la
- * violación de `appointments_no_overlap`: en el segundo intento la otra ya terminó, y la que perdió
- * recibe la violación de siempre ("ese horario se acaba de ocupar", 6.6).
+ * Intentos en total de una transacción que Postgres aborta por deadlock. Con cinco reservas del mismo
+ * horario a la vez, las que pierden reintentan juntas y pueden volver a trabarse entre sí: un solo
+ * reintento no alcanza (falló así en CI). El tope evita reintentar para siempre si algo anda mal.
  */
-export async function retryOnDeadlock<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    if (findPostgresError(error)?.code !== DEADLOCK_DETECTED) throw error;
-    return run();
+export const MAX_DEADLOCK_ATTEMPTS = 5;
+
+export interface RetryOnDeadlockOptions {
+  /** Espera antes del reintento número `attempt` (1, 2, …). Los tests la reemplazan para no esperar. */
+  wait?: (attempt: number) => Promise<void>;
+}
+
+/**
+ * Entre 0 y 20 ms por intento, al azar: si las que perdieron esperan lo mismo, vuelven a chocar
+ * juntas. La espera crece con cada intento para que se separen cada vez más.
+ */
+function waitWithJitter(attempt: number): Promise<void> {
+  const delayMs = Math.random() * 20 * attempt;
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+/**
+ * Corre `run` y, si Postgres la abortó por un deadlock, la vuelve a correr, como recomienda su
+ * documentación: hasta `MAX_DEADLOCK_ATTEMPTS` intentos, con una espera corta al azar entre uno y
+ * otro. Varias reservas del mismo horario a la vez pueden terminar así en vez de en la violación de
+ * `appointments_no_overlap`: al reintentar, la que ganó ya terminó y la que perdió recibe la
+ * violación de siempre ("ese horario se acaba de ocupar", 6.6). Cualquier otro error sube sin
+ * reintentar, y también el deadlock del último intento.
+ */
+export async function retryOnDeadlock<T>(
+  run: () => Promise<T>,
+  { wait = waitWithJitter }: RetryOnDeadlockOptions = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      const isDeadlock = findPostgresError(error)?.code === DEADLOCK_DETECTED;
+      if (!isDeadlock || attempt >= MAX_DEADLOCK_ATTEMPTS) throw error;
+      await wait(attempt);
+    }
   }
 }

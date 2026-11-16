@@ -246,8 +246,8 @@ export async function bookAppointment(
   const timeRange = occupiedRange(start, durationMinutes, service.bufferMinutes);
 
   try {
-    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
-    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    // Varios guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta y ahí la que perdió recibe la violación (6.6).
     return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, { tenantId, professionalId, range: timeRange, now });
 
@@ -744,8 +744,8 @@ export async function rescheduleAppointment(
   const newRange = occupiedRange(newStart, current.durationMinutes, current.bufferMinutes);
 
   try {
-    // Dos guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
-    // violación de la restricción: se reintenta una vez y ahí la que perdió recibe la violación (6.6).
+    // Varios guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
+    // violación de la restricción: se reintenta y ahí la que perdió recibe la violación (6.6).
     return await retryOnDeadlock(() => db.transaction(async (tx) => {
       await expireOverdueReservations(tx, {
         tenantId,
