@@ -60,6 +60,46 @@ export function checkSlot(
   return kind === 'taken' ? 'slot_taken' : 'slot_unavailable';
 }
 
+/**
+ * El lock de la agenda de una profesional (6.6). Toda transacción que guarda un turno, lo mueve o le
+ * cambia el estado lo toma primero, antes de bloquear cualquier fila: así dos reservas del mismo
+ * horario quedan en fila y la segunda recibe la violación de `appointments_no_overlap` en vez de un
+ * deadlock (dos inserciones que chocan se esperan una a la otra al chequear la restricción, y
+ * Postgres tarda un segundo en detectarlo). Se libera solo al terminar la transacción. Si dos
+ * profesionales caen en la misma clave del hash, solo se esperan de más.
+ */
+async function lockProfessionalSchedule(tx: Queryable, input: { tenantId: string; professionalId: string }) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${input.tenantId}::text || ':' || ${input.professionalId}::text, 0))`,
+  );
+}
+
+/** La misma clave que `lockProfessionalSchedule`, calculada desde la fila del turno. */
+const LOCK_SCHEDULE_OF_ROW = sql`pg_advisory_xact_lock(hashtextextended(${appointments.tenantId}::text || ':' || ${appointments.professionalId}::text, 0))`;
+
+/**
+ * El lock de la profesional del turno, sin bloquear la fila: la profesional de un turno no cambia
+ * (reprogramar la conserva), así que se puede leer antes. La fila se bloquea después.
+ */
+async function lockScheduleOfAppointment(tx: Queryable, input: { tenantId: string; appointmentId: string }) {
+  await tx
+    .select({ locked: LOCK_SCHEDULE_OF_ROW })
+    .from(appointments)
+    .where(and(eq(appointments.tenantId, input.tenantId), eq(appointments.id, input.appointmentId)));
+}
+
+/** Lo mismo, a partir de la seña del turno. */
+async function lockScheduleOfDeposit(tx: Queryable, input: { tenantId: string; depositId: string }) {
+  await tx
+    .select({ locked: LOCK_SCHEDULE_OF_ROW })
+    .from(deposits)
+    .innerJoin(
+      appointments,
+      and(eq(appointments.tenantId, deposits.tenantId), eq(appointments.id, deposits.appointmentId)),
+    )
+    .where(and(eq(deposits.tenantId, input.tenantId), eq(deposits.id, input.depositId)));
+}
+
 function occupiedRange(start: Date, durationMinutes: number, bufferMinutes: number): TimestampRange {
   return {
     start,
@@ -246,9 +286,10 @@ export async function bookAppointment(
   const timeRange = occupiedRange(start, durationMinutes, service.bufferMinutes);
 
   try {
-    // Varios guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
-    // violación de la restricción: se reintenta y ahí la que perdió recibe la violación (6.6).
+    // El lock de la profesional evita el deadlock entre reservas del mismo horario; si igual hay uno
+    // (con otra transacción que no lo toma), se reintenta (6.6).
     return await retryOnDeadlock(() => db.transaction(async (tx) => {
+      await lockProfessionalSchedule(tx, { tenantId, professionalId });
       await expireOverdueReservations(tx, { tenantId, professionalId, range: timeRange, now });
 
       const [appointment] = await tx
@@ -344,6 +385,7 @@ export async function changeAppointmentStatus(
   const { tenantId, appointmentId, to, actor, inTransaction } = input;
 
   return db.transaction(async (tx) => {
+    await lockScheduleOfAppointment(tx, { tenantId, appointmentId });
     const [current] = await tx
       .select({ status: appointments.status, customerId: appointments.customerId })
       .from(appointments)
@@ -393,6 +435,7 @@ export async function expireReservation(
   const { tenantId, appointmentId, now, inTransaction } = input;
 
   return db.transaction(async (tx) => {
+    await lockScheduleOfAppointment(tx, { tenantId, appointmentId });
     const [current] = await tx
       .select({ status: appointments.status, timeRange: appointments.timeRange, expiresAt: deposits.expiresAt })
       .from(appointments)
@@ -515,6 +558,7 @@ export async function submitTransferReceipt(
   const { tenantId, depositId, mediaId, now, inTransaction } = input;
 
   return db.transaction(async (tx) => {
+    await lockScheduleOfDeposit(tx, { tenantId, depositId });
     const current = await lockDeposit(tx, { tenantId, depositId });
     if (!current) return { ok: false, reason: 'not_found' } as const;
     const { appointmentId } = current;
@@ -579,6 +623,7 @@ export async function reviewDeposit(
   if (!canTransition('DEPOSIT_REVIEW', to, actor)) return { ok: false, reason: 'not_allowed' };
 
   return db.transaction(async (tx) => {
+    await lockScheduleOfDeposit(tx, { tenantId, depositId });
     const current = await lockDeposit(tx, { tenantId, depositId });
     if (!current) return { ok: false, reason: 'not_found' } as const;
     const { appointmentId, customerId } = current;
@@ -655,6 +700,7 @@ export async function applyMercadoPagoPayment(
   const { tenantId, depositId, payment, now } = input;
 
   return db.transaction(async (tx) => {
+    await lockScheduleOfDeposit(tx, { tenantId, depositId });
     const current = await lockDeposit(tx, { tenantId, depositId });
     if (!current) return { ok: false, reason: 'not_found' } as const;
     const { appointmentId, customerId } = current;
@@ -744,9 +790,12 @@ export async function rescheduleAppointment(
   const newRange = occupiedRange(newStart, current.durationMinutes, current.bufferMinutes);
 
   try {
-    // Varios guardados a la vez del mismo horario pueden terminar en un deadlock en vez de en la
-    // violación de la restricción: se reintenta y ahí la que perdió recibe la violación (6.6).
+    // El lock de la profesional evita el deadlock entre reservas del mismo horario; si igual hay uno
+    // (con otra transacción que no lo toma), se reintenta (6.6).
     return await retryOnDeadlock(() => db.transaction(async (tx) => {
+      // Reprogramar no cambia de profesional. Si algún día lo hace, hay que tomar los locks de las
+      // dos, siempre en el mismo orden (por clave), o dos reprogramaciones cruzadas se trancan.
+      await lockProfessionalSchedule(tx, { tenantId, professionalId: current.professionalId });
       await expireOverdueReservations(tx, {
         tenantId,
         professionalId: current.professionalId,
