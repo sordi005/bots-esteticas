@@ -18,7 +18,11 @@ export async function connectWhatsApp(db: NodePgDatabase, tenantId: string): Pro
   return phoneNumberId;
 }
 
-function envelope(phoneNumberId: string, value: Record<string, unknown>): Record<string, unknown> {
+function envelope(
+  phoneNumberId: string,
+  value: Record<string, unknown>,
+  field = 'messages',
+): Record<string, unknown> {
   return {
     object: 'whatsapp_business_account',
     entry: [
@@ -31,12 +35,48 @@ function envelope(phoneNumberId: string, value: Record<string, unknown>): Record
               metadata: { display_phone_number: '5492615550000', phone_number_id: phoneNumberId },
               ...value,
             },
-            field: 'messages',
+            field,
           },
         ],
       },
     ],
   };
+}
+
+/**
+ * Un mensaje que la dueña mandó desde su app (coexistencia, 8.1), con la forma exacta del ejemplo
+ * de Meta (tests/contracts/whatsapp/echo-text.json). `type` cambia a edit o revoke con su contenido.
+ */
+export function echoWebhook(input: {
+  phoneNumberId: string;
+  to: string;
+  messageId: string;
+  timestamp: number;
+  text?: string;
+  type?: string;
+  content?: Record<string, unknown>;
+}): string {
+  const type = input.type ?? 'text';
+  return JSON.stringify(
+    envelope(
+      input.phoneNumberId,
+      {
+        contacts: [{ wa_id: input.to, user_id: 'AR.13491208655302741918' }],
+        message_echoes: [
+          {
+            from: '5492615550000',
+            to: input.to,
+            to_user_id: 'AR.13491208655302741918',
+            id: input.messageId,
+            timestamp: String(input.timestamp),
+            type,
+            [type]: input.content ?? { body: input.text ?? 'Hola, te escribo yo' },
+          },
+        ],
+      },
+      'smb_message_echoes',
+    ),
+  );
 }
 
 /** Un mensaje de texto con la forma exacta de los ejemplos de Meta (tests/contracts/whatsapp). */

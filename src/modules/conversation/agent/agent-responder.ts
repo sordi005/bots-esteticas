@@ -195,8 +195,8 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
     const since = historySince(at, resumedAt);
     const history = await loadHistory(db, turn, since, receiptMediaIds);
     const isNewConversation = !(await sentRecently(db, turn, at));
-    // Reanudado y sin haberle escrito todavía a la clienta: el modelo empieza de cero y tiene que saber por qué (4.8).
-    const resumedAfterHandoff = resumedAt !== null && !(await assistantWroteSince(db, turn, resumedAt));
+    // Reanudado (después de una derivación o de un eco) y sin haberle escrito todavía a la clienta: el modelo empieza de cero y tiene que saber por qué (4.8).
+    const resumedAfterPause = resumedAt !== null && !(await assistantWroteSince(db, turn, resumedAt));
 
     // Lo que la clienta tocó en botones o listas se resuelve y se vuelve a validar acá: el modelo
     // recibe la elección ya resuelta y nunca interpreta el título del botón (5.3).
@@ -263,7 +263,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
           bookingName: customer.name,
           preferredProfessionalName,
           humanReplyWhen,
-          resumedAfterHandoff,
+          resumedAfterPause,
           choices,
           ...(receipt ? { receipt } : {}),
         }),
@@ -322,7 +322,7 @@ export function createAgentResponder(deps: AgentResponderDependencies): Responde
 
 /**
  * Desde cuándo ve el modelo la conversación: lo más reciente entre la ventana de 24 horas y la
- * reanudación del asistente después de una derivación (4.8). Lo anterior a la reanudación ya lo
+ * reanudación del asistente después de una pausa (derivación o eco, 4.8). Lo anterior a la reanudación ya lo
  * atendió una persona: si el modelo lo viera, volvería a derivar por un pedido que ya no está
  * pendiente. Vale para el historial y para las opciones elegidas; el instante exacto queda afuera.
  */
@@ -518,7 +518,7 @@ async function loadReceiptMediaIds(db: NodePgDatabase, turn: ConversationTurn): 
   return new Set(rows.flatMap((row) => row.mediaId ?? []));
 }
 
-/** Cuándo se reanudó el asistente después de una derivación, o null si esta conversación nunca estuvo pausada (4.8). */
+/** Cuándo se reanudó el asistente después de una pausa (derivación o eco), o null si esta conversación nunca estuvo pausada (4.8). */
 async function loadResumedAt(db: NodePgDatabase, turn: ConversationTurn): Promise<Date | null> {
   const [conversation] = await db
     .select({ resumedAt: conversations.resumedAt })

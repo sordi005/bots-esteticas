@@ -59,7 +59,7 @@ pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
 pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
-pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado
+pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado, y dice si está en coexistencia
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
 pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
 pnpm mercadopago:connect <negocio>  # link para que la dueña conecte Mercado Pago (vence en 15 min; necesita MERCADOPAGO_* y el túnel)
@@ -74,7 +74,7 @@ Para que Meta llegue al servidor local hace falta el túnel de ngrok, en una ter
 ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
 ```
 
-Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación (`conversations.assistant_status` y `paused_until`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (fuera de la ventana de 24 horas sale su plantilla; si la plantilla no está aprobada, falla con el código 132xxx: `pnpm whatsapp:templates` dice cuál). Una derivación calla al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
+Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación o porque la dueña escribió desde su app (`conversations.assistant_status` y `paused_until`; los ecos son los `messages` con `direction = 'echo'`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (fuera de la ventana de 24 horas sale su plantilla; si la plantilla no está aprobada, falla con el código 132xxx: `pnpm whatsapp:templates` dice cuál). Una derivación o un eco callan al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
 
 El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
 
@@ -139,6 +139,7 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - Credenciales de terceros: solo con `saveCredential` / `loadCredential` de `modules/tenants/credentials.ts`. Nunca en logs. El contenido de los mensajes tampoco va en logs de nivel info (sección 10.1).
 - Los logs de pedidos guardan la ruta sin query string ni headers (`shared/logger.ts`): Meta manda el token de verificación en la URL.
 - Probar con Meta: el webhook necesita la suscripción de la app **y** la de la cuenta del negocio (sección 8.1). Si "verifica pero no llega nada", revisar las dos por API antes de tocar código.
+- Coexistencia (H13): lo que la dueña escribe desde su app llega como eco (campo `smb_message_echoes`, al que la app tiene que estar suscripta además de `messages`). El inbox lo guarda con dirección `echo` y pausa esa conversación en la misma transacción; nunca entra al historial del modelo. "Pausada" no alcanza para descartar una respuesta: la derivación de la misma vuelta también pausa y su mensaje sí sale. Por eso el worker cuenta los ecos antes y después de llamar al modelo (`processing.ts`).
 
 ## Mercado Pago
 

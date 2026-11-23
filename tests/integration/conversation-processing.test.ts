@@ -24,7 +24,7 @@ import { finalAnswer, scriptedLlm, type ScriptStep } from '../support/fake-llm.j
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, FIXTURE_CUSTOMER_PHONE, single } from './support/fixtures.js';
 import { gate } from './support/gate.js';
-import { connectWhatsApp, textMessageWebhook } from './support/whatsapp.js';
+import { connectWhatsApp, echoWebhook, textMessageWebhook } from './support/whatsapp.js';
 
 const database = createDatabase(testDatabaseUrl());
 const { db } = database;
@@ -448,6 +448,79 @@ describe('asistente pausado por una derivación (4.8)', () => {
 
     expect(delivered.map(bodyOf)).toEqual(['Una persona te va a responder por acá.']);
     expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+});
+
+/** La dueña escribe desde su app (coexistencia, 4.8, 6.7, H13): el asistente se calla. */
+describe('la dueña escribe desde su app (ecos, H13)', () => {
+  async function ownerWrites(phoneNumberId: string, now: Date) {
+    const body = echoWebhook({
+      phoneNumberId,
+      to: FIXTURE_CUSTOMER_PHONE.slice(1),
+      messageId: `wamid.${randomUUID()}`,
+      timestamp: Math.floor(now.getTime() / 1000),
+    });
+    await recordWebhookEvents(db, parseWebhook(JSON.parse(body)).events, { now });
+  }
+
+  it('después de un eco, el mensaje de la clienta se marca procesado sin contestar', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { turns, respond } = recordingResponder();
+    const run = worker({ client, respond, now: () => at(4) });
+
+    await receive(tenant.phoneNumberId, '¿tienen turno mañana?', at(0));
+    await ownerWrites(tenant.phoneNumberId, at(2));
+    await run.runOnce();
+
+    expect(turns).toEqual([]);
+    expect(delivered).toEqual([]);
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+
+  it('si el eco llega mientras el modelo arma la respuesta, la respuesta no se guarda ni se envía', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const respond: Responder = async () => {
+      await ownerWrites(tenant.phoneNumberId, at(5));
+      return { type: 'text', body: 'Sí, mañana a las 10 tengo lugar.' };
+    };
+    await receive(tenant.phoneNumberId, '¿tienen turno mañana?', at(0));
+    const { process } = directly({ client, respond, now: () => at(6) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('paused');
+
+    expect(delivered).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
+    expect(await unprocessedOf(tenant.tenantId)).toEqual([]);
+  });
+
+  it('un eco de antes de la vuelta, con la pausa ya vencida, no frena la respuesta', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await ownerWrites(tenant.phoneNumberId, at(0));
+    const later = at(13 * 60 * 60);
+    await receive(tenant.phoneNumberId, 'hola de nuevo', later);
+    const { process } = directly({ client, respond, now: () => later });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('replied');
+
+    expect(delivered.map(bodyOf)).toEqual(['hola de nuevo']);
+  });
+
+  it('el eco descarta la respuesta guardada que todavía no se envió', async () => {
+    const tenant = await readyTenant();
+    const { client, delivered } = fakeWhatsApp();
+    const { respond } = recordingResponder();
+    await savePendingReply(tenant.conversationId, 'Te reservé el martes a las 10.', at(0));
+    await ownerWrites(tenant.phoneNumberId, at(10));
+    const { process } = directly({ client, respond, now: () => at(30) });
+
+    expect(await process(tenant.tenantId, tenant.conversationId)).toBe('nothing_new');
+
+    expect(delivered).toEqual([]);
+    expect(await pendingReplyOf(tenant.conversationId)).toEqual({ pendingReply: null, pendingReplyAt: null });
   });
 });
 

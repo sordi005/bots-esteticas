@@ -14,7 +14,7 @@ const base = {
   bookingName: null,
   preferredProfessionalName: null,
   humanReplyWhen: 'en este horario',
-  resumedAfterHandoff: false,
+  resumedAfterPause: false,
   choices: [] as ResolvedChoice[],
 };
 
@@ -92,26 +92,26 @@ describe('buildTurnContext: lo que cambia en cada vuelta, fuera del prompt del s
     },
   );
 
-  describe('el asistente se reanudó después de una derivación (4.8)', () => {
+  describe('el asistente se reanudó después de que lo atendió una persona: una derivación o un eco (4.8)', () => {
     const RESUMED_LINE =
-      '- El asistente se reanudó después de una derivación a una persona: lo que se habló antes ya lo atendió el equipo. Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.';
+      '- El asistente se reanudó después de que una persona del equipo atendió esta conversación: lo que se habló antes ya está atendido. Atendé solo lo que pide ahora, sin volver a derivar por lo anterior.';
 
     it('se lo dice al modelo, como una línea más del contexto', () => {
-      const lines = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+      const lines = buildTurnContext({ ...base, resumedAfterPause: true }).split('\n');
 
       expect(lines).toContain(RESUMED_LINE);
     });
 
     it('si no se reanudó, no hay ninguna línea sobre derivaciones anteriores', () => {
-      const context = buildTurnContext({ ...base, resumedAfterHandoff: false });
+      const context = buildTurnContext({ ...base, resumedAfterPause: false });
 
       expect(context).not.toContain('se reanudó');
       expect(context).not.toContain('lo que se habló antes');
     });
 
     it('no cambia el resto del contexto: solo suma esa línea', () => {
-      const without = buildTurnContext({ ...base, resumedAfterHandoff: false }).split('\n');
-      const withLine = buildTurnContext({ ...base, resumedAfterHandoff: true }).split('\n');
+      const without = buildTurnContext({ ...base, resumedAfterPause: false }).split('\n');
+      const withLine = buildTurnContext({ ...base, resumedAfterPause: true }).split('\n');
 
       expect(withLine.filter((line) => line !== RESUMED_LINE)).toEqual(without);
     });
