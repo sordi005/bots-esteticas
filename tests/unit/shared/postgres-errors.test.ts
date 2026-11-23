@@ -4,6 +4,7 @@ import {
   findPostgresError,
   isConstraintViolation,
   DEADLOCK_DETECTED,
+  MAX_DEADLOCK_ATTEMPTS,
   retryOnDeadlock,
 } from '../../../src/shared/postgres-errors.js';
 
@@ -41,31 +42,55 @@ describe('isConstraintViolation', () => {
   });
 });
 
-describe('retryOnDeadlock: dos reservas del mismo horario a la vez (6.6)', () => {
+describe('retryOnDeadlock: varias reservas del mismo horario a la vez (6.6)', () => {
   // Con una restricción de exclusión, dos inserciones simultáneas que chocan pueden esperarse una a
   // la otra: Postgres aborta una con "deadlock detected" en vez de la violación de la restricción.
   const deadlock = () => new Error('Failed query', { cause: driverError(DEADLOCK_DETECTED) });
+  const noWait = () => Promise.resolve();
 
-  it('reintenta una vez la transacción que perdió por deadlock', async () => {
-    let calls = 0;
-    const result = await retryOnDeadlock(() => {
-      calls += 1;
-      return calls === 1 ? Promise.reject(deadlock()) : Promise.resolve('ok');
-    });
+  /** Una transacción que pierde por deadlock las primeras `failures` veces y después resuelve. */
+  function failingTimes(failures: number) {
+    const state = { calls: 0 };
+    const run = () => {
+      state.calls += 1;
+      return state.calls <= failures ? Promise.reject(deadlock()) : Promise.resolve('ok');
+    };
+    return { state, run };
+  }
 
-    expect(result).toBe('ok');
-    expect(calls).toBe(2);
+  it('reintenta la transacción que perdió por deadlock', async () => {
+    const { state, run } = failingTimes(1);
+
+    await expect(retryOnDeadlock(run, { wait: noWait })).resolves.toBe('ok');
+    expect(state.calls).toBe(2);
   });
 
-  it('si vuelve a perder por deadlock, el error sube', async () => {
-    let calls = 0;
-    const run = () => {
-      calls += 1;
-      return Promise.reject(deadlock());
-    };
+  it('con cinco a la vez, las que pierden pueden volver a trabarse entre sí: sigue reintentando', async () => {
+    const { state, run } = failingTimes(2);
 
-    await expect(retryOnDeadlock(run)).rejects.toThrow('Failed query');
-    expect(calls).toBe(2);
+    await expect(retryOnDeadlock(run, { wait: noWait })).resolves.toBe('ok');
+    expect(state.calls).toBe(3);
+  });
+
+  it('espera un rato al azar antes de cada reintento, para que no vuelvan a chocar juntas', async () => {
+    const { run } = failingTimes(2);
+    const waits: number[] = [];
+
+    await retryOnDeadlock(run, {
+      wait: (attempt) => {
+        waits.push(attempt);
+        return Promise.resolve();
+      },
+    });
+
+    expect(waits).toEqual([1, 2]);
+  });
+
+  it(`el reintento tiene tope: después de ${String(MAX_DEADLOCK_ATTEMPTS)} intentos el error sube`, async () => {
+    const { state, run } = failingTimes(Number.POSITIVE_INFINITY);
+
+    await expect(retryOnDeadlock(run, { wait: noWait })).rejects.toThrow('Failed query');
+    expect(state.calls).toBe(MAX_DEADLOCK_ATTEMPTS);
   });
 
   it('cualquier otro error sube sin reintentar', async () => {
@@ -75,7 +100,14 @@ describe('retryOnDeadlock: dos reservas del mismo horario a la vez (6.6)', () =>
       return Promise.reject(new Error('Failed query', { cause: driverError(EXCLUSION_VIOLATION, 'appointments_no_overlap') }));
     };
 
-    await expect(retryOnDeadlock(run)).rejects.toThrow('Failed query');
+    await expect(retryOnDeadlock(run, { wait: noWait })).rejects.toThrow('Failed query');
     expect(calls).toBe(1);
+  });
+
+  it('sin espera inyectada, espera de verdad y resuelve', async () => {
+    const { state, run } = failingTimes(1);
+
+    await expect(retryOnDeadlock(run)).resolves.toBe('ok');
+    expect(state.calls).toBe(2);
   });
 });

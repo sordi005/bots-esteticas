@@ -744,6 +744,8 @@ ALTER TABLE appointments ADD CONSTRAINT no_overlap
 
 Si la segunda inserción falla por esta restricción, el asistente le dice a la clienta que ese horario se acaba de ocupar y le ofrece otros.
 
+**[D]** Para que la segunda reciba esa violación y no un deadlock, toda transacción que guarda un turno, lo mueve o le cambia el estado toma primero un lock de Postgres de la profesional (`pg_advisory_xact_lock`, que se libera solo al terminar la transacción), antes de bloquear cualquier fila. Sin él, dos inserciones que chocan pueden esperarse una a la otra al chequear la restricción: Postgres tarda un segundo en detectarlo y aborta una, y con varias reservas a la vez los deadlocks se encadenan. El lock solo las pone en fila; la que decide sigue siendo la restricción. Si dos profesionales caen en el mismo lock (una colisión del hash), solo se esperan de más. Si un turno cambiara de profesional, se toman los locks de las dos, siempre en el mismo orden.
+
 Como el `time_range` de un turno incluye el margen posterior (sección 7), la restricción también protege el tiempo de limpieza entre turnos.
 
 **[D]** Cómo se reserva (regla "la IA elige, el código decide"):
