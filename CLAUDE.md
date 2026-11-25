@@ -115,7 +115,7 @@ Las convenciones completas están en la sección 7.1 de la especificación. Las 
 - Toda tabla de negocio nueva lleva `tenantId()` (de `modules/tenants/schema.ts`), `unique(tenant_id, id)` si otras tablas la referencian, y claves foráneas compuestas `(tenant_id, id_padre)` hacia sus padres. `tests/integration/tenant-isolation.test.ts` lo verifica solo sobre todas las tablas.
 - Dinero en centavos (`integer`, nombre terminado en `Cents`). Instantes con `instant()`, rangos con `timestampRange()`, ambos de `shared/db-columns.ts`.
 - Después de cambiar un `schema.ts`: `pnpm db:generate` y commitear la migración junto con el cambio. Una migración ya mergeada no se edita: los cambios van en una nueva. CI falla si falta una migración.
-- Feriados: cada año, una migración de datos nueva (`drizzle-kit generate --custom`) con la lista oficial de argentina.gob.ar/feriados y la fuente citada en el SQL. Nunca fechas no publicadas.
+- Feriados: cada año, una migración de datos nueva (`drizzle-kit generate --custom`) con la lista oficial de argentina.gob.ar/feriados y la fuente citada en el SQL. Nunca fechas no publicadas. Excepción: si la lista se demora, los inamovibles de la Ley 27.399 (art. 1) se cargan antes; los trasladables esperan siempre la lista oficial (sección 4.2).
 
 ## Fechas y dominio
 
