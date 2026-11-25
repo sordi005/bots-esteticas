@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { and, eq } from 'drizzle-orm';
+import { and, DrizzleQueryError, eq } from 'drizzle-orm';
+import pg from 'pg';
 import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { scheduleJob, type ClaimedJob } from '../../src/modules/jobs/queue.js';
 import {
@@ -96,6 +97,20 @@ describe('runOnce: una vuelta del worker', () => {
       lastError: 'Meta no responde',
       runAt: clock.later(30_000),
     });
+  });
+
+  it('de un error de la base guarda el motivo, sin la consulta ni los datos de la clienta (10.1)', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const cause = new pg.DatabaseError('duplicate key value violates unique constraint "customers_phone"', 90, 'error');
+    cause.detail = 'Key (phone)=(+5492615550101) already exists.';
+    const failedInsert = new DrizzleQueryError('insert into "customers" ("phone") values ($1)', ['+5492615550101'], cause);
+
+    await runner(() => Promise.reject(failedInsert), { now: clock.now }).runOnce();
+
+    expect((await readJob('conversacion-1')).lastError).toBe(
+      'Failed query: duplicate key value violates unique constraint "customers_phone"',
+    );
   });
 
   it('después del tercer intento fallido la tarea queda fallida', async () => {
