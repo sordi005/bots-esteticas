@@ -5,7 +5,7 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 import { WhatsAppApiError } from '../../../src/modules/whatsapp/client.js';
 import { buildServer } from '../../../src/server.js';
-import { createLogger, serializeError } from '../../../src/shared/logger.js';
+import { createLogger, safeErrorMessage, serializeError } from '../../../src/shared/logger.js';
 
 const VERIFY_TOKEN = 'token-de-verificacion-que-no-se-loguea';
 
@@ -176,6 +176,31 @@ describe('serializeError', () => {
 
   it('deja pasar lo que no es un error', () => {
     expect(serializeError('se cortó')).toBe('se cortó');
+  });
+});
+
+describe('safeErrorMessage', () => {
+  it('de un error de Drizzle deja «Failed query» y el motivo de Postgres, sin la consulta ni los datos', () => {
+    const message = safeErrorMessage(failedInsert());
+
+    expect(message).toBe('Failed query: duplicate key value violates unique constraint "customers_tenant_phone_unique"');
+    expectNoCustomerData(message);
+  });
+
+  it('encadena las causas con el mismo criterio', () => {
+    const wrapped = new Error('No se pudo guardar el mensaje', { cause: failedInsert() });
+
+    expect(safeErrorMessage(wrapped)).toBe(
+      'No se pudo guardar el mensaje: Failed query: duplicate key value violates unique constraint "customers_tenant_phone_unique"',
+    );
+  });
+
+  it('un error sin causa queda con su mensaje', () => {
+    expect(safeErrorMessage(new Error('Meta no responde'))).toBe('Meta no responde');
+  });
+
+  it('lo que no es un error se pasa a texto', () => {
+    expect(safeErrorMessage('se cortó')).toBe('se cortó');
   });
 });
 

@@ -71,7 +71,7 @@ function serializeAtDepth(value: unknown, depth: number): unknown {
   if (!(value instanceof Error)) return value;
 
   const type = value.constructor.name || value.name;
-  const message = value instanceof DrizzleQueryError ? 'Failed query' : value.message;
+  const message = ownMessage(value);
   const frames = (value.stack ?? '').split('\n').filter((line) => /^\s+at /.test(line));
   const serialized: SerializedError = { type, message, stack: [`${type}: ${message}`, ...frames].join('\n') };
 
@@ -87,6 +87,27 @@ function serializeAtDepth(value: unknown, depth: number): unknown {
     }
   }
   return serialized;
+}
+
+/** El mensaje de un error, sin la consulta ni los parámetros que Drizzle pone en él. */
+function ownMessage(error: Error): string {
+  return error instanceof DrizzleQueryError ? 'Failed query' : error.message;
+}
+
+/**
+ * El motivo de un error en una línea, con la misma regla que `serializeError`: el mensaje limpio
+ * de cada error de la cadena de causas, separado por «: » (`Failed query: duplicate key …`). Es
+ * para lo que se guarda en la base, como `scheduled_jobs.last_error`, que tampoco lleva datos de
+ * las clientas. Los campos de `pg` como `detail` no entran: solo los mensajes.
+ */
+export function safeErrorMessage(value: unknown): string {
+  const messages: string[] = [];
+  let current = value;
+  while (current instanceof Error && messages.length <= MAX_ERROR_DEPTH) {
+    messages.push(ownMessage(current));
+    current = current.cause;
+  }
+  return messages.length > 0 ? messages.join(': ') : String(value);
 }
 
 /**
