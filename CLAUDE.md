@@ -57,8 +57,8 @@ pnpm test:evals           # evaluaciones del agente contra la API real (cuesta p
 pnpm lint:fix             # arregla lo que ESLint puede arreglar solo
 pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
-pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed)
-pnpm db:down              # apagar Postgres (los datos quedan en el volumen)
+pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed). Ojo: es la de todos los worktrees
+pnpm db:down              # apagar Postgres, también para los otros worktrees (los datos quedan en el volumen)
 pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado, y dice si está en coexistencia
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
 pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
@@ -77,6 +77,8 @@ ngrok http 3100 --url=overfull-subsector-tubby.ngrok-free.dev
 Después de reiniciar la PC no hay túnel y Docker Desktop no arranca solo: abrí Docker, `pnpm db:up` y el túnel antes de `pnpm dev`. Si el bot no contesta, seguí el mensaje: ¿llegó a `messages`? ¿tiene tarea en `scheduled_jobs`? ¿la tarea tiene `last_error`? ¿la conversación está pausada por una derivación o porque la dueña escribió desde su app (`conversations.assistant_status` y `paused_until`; los ecos son los `messages` con `direction = 'echo'`)? Si no llega un aviso a la dueña: ¿está en `notifications` y con qué `status` y `last_error`? (fuera de la ventana de 24 horas sale su plantilla; si la plantilla no está aprobada, falla con el código 132xxx: `pnpm whatsapp:templates` dice cuál). Una derivación o un eco callan al asistente 12 horas: para seguir probando en desarrollo, volvé la conversación a `active` con `paused_until` en null y `resumed_at` con la hora actual (así el historial que ve el asistente arranca ahí y no repite la derivación).
 
 El token de WhatsApp vive cifrado en la base, no en `.env`: cambiar `WHATSAPP_ACCESS_TOKEN` en `.env` no alcanza. Después de cambiarlo, corré `pnpm whatsapp:connect estetica-ejemplo` para guardarlo.
+
+Todos los worktrees usan el mismo Postgres y el mismo volumen (`bots-esteticas_datos`, nombres fijos en `docker-compose.yml`): los datos de desarrollo, con sus credenciales conectadas, están en cualquier carpeta. Una rama anterior a ese cambio levanta su propio volumen vacío: traé `main` antes de `pnpm db:up`.
 
 En producción, con el código compilado: `node dist/migrate.js` y, para la demo, `node dist/seed.js`.
 

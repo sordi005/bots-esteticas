@@ -1,5 +1,11 @@
 # Postgres para desarrollo y tests de integración.
 # Crea dos bases: bots_esteticas (dev) y bots_esteticas_test (tests).
+
+# Nombre fijo: sin él, cada worktree es un proyecto distinto (el nombre de su
+# carpeta) y arranca con un volumen vacío. Con él, todos usan el mismo
+# contenedor, y nunca hay dos Postgres sobre los mismos datos.
+name: bots-esteticas
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -23,3 +29,5 @@ services:
 
 volumes:
   postgres-data:
+    # Compartido por todos los worktrees: `pnpm db:reset` lo borra para todos.
+    name: bots-esteticas_datos
