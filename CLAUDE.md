@@ -192,7 +192,8 @@ ESLint hace cumplir las reglas 3 y 5 en `src/modules/{scheduling,catalog,custome
 - Los tests de integración usan Postgres real (Docker), no mocks de la base.
 - Si cambiás el agente, un prompt o una herramienta, corré las evaluaciones de `tests/evals/` y reportá el resultado.
 - Un hito no está terminado si CI no está en verde. Antes de cada commit: `pnpm check`.
-- Los tests de integración leen `TEST_DATABASE_URL` (base `bots_esteticas_test`, separada de la de desarrollo). Arrancan con la base vacía y migrada; cada test crea sus datos con `createTenantFixture` (slugs aleatorios) y no depende del orden de los archivos.
+- Los tests de integración leen `TEST_DATABASE_URL` (separada de la de desarrollo), pero no corren sobre esa base: cada worktree usa la suya, `bots_esteticas_<hash de su carpeta>_test`, que el global setup crea si falta. Así dos `pnpm check` a la vez desde carpetas distintas no se pisan; dos corridas de integración en la **misma** carpeta sí. Las bases de worktrees borrados quedan hasta `pnpm db:reset` (que también borra la de desarrollo). En un test, la URL sale siempre de `testDatabaseUrl()`.
+- Los tests de integración arrancan con la base vacía y migrada; cada test crea sus datos con `createTenantFixture` (slugs aleatorios) y no depende del orden de los archivos.
 - Para verificar que la base rechaza algo, usá `expectConstraintViolation` con el nombre exacto de la restricción: así el test falla si rechaza por otro motivo.
 
 ## Forma de trabajo

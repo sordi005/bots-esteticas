@@ -1,12 +1,18 @@
 import { sql } from 'drizzle-orm';
 import { createDatabase } from '../../../src/shared/db.js';
 import { runMigrations } from '../../../src/shared/migrations.js';
-import { assertIsTestDatabase, testDatabaseUrl } from './database.js';
+import {
+  assertIsTestDatabase,
+  configuredTestDatabaseUrl,
+  ensureDatabaseExists,
+  testDatabaseUrl,
+} from './database.js';
 
-/** Antes de correr los tests de integración: base de tests vacía y con todas las migraciones. */
+/** Antes de correr los tests de integración: la base de este worktree, vacía y migrada. */
 export default async function setup(): Promise<void> {
   const url = testDatabaseUrl();
   assertIsTestDatabase(url);
+  await ensureDatabaseExists(url, configuredTestDatabaseUrl());
 
   const database = createDatabase(url);
   try {
