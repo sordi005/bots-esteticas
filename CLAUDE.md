@@ -87,11 +87,14 @@ src/
   modules/
     tenants/  catalog/  scheduling/  customers/  payments/
     whatsapp/  mercadopago/  conversation/  notifications/  calendar/
-    jobs/  reporting/  admin/
+    jobs/
+    admin/       # por ahora solo su schema.ts; el panel es H15
     # cada módulo declara sus tablas en su schema.ts
+    # reporting/ todavía no existe: entra en H16
   shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
   seeds/         # datos de ejemplo ("Estética Ejemplo")
-  cli/           # herramientas de línea de comandos (conectar WhatsApp)
+  cli/           # comandos: conectar WhatsApp, Mercado Pago y Calendar,
+                 # cargar el teléfono de la dueña y revisar las plantillas
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
   migrate.ts     # punto de entrada: aplica las migraciones
@@ -209,6 +212,7 @@ Este proyecto no usa OpenSpec: la fuente de verdad es `docs/SPEC.md` y se trabaj
   - `doc-researcher` (Sonnet, `.claude/agents/`): leer la documentación oficial de Meta, Mercado Pago, Google o Anthropic antes de diseñar, ante un error de un tercero o para traer un ejemplo oficial para `tests/contracts/`.
   - `checker` (Haiku, `.claude/agents/`): `pnpm check` antes de cada commit y las suites completas. Devuelve el código de salida y solo las fallas.
   - `Explore` (incorporado, con `model: sonnet`): búsquedas amplias en el código ("¿dónde se programa X?").
+- **Si dan «Agent type not found»**: en una sesión de worktree de la app de escritorio, los agentes, settings, skills y hooks del proyecto se leen de la carpeta principal del repo, no del worktree (`CLAUDE.md` sí sale del worktree; [documentación](https://code.claude.com/docs/en/worktrees), «What worktrees share with the main checkout»). Como todo se trabaja en worktrees, el `main` de la carpeta principal queda viejo: el 24/11/2026 estaba 90 commits atrás, anterior a `.claude/agents/`. Se arregla con `git pull --ff-only` en la carpeta principal y una sesión nueva. Hacerlo después de cada merge que toque `.claude/`; un agente nuevo o cambiado en una rama no se ve hasta que llega ahí.
 - **Queda en el hilo principal**: el diseño y las decisiones, el ciclo TDD (un solo archivo con `pnpm vitest run <archivo>` es inmediato), git y la prueba manual con el desarrollador.
 - Las evaluaciones (`pnpm test:evals`) cuestan plata: se corren con el OK del desarrollador, y ese OK va escrito en el pedido al `checker`.
 - **Una sesión por etapa del hito**: diseño, código y prueba manual. Al cerrar cada etapa, `mem_save` y resumen de sesión; la siguiente arranca desde engram y la spec, no desde el historial. Si el contexto pasa los 200 mil tokens, compactar o abrir otra sesión.
