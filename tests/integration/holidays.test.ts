@@ -42,4 +42,24 @@ describe('feriados nacionales (argentina.gob.ar/feriados)', () => {
       '2026-12-25',
     ]);
   });
+
+  // La lista oficial de 2027 no está publicada: se cargan solo los inamovibles, que fija
+  // la Ley 27.399 (art. 1) y solo puede mover el Congreso. Los trasladables (Güemes,
+  // San Martín, Diversidad Cultural y Soberanía Nacional) entran con la lista oficial.
+  it('las migraciones cargan los feriados inamovibles de 2027, sin los trasladables', async () => {
+    expect(await holidaysOf(2027)).toEqual([
+      '2027-01-01',
+      '2027-02-08', // Carnaval: Pascua es el 28/3/2027
+      '2027-02-09',
+      '2027-03-24',
+      '2027-03-26', // Viernes Santo
+      '2027-04-02',
+      '2027-05-01',
+      '2027-05-25',
+      '2027-06-20',
+      '2027-07-09',
+      '2027-12-08',
+      '2027-12-25',
+    ]);
+  });
 });
