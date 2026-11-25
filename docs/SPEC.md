@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.18 · 06/11/2026 · Autor: Yordi
+> **Estado:** borrador v0.19 · 24/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -883,6 +883,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[D] Coexistencia como requisito del MVP.** La dueña sigue usando su app de WhatsApp Business con el mismo número, y los mensajes que ella manda desde la app le llegan al sistema como "ecos". Eso es lo que permite la regla "si la dueña escribió, el asistente se calla" (4.8).
 - Condiciones de la coexistencia a tener en cuenta en el onboarding (documentación oficial de Meta, "Registrar usuarios de la app de WhatsApp Business", revisada el 06/11/2026):
   - **[D]** Un número se conecta con coexistencia solo con el **registro insertado** (Embedded Signup) de un socio de soluciones o un **proveedor de tecnología**. Para serlo, Yordi tiene que verificar su negocio en Meta y pasar la revisión de la app, que da el acceso avanzado a `whatsapp_business_messaging` y `whatsapp_business_management` (sección 15, antes de vender). El flujo del registro entra en el panel (H15). Para un número propio (de quien administra la app) hay un camino más corto, sin registro insertado ni ser proveedor de tecnología: desde el panel de la app en Meta, agregar el número y confirmarlo escaneando un QR con la app de WhatsApp Business. Así se conectó el número de la prueba de H13 (23/11/2026); para el número de un cliente no sirve.
+  - **[D] Versión del registro insertado** (documentación oficial de Meta, página "Versions" de Embedded Signup, revisada el 24/11/2026): v2 y v3 quedaron deprecados el 15/10/2026, y Meta atiende como v4 los pedidos que las nombran. H15 se hace sobre v4 como mínimo, que pide una configuración nueva de Facebook Login for Business, con `featureType: "whatsapp_business_app_onboarding"` para la coexistencia. Ya existe v5 (20/10/2026), con la coexistencia activada por defecto: al diseñar H15 se decide cuál usar.
   - La dueña tiene que usar la app de WhatsApp Business 2.24.17 o posterior.
   - Si el celular principal de la dueña queda inactivo unos 14 días, Meta desconecta el número de la API (webhook `account_update`, evento `PARTNER_REMOVED`, motivo `PRIMARY_INACTIVITY`); un dispositivo vinculado inactivo 30 días, igual. **Hay que monitorearlo** (sección 10.3).
   - Al conectar, se desvinculan los dispositivos acompañantes (como WhatsApp Web) y hay que volver a vincular los compatibles (todos menos WhatsApp para Windows y para WearOS).
@@ -1062,7 +1063,7 @@ Ejemplos reales de webhooks de Meta y de Mercado Pago guardados como archivos JS
 
 ### 11.4 Evaluación del asistente [D]
 
-Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100) en `tests/evals/`, escritas en TypeScript para que el compilador las verifique y sin sumar una dependencia para leer YAML:
+Un conjunto de conversaciones de prueba (empezar con 30, llegar a 100; son 57 al 24/11/2026) en `tests/evals/`, escritas en TypeScript para que el compilador las verifique y sin sumar una dependencia para leer YAML:
 
 ```ts
 {
@@ -1087,7 +1088,7 @@ Checklist con el número de prueba de Meta antes de cada salida a producción de
 
 ### 11.6 Integración continua
 
-GitHub Actions corre lint, chequeo de tipos, unitarios, integración y compilación en cada push. Las evaluaciones del asistente se corren a mano o antes de desplegar, porque cuestan plata.
+GitHub Actions corre en cada push: lint, chequeo de tipos, que las migraciones estén al día con el esquema, compilación, la migración desde cero y los datos de ejemplo sobre una base vacía (con el código compilado), y los tests unitarios, de contratos y de integración. Las evaluaciones del asistente se corren a mano o antes de desplegar, porque cuestan plata.
 
 ---
 
@@ -1175,7 +1176,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H12 | Google Calendar: escritura y bloqueos | Turno aparece y bloqueo se respeta |
 | H13 | Coexistencia: ecos y pausa automática | Prueba manual con un número real |
 | H14 | Observabilidad: Sentry, alertas de 10.3, monitor externo | Alerta de prueba recibida |
-| H15 | Panel admin mínimo para cargar un negocio sin tocar la base a mano, con el registro insertado de Meta para conectar el número con coexistencia (8.1) | Onboarding de un negocio de prueba desde el panel |
+| H15 | Panel admin mínimo para cargar un negocio sin tocar la base a mano, con el registro insertado de Meta (v4 o posterior) para conectar el número con coexistencia (8.1) | Onboarding de un negocio de prueba desde el panel |
 | H16 | Resumen diario y reporte mensual | Mensajes recibidos en el número de la dueña de prueba |
 | **Piloto** | Primer cliente real | — |
 

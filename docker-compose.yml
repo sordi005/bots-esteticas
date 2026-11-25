@@ -1,5 +1,11 @@
 # Postgres para desarrollo y tests de integración.
 # Crea dos bases: bots_esteticas (dev) y bots_esteticas_test (tests).
+
+# Nombre fijo: sin él, cada worktree es un proyecto distinto (el nombre de su
+# carpeta) y arranca con un volumen vacío. Con él, todos usan el mismo
+# contenedor, y nunca hay dos Postgres sobre los mismos datos.
+name: bots-esteticas
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -9,7 +15,9 @@ services:
       POSTGRES_DB: bots_esteticas
     ports:
       # 5434 por defecto para no chocar con un Postgres local en 5432.
-      - '${POSTGRES_PORT:-5434}:5432'
+      # Solo en 127.0.0.1: la contraseña es de desarrollo y nadie de la red
+      # tiene que poder llegar a la base.
+      - '127.0.0.1:${POSTGRES_PORT:-5434}:5432'
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -21,3 +29,5 @@ services:
 
 volumes:
   postgres-data:
+    # Compartido por todos los worktrees: `pnpm db:reset` lo borra para todos.
+    name: bots-esteticas_datos
