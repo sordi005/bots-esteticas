@@ -2,6 +2,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { Logger } from 'pino';
 import type { Queryable } from '../../shared/db.js';
 import type { HealthCheck } from '../../shared/health.js';
+import { safeErrorMessage } from '../../shared/logger.js';
 import { claimJobs, completeJob, failJob, type ClaimedJob } from './queue.js';
 import { DEFAULT_RETRY_POLICY, nextRetryAt, type RetryPolicy } from './retry-policy.js';
 import type { JobKind } from './schema.js';
@@ -207,6 +208,5 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
 }
 
 function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, MAX_ERROR_LENGTH);
+  return safeErrorMessage(error).slice(0, MAX_ERROR_LENGTH);
 }
