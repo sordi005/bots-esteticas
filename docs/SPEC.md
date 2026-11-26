@@ -1,6 +1,6 @@
 # Asistente de WhatsApp para estéticas — Especificación
 
-> **Estado:** borrador v0.19 · 24/11/2026 · Autor: Yordi
+> **Estado:** borrador v0.20 · 26/11/2026 · Autor: Yordi
 > **Nombre del producto:** a definir
 
 ## 0. Cómo leer este documento
@@ -724,9 +724,9 @@ Detalles del webhook **[D]**:
 - Firma inválida: respuesta `401` y no se guarda nada. Número que no es de ningún negocio: respuesta `200` y aviso en el log. Responder un error haría que Meta reintente durante 36 horas.
 - Si falla el guardado (por ejemplo, la base no responde), el webhook responde `500` y Meta reintenta. Por eso guardar tiene que ser idempotente.
 - Una clienta nueva se crea con su número como `+` seguido del `wa_id` y su nombre de perfil. Una conversación por clienta.
-- Los estados de los mensajes enviados guardan la categoría de precio de Meta en el mensaje. Un envío fallido queda en el log como advertencia; la alerta a Yordi llega en H14.
+- Los estados de los mensajes enviados guardan la categoría de precio de Meta en el mensaje. Un envío fallido (estado `failed`) levanta la alerta de envíos fallidos (10.3), agrupada por negocio y código de error de Meta.
 - Los ecos de la coexistencia (campo `smb_message_echoes`, H13) se guardan en `messages` con dirección eco, una sola vez por id de mensaje, y pausan el asistente en la misma transacción (4.8). No programan la vuelta de la conversación: no hay nada que contestar. La clienta es el destinatario del eco (`to`); un eco sin teléfono (solo nombre de usuario) se descarta como inválido, igual que un mensaje (8.1). Lo que llega al número de avisos (8.2) no son ecos de un negocio y se ignora.
-- Los cambios de otros campos se ignoran hasta su hito, por ejemplo `account_update` (H14, 10.3).
+- **[D] (H14)** También se procesan `account_update` y `message_template_status_update`: levantan una alerta (10.3) en el momento, sin pasar por el worker, porque no guardan nada ni contestan (una alerta es un log con transporte, 10.3). El negocio se reconoce por el id de su cuenta de WhatsApp Business (8.1); una cuenta que no es de ningún negocio (por ejemplo, la del número de avisos, 8.2) alerta igual, con su id. Los cambios de otros campos se ignoran.
 - Meta llama con un `GET` al registrar el webhook: se responde el `hub.challenge` si el `hub.verify_token` coincide.
 
 ### 6.6 Turnos simultáneos
@@ -763,7 +763,7 @@ Los estados que ocupan el horario en la restricción son los mismos que define l
 
 **[S]** El worker revisa cada 1 segundo, con una sola vuelta para todos los tipos de tarea. El agrupado de mensajes (5.2) necesita contestar pocos segundos después del último mensaje: revisando cada 30 segundos, la clienta podría esperar más de medio minuto. La consulta usa un índice parcial, así que el costo es despreciable.
 
-Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), procesar un pago de Mercado Pago (H11), renovar el token de Mercado Pago (H11), copiar los bloqueos del calendario de una profesional (H12), reflejar un turno en el calendario (H12), resumen diario, cierre del día (marcar completados), reporte mensual. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
+Tipos de tarea: procesar conversación, enviar un aviso (H9), procesar la respuesta de la dueña (H9), volver a avisar de una seña en verificación (H9), recordatorio (H10), vencimiento de reserva provisoria (H10), procesar un pago de Mercado Pago (H11), renovar el token de Mercado Pago (H11), copiar los bloqueos del calendario de una profesional (H12), reflejar un turno en el calendario (H12), revisar alertas (H14, 10.3), resumen diario, cierre del día (marcar completados), reporte mensual. Reanudar el asistente no es una tarea: la pausa vence por fecha (4.8).
 
 **[D] Avisos (H9):** un aviso (a la dueña o a la clienta, fuera de la respuesta del asistente) se guarda en la tabla `notifications` **en la misma transacción** que el cambio que lo origina: la derivación, el comprobante, la cancelación, la respuesta de la dueña. Lo envía después la tarea "enviar un aviso", con los reintentos de siempre. Así un cambio y su aviso no pueden quedar desparejos aunque falle la red en el medio. **[D]** Desde H10, junto con el mensaje se guarda su versión con plantilla (8.1), escrita también por el código: si Meta rechaza el mensaje libre por estar fuera de la ventana de 24 horas (error 131047), la misma ejecución envía la plantilla. Los recordatorios salen siempre con plantilla.
 
@@ -784,6 +784,8 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - El worker solo toma los tipos de tarea que sabe ejecutar.
 - Al apagar el servidor, deja de tomar tareas y espera a que terminen las que están en curso.
 - **[S]** Hasta 3 intentos (la alerta de 10.3 salta con el tercero). Los reintentos esperan 30 segundos y 2 minutos. Después del tercer fallo la tarea queda fallida con su último error, que nunca incluye tokens ni el contenido de los mensajes (10.1).
+- **[D] Errores permanentes (H14):** un error que no se arregla reintentando no se reintenta: la tarea falla en ese intento y levanta la alerta de credenciales (10.3). Lo decide el cliente de cada tercero: Meta, con los códigos 0, 3, 10, 190, 200 a 299 y 131005 (token inválido, vencido, revocado o sin permisos); Mercado Pago, con `invalid_grant` e `invalid_client` al renovar el token; Google, con 401 y 403. Los demás errores siguen los reintentos de siempre.
+- **[D] (H14)** Cuando una tarea queda fallida (el último intento, o el plazo vencido sin intentos), el worker levanta la alerta de tareas fallidas (10.3). Una tarea que se reprograma sola, como la copia de bloqueos, nunca queda fallida (la vuelta siguiente ya está anotada), pero la alerta sale igual al tercer fallo seguido.
 - **[S]** Plazo de ejecución: 2 minutos. Cada tarea tiene 60 segundos para terminar; si no, cuenta como un fallo. Hasta 5 tareas a la vez.
 
 **[D]** Procesar una conversación: toma los mensajes entrantes que todavía no se procesaron, arma **una** respuesta (5.1, principio 4), la guarda, los marca como procesados y la envía. Desde H7 la respuesta la arma el agente (8.5).
@@ -818,7 +820,7 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 | IA | API de Claude con Claude Haiku 5.5 (configurable), con uso de herramientas | Buen seguimiento de instrucciones y costo bajo. Detrás de una interfaz propia para poder cambiar de proveedor |
 | Tests | Vitest + Postgres real en Docker | Los tests de turnos necesitan la restricción real |
 | Logs | Pino (JSON) | Logs estructurados con `tenant_id` y `conversation_id` |
-| Errores | Sentry | Alertas de excepciones |
+| Errores y alertas | Sentry (`@sentry/node`, solo errores) | Excepciones, alertas de 10.3 por email y monitor externo de `/health` en un solo lugar (10.2) |
 | Local | Docker Compose (Postgres) | |
 | Panel admin | Mínimo, servido por el mismo backend. Next.js recién en la fase 3 | No construir dos apps en el MVP |
 | Hosting | [S] Un VPS chico o una plataforma con contenedores, más Postgres con backups diarios | Hace falta un proceso siempre prendido para el worker. Vercel no sirve bien para esto. Comparar precios actuales antes de elegir |
@@ -894,19 +896,20 @@ Así, "una sola ejecución por conversación a la vez" (6.5) lo garantiza la bas
 - **[D] Ecos (H13):** el campo `smb_message_echoes` trae los mensajes que la dueña manda desde la app o un dispositivo vinculado: texto, imagen, video, documento, y también editar (`edit`) o borrar (`revoke`) un mensaje. Cada eco dice a quién se mandó (`to`, el teléfono de la clienta, que falta si ella solo tiene nombre de usuario) y cuándo. Los mensajes que manda la API no llegan como eco. Qué se hace con ellos: 4.8 y 6.5.
 - **[D]** No se sincroniza el historial ni los contactos de la app (campos `history` y `smb_app_state_sync`): las clientas se crean cuando escriben, y no se copian a nuestra base seis meses de chats con datos que no necesitamos (9.2). Meta solo permite sincronizar dentro de las 24 horas del registro; cambiar de idea después obliga a registrar el número de nuevo.
 - **[D]** `pnpm whatsapp:connect` informa si el número está en coexistencia: Meta lo confirma con `is_on_biz_app` en `true` y `platform_type` en `CLOUD_API`.
+- **[D] (H14)** El negocio guarda el id de su cuenta de WhatsApp Business: `account_update` y los cambios de plantillas llegan identificados por la cuenta, no por el número (6.5). En desarrollo lo carga `pnpm whatsapp:connect`; desde H15, el registro insertado, que lo devuelve.
 - **[D]** Si un negocio no califica para coexistencia, no entra al MVP. Queda en espera hasta la fase 3, cuando exista el panel de la dueña para responder conversaciones.
 - **Plantillas:** se crean y aprueban en la cuenta de cada negocio durante el onboarding. Mínimo: recordatorio del día anterior (utilidad, con 3 botones) y aviso de reserva vencida (utilidad).
 - **[D] Plantillas (H10):** las define el código (`whatsapp/templates.ts`): nombre, categoría, idioma `es_AR`, texto, variables con nombre (`{{servicio}}`) y botones. El texto sirve para mostrar en el historial del modelo lo que se envió (los avisos del sistema se marcan como tales, 4.5) y para verificar la plantilla aprobada.
   - Las de la clienta van en la cuenta del negocio: `recordatorio_turno` (botones "Confirmo", "Reprogramar", "Cancelar"), `recordatorio_turno_corto`, `reserva_vencida`, `sena_confirmada` y `sena_rechazada`. Las de la dueña van en la cuenta del número de avisos (8.2), o en la del negocio en la fase 0: `aviso_comprobante` (con la imagen como encabezado y los botones "Recibida" / "No llegó"), `aviso_derivacion` ("Ya la atendí"), `aviso_cancelacion` y `aviso_reprogramacion`. Qué pasó con un botón de la dueña no lleva plantilla: sale justo después de que ella tocó el botón, que le abre la ventana.
   - Todas son de utilidad (en el Administrador de WhatsApp la categoría se llama "Servicio") y tienen un período de validez de 12 horas: con el estándar de 10 minutos, un recordatorio a un celular apagado se perdía.
   - Reglas de Meta que condicionan los textos: una variable no puede abrir ni cerrar el texto, y el valor de una variable no puede llevar saltos de línea (el código los reemplaza por espacios). Un botón de respuesta rápida lleva un dato que se fija al enviar (`aviso:…` o `recordatorio:…`) y vuelve en el webhook como un mensaje de tipo `button`, no `interactive`.
-  - `pnpm whatsapp:templates <negocio>` consulta a Meta el estado de cada plantilla y compara su texto con el del código. Necesita el id de la cuenta de WhatsApp Business (`WHATSAPP_BUSINESS_ACCOUNT_ID` en desarrollo; desde H15, guardado con el negocio). El estado se sincroniza solo en H14.
+  - `pnpm whatsapp:templates <negocio>` consulta a Meta el estado de cada plantilla y compara su texto con el del código. Necesita el id de la cuenta de WhatsApp Business (desde H14, guardado con el negocio). **[D] (H14)** Los cambios de estado llegan por el webhook `message_template_status_update`: si una plantilla queda rechazada, pausada, deshabilitada o marcada (`REJECTED`, `PAUSED`, `DISABLED`, `FLAGGED`), salta una alerta (10.3). No se guarda el estado: el comando sigue siendo la consulta completa.
   - **[S]** En desarrollo, `WHATSAPP_PREFER_TEMPLATES=true` manda con plantilla todo aviso que la tenga, sin intentar antes el mensaje libre: en la demo la dueña y la clienta son el mismo celular, y el toque de la dueña le abre la ventana a la clienta. En producción el servidor no arranca con esa variable.
 - **Número de prueba:** la demo usa el número de prueba de Meta, que permite mandar mensajes a unos pocos números verificados sin configurar un negocio real.
   - La lista de permitidos compara el número como texto. A un celular argentino WhatsApp lo identifica como `549` + área + número, pero la lista lo guarda como `54` + área + `15` + número, y contestarle al `wa_id` da el error 131030. Es solo del modo de prueba: en producción no hay lista. Para probar en desarrollo, `WHATSAPP_TEST_RECIPIENT` en `.env` con el número como figura en la lista: todo envío va a ese número. En producción el servidor no arranca con esa variable.
   - El token de acceso que da el panel de prueba vence en pocas horas. Para cualquier uso que no sea una prueba corta hace falta un token que no venza (usuario del sistema o el que entrega el registro del negocio).
 - **[D] El webhook necesita dos suscripciones** (aprendido en la prueba de H5: el panel mostró el paso como hecho sin haber guardado ninguna):
-  1. La app, al objeto `whatsapp_business_account` con los campos `messages` y `smb_message_echoes` (desde H13): `POST /{app-id}/subscriptions`. Es una sola vez para todo el servicio.
+  1. La app, al objeto `whatsapp_business_account` con los campos `messages`, `smb_message_echoes` (desde H13), `account_update` y `message_template_status_update` (desde H14): `POST /{app-id}/subscriptions`. Es una sola vez para todo el servicio.
   2. **La cuenta de WhatsApp Business de cada negocio, a la app**: `POST /{waba-id}/subscribed_apps`. Va en el onboarding de cada negocio (H15) y se verifica con un `GET` al mismo endpoint.
 - **[?] Identificación sin número de teléfono.** Los webhooks reales ya traen `user_id` / `from_user_id` además de `wa_id`: es el identificador que Meta asocia a los nombres de usuario de WhatsApp. Si una clienta con nombre de usuario puede escribir sin que llegue su número, hoy el mensaje se descarta como inválido (las clientas se identifican por teléfono, sección 7). Revisar la documentación oficial de Meta y decidir el modelo de identidad antes del piloto.
 - **[D]** Se registra el costo estimado de cada mensaje enviado por categoría, para el reporte y para detectar abusos. Desde H5 se guarda la categoría que informa Meta. El costo en dólares necesita la tabla de precios vigente (sección 15) y se calcula cuando exista.
@@ -931,7 +934,7 @@ Detalle (H9):
 
 - **[S]** El número de avisos se configura con `NOTIFICATIONS_PHONE_NUMBER_ID` y `NOTIFICATIONS_ACCESS_TOKEN` (es del servicio, no de un negocio: va en variables de entorno, como el App Secret). Sin configurar, los avisos salen del número de cada negocio: así funciona la demo de la fase 0 (13), con el número de prueba de Meta.
 - **[D]** El teléfono de la dueña se guarda como lo identifica WhatsApp (`+549…`, sin el 15), porque contra ese número se reconocen sus respuestas (6.5). En desarrollo se carga con `pnpm owner:phone <negocio> <teléfono>`; desde H15, en el panel.
-- **[D] Ventana de 24 horas:** WhatsApp solo deja mandar mensajes libres a quien le escribió a ese número en las últimas 24 horas; fuera de eso hacen falta plantillas aprobadas. En H9 los avisos son mensajes interactivos (la imagen del comprobante como encabezado, hasta 3 botones), que en la demo llegan porque la dueña le escribe al número de prueba. Desde H10, si Meta rechaza el aviso por estar fuera de la ventana (131047), la misma tarea lo envía con su plantilla (8.1, 6.7). Si la plantilla tampoco sale (no está aprobada, está pausada), el aviso queda fallido con el error de Meta y una advertencia en el log (la alerta a Yordi llega en H14).
+- **[D] Ventana de 24 horas:** WhatsApp solo deja mandar mensajes libres a quien le escribió a ese número en las últimas 24 horas; fuera de eso hacen falta plantillas aprobadas. En H9 los avisos son mensajes interactivos (la imagen del comprobante como encabezado, hasta 3 botones), que en la demo llegan porque la dueña le escribe al número de prueba. Desde H10, si Meta rechaza el aviso por estar fuera de la ventana (131047), la misma tarea lo envía con su plantilla (8.1, 6.7). Si la plantilla tampoco sale (no está aprobada, está pausada), el aviso queda fallido con el error de Meta y levanta la alerta de envíos fallidos (10.3).
 - **[D]** La imagen del comprobante se descarga del número del negocio y se vuelve a subir al número que envía el aviso: Meta no documenta que el id de una imagen recibida sirva para enviarla, y los ids de los webhooks vencen a los 7 días. La imagen no se guarda en nuestra base.
 - **[D]** Los textos de los avisos los escribe el código, nunca el modelo, y no incluyen datos de salud: una derivación por tema sensible muestra el resumen fijo (4.8).
 
@@ -948,7 +951,7 @@ Detalle (H9):
 - **[D]** Sin el SDK de Mercado Pago: los pocos pedidos que hacen falta (token, preferencia, pago, búsqueda de pagos) van con `fetch` y sus respuestas se validan con Zod, como con Meta.
 - **[D]** Al recibir un webhook, se valida la firma (`x-signature`: HMAC-SHA256 de `id:{data.id};request-id:{x-request-id};ts:{ts};` con la clave secreta de la aplicación) y se **consulta el pago a la API** antes de confirmar nada. Solo se procesan los avisos de tipo `payment`; el resto se contesta 200 y se ignora, **antes** de validar la firma: no disparan nada. Comprobado en la prueba manual de H11: los avisos a la `notification_url` de una preferencia creada por OAuth llegan firmados con la clave de Webhooks de la aplicación. Mercado Pago manda además el mismo pago en el formato viejo (IPN: `?id=…&topic=payment`, también `merchant_order`), sin `data.id` y con una firma que no valida: se ignora con 200, porque con 401 lo reintenta cada 15 minutos.
 - **[D]** El webhook guarda el aviso programando la tarea "procesar un pago de Mercado Pago" con el id del pago como clave (6.7): la fila de la tarea es el registro, y un aviso repetido es la misma fila. La tarea consulta el pago con el token del negocio y verifica que la seña sea de ese negocio, el estado, el monto y la moneda (4.5).
-- **[D]** Los tokens se guardan cifrados y se renuevan antes de vencer: la tarea "renovar el token de Mercado Pago" corre 30 días antes del vencimiento. Si la renovación falla en todos los intentos, queda un error en el log (la alerta a Yordi llega en H14, 10.3).
+- **[D]** Los tokens se guardan cifrados y se renuevan antes de vencer: la tarea "renovar el token de Mercado Pago" corre 30 días antes del vencimiento. **[D] (H14)** Si la renovación falla en todos los intentos por un error que se reintenta, levanta la alerta de tareas fallidas y vuelve a programarse **[S]** para 24 horas después: hay 30 días de margen. Si Mercado Pago rechaza el token de renovación (`invalid_grant`: la dueña desvinculó la aplicación, cambió la contraseña o se borró la aplicación), no se reintenta: salta la alerta de credenciales (10.3) y la dueña tiene que volver a conectar.
 
 ### 8.4 Google Calendar
 
@@ -963,7 +966,7 @@ Detalle (H9):
   - **[D]** Título: servicio y nombre de la clienta (o su nombre de perfil), sin teléfono. Descripción fija, escrita por el código: "Turno reservado por WhatsApp. Si lo cambiás acá, el turno no cambia: pedíselo al asistente o avisanos." Usa los recordatorios que la profesional tiene configurados en su calendario.
   - **[D]** El id del evento sale del id del turno: si un reintento lo vuelve a crear, Google lo rechaza y se actualiza el existente.
 - El sistema **lee** los eventos ocupados de la profesional para bloquear horarios (4.2) y los copia a `calendar_blocks` (6.7). Los eventos de los turnos se reconocen por una marca privada y no bloquean.
-- **[D]** La base de datos es la fuente de verdad de los turnos. Google Calendar es una vista más una fuente de bloqueos. Si alguien edita a mano un evento de un turno en el calendario, el sistema no lo toma como cambio del turno: al copiar los bloqueos, si el horario del evento no coincide con el del turno o lo borraron, deja una advertencia en el log (la alerta a Yordi llega en H14, 10.3). No lo restaura solo, para no pelearse con la dueña.
+- **[D]** La base de datos es la fuente de verdad de los turnos. Google Calendar es una vista más una fuente de bloqueos. Si alguien edita a mano un evento de un turno en el calendario, el sistema no lo toma como cambio del turno: al copiar los bloqueos, si el horario del evento no coincide con el del turno o lo borraron, levanta una alerta (10.3). No lo restaura solo, para no pelearse con la dueña.
 
 ### 8.5 Modelo de IA
 
@@ -998,6 +1001,7 @@ Esto hay que revisarlo con alguien que sepa de la ley; lo que sigue es el punto 
 - El **negocio es el responsable** de los datos de sus clientas. **Yordi es el encargado del tratamiento** (los procesa por cuenta del negocio). Esto va en el contrato del servicio.
 - Verificar si corresponde inscribir la base de datos en la Agencia de Acceso a la Información Pública.
 - No se guardan datos sensibles (sección 4.9).
+- **[D] (H14)** Sentry (10.2) recibe errores del sistema, nunca datos de las clientas, y los guarda en la Unión Europea, que la normativa argentina considera con protección adecuada.
 - Retención [S]: los mensajes se borran a los 12 meses. Los turnos y métricas se conservan anonimizados.
 - Derecho de acceso y supresión: un comando del panel admin exporta o borra todos los datos de una clienta.
 - Política de privacidad breve, con un link que el asistente comparte si se la piden.
@@ -1013,23 +1017,36 @@ Logs estructurados en JSON. Cada línea lleva `tenant_id`, `conversation_id` o `
 ### 10.2 Salud del sistema [D]
 
 - Endpoint `/health` que verifica la base de datos y el worker. **[D]** Responde `200` si todos los chequeos pasan y `503` si alguno falla o no responde a tiempo (valor inicial: 2 segundos). El cuerpo indica qué chequeo falló, sin el detalle del error (el detalle va al log). Los chequeos se agregan a medida que existen las piezas: la base desde H1 y el worker desde H6. **[S]** El worker está sano si completó una vuelta en los últimos 30 segundos.
-- Monitor externo de disponibilidad que avisa a Yordi si `/health` falla.
-- Sentry para excepciones.
+- **[D] Chequeo de la cola (H14):** `/health` también falla si la tarea pendiente más vieja venció hace más de **[S]** 2 minutos. Solo cuentan los tipos de tarea que el worker sabe ejecutar: una de un tipo sin handler esperaría para siempre. El chequeo del worker dice que la vuelta corre; este, que la cola avanza: con los 5 lugares ocupados por tareas colgadas, la vuelta sigue y no sale nada.
+- **[D] Monitor externo (H14):** Sentry Uptime revisa `/health` **[S]** cada 1 minuto y abre un issue después de 3 fallas seguidas (un `503` es una falla); la alerta llega como las de 10.3. Hasta que haya producción, apunta al túnel de desarrollo solo para la prueba del hito y después queda pausado.
+- **[D] Sentry para excepciones (H14):** `@sentry/node`, solo errores, sin medición de rendimiento ni instrumentación automática (la integración de Fastify no documenta Fastify 5). Se inicializa al arrancar el servidor. Los errores `5xx` de Fastify los envía un manejador propio. Una excepción o una promesa rechazada sin capturar se envía, se registra como `fatal` y el proceso termina con código 1, para que lo reinicie quien lo supervisa. Sin `@sentry/profiling-node` ni `@sentry/cli`: traen binarios y scripts de instalación (6.8).
+  - **[D]** Sin datos de las clientas: no se envían cuerpos, headers ni query de los pedidos (el cuerpo del webhook trae los mensajes), ni datos de usuario. Los mensajes de error pasan por el mismo filtro que los logs (10.1).
+  - **[D]** Región: Unión Europea (9.2). Se elige al crear la organización y no se puede cambiar.
+  - **[D]** Se configura con `SENTRY_DSN`. Sin ella no se envía nada (desarrollo y tests); en producción el servidor no arranca sin ella.
+  - Plan gratuito (Developer, revisado el 25/11/2026): 1 usuario, 5.000 errores por mes, alertas solo por email y 1 monitor de disponibilidad. Alcanza para el piloto.
 
 ### 10.3 Alertas a Yordi [D]
 
-| Alerta | Por qué importa |
-|---|---|
-| Errores al enviar mensajes a WhatsApp | La clienta no recibe respuesta |
-| Tareas programadas con 3 intentos fallidos | Un recordatorio no salió |
-| Token de Meta, Mercado Pago o Google inválido o por vencer | Un módulo deja de funcionar en silencio |
-| Plantilla rechazada o pausada por Meta | Los recordatorios dejan de salir |
-| Calendario de una profesional sin sincronizar, o un evento de turno editado o borrado a mano (8.4) | El asistente ofrece horarios bloqueados, o la profesional ve un turno donde no está |
-| Sin mensajes eco de un negocio por más de 10 días (se calcula con los ecos guardados en `messages`) | La dueña quizás no abrió la app: a los 14 días Meta desconecta el número |
-| Número desconectado de la coexistencia (webhook `account_update` con `PARTNER_REMOVED`, 8.1) | El asistente deja de recibir y enviar mensajes de ese negocio |
-| Derivación sin resolver por más de 4 horas en horario de atención | Una clienta está esperando |
-| Al 1 de diciembre, feriados del año siguiente sin cargar | Sin ellos, el asistente ofrecería turnos en feriados |
-| Tasa de derivaciones de un negocio mayor al 30 % en una semana | Falta información cargada |
+**[D] Cómo llega una alerta (H14):** cada alerta es un log de nivel `error` y un evento de Sentry con una huella fija: el tipo de alerta y el negocio, más el dato que la distingue (el proveedor, el tipo de tarea, el código de error). Sentry junta los eventos con la misma huella en un issue y le avisa a Yordi por email cuando aparece un issue nuevo o vuelve uno que estaba resuelto: un problema que se repite no manda un mail por vez. Una vez arreglado, se marca resuelto en Sentry. La alerta lleva solo ids (negocio, tarea, turno), nunca teléfonos, nombres ni textos de mensajes. No hay tabla de alertas propia ni otro canal.
+
+**[D]** Las revisiones periódicas las hace la tarea "revisar alertas", una por negocio, **[S]** cada 15 minutos. Al empezar programa la próxima vuelta, como la copia de bloqueos (6.7).
+
+| Alerta | Cuándo salta | Por qué importa |
+|---|---|---|
+| Errores al enviar mensajes a WhatsApp | Meta informa un envío con estado `failed` (6.5), o un aviso queda fallido porque tampoco salió su plantilla (8.2) | La clienta no recibe respuesta |
+| Tareas programadas con 3 intentos fallidos | Al fallar el último intento, o al vencer el plazo de una tarea sin intentos (6.7) | Un recordatorio no salió |
+| Token de Meta, Mercado Pago o Google inválido o por vencer | El tercero rechaza la credencial (errores permanentes, 6.7), o falla la renovación del token de Mercado Pago (8.3). Los tokens de Meta y la clave de Google no vencen solos | Un módulo deja de funcionar en silencio |
+| Plantilla rechazada o pausada por Meta | Webhook `message_template_status_update` con `REJECTED`, `PAUSED`, `DISABLED` o `FLAGGED` (8.1) | Los recordatorios dejan de salir |
+| Calendario de una profesional sin sincronizar, o un evento de turno editado o borrado a mano (8.4) | La copia de bloqueos falla 3 veces seguidas; al copiar, el evento de un turno tiene otro horario o no está | El asistente ofrece horarios bloqueados, o la profesional ve un turno donde no está |
+| Sin mensajes eco de un negocio por más de 10 días | Revisión periódica, solo para negocios en coexistencia: el último eco guardado en `messages` (o la conexión del número, si todavía no hubo ecos) tiene más de 10 días | La dueña quizás no abrió la app: a los 14 días Meta desconecta el número |
+| Número desconectado o restringido por Meta | Webhook `account_update` (8.1) con `PARTNER_REMOVED`, `PARTNER_APP_UNINSTALLED`, `ACCOUNT_OFFBOARDED`, `DISABLED_UPDATE`, `ACCOUNT_RESTRICTION`, `ACCOUNT_VIOLATION` o `ACCOUNT_DELETED` | El asistente deja de recibir y enviar mensajes de ese negocio |
+| Derivación sin resolver por más de 4 horas en horario de atención | Revisión periódica: la derivación está abierta hace más de 4 horas y el negocio está en horario de atención. Una abierta el viernes a las 19:50 avisa el sábado al abrir | Una clienta está esperando |
+| Al 1 de diciembre, feriados del año siguiente sin cargar | Revisión periódica, desde el 1 de diciembre: el año siguiente no tiene ningún feriado cargado | Sin ellos, el asistente ofrecería turnos en feriados |
+| Tasa de derivaciones de un negocio mayor al 30 % en una semana | Revisión periódica, los lunes: derivaciones de los últimos 7 días sobre las conversaciones con mensajes de clientas en esos días | Falta información cargada |
+| Servidor caído o cola atrasada | El monitor externo ve fallar `/health` 3 veces seguidas (10.2) | Nadie recibe respuesta |
+| Error inesperado del código | Un `5xx` o una excepción sin capturar (10.2) | Hay un bug |
+
+**[D]** `pnpm alert:test` levanta una alerta de prueba: es el criterio de terminado de H14 (13).
 
 ### 10.4 Reporte mensual para la dueña
 
@@ -1175,7 +1192,7 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | H11 | Mercado Pago: OAuth, preferencias, webhook | Cobro de prueba confirmado |
 | H12 | Google Calendar: escritura y bloqueos | Turno aparece y bloqueo se respeta |
 | H13 | Coexistencia: ecos y pausa automática | Prueba manual con un número real |
-| H14 | Observabilidad: Sentry, alertas de 10.3, monitor externo | Alerta de prueba recibida |
+| H14 | Observabilidad: Sentry, alertas de 10.3, monitor externo y chequeo de la cola en `/health` (10.2) | Alerta de prueba recibida por email, y alerta del monitor con el servidor apagado |
 | H15 | Panel admin mínimo para cargar un negocio sin tocar la base a mano, con el registro insertado de Meta (v4 o posterior) para conectar el número con coexistencia (8.1) | Onboarding de un negocio de prueba desde el panel |
 | H16 | Resumen diario y reporte mensual | Mensajes recibidos en el número de la dueña de prueba |
 | **Piloto** | Primer cliente real | — |
@@ -1238,6 +1255,13 @@ El detalle del flujo de ramas, commits y PR está en `CLAUDE.md`.
 | 50 | Un eco no resuelve la derivación | Resolverla cuando la dueña escribe | Que escriba no dice que terminó; "Ya la atendí" sí. Mientras tanto, cada eco corre la pausa |
 | 51 | La respuesta armada se descarta si llegó un eco mientras el modelo pensaba | Enviarla igual | Es justo el caso en que se pisan: la clienta recibiría a la vez lo que dice la dueña y lo que dice el asistente |
 | 52 | No sincronizar el historial ni los contactos de la app | Copiar los últimos seis meses de chats | El asistente no los usa (al reanudarse no ve lo anterior), y son datos personales que no hace falta tener (9.2) |
+| 53 | Las alertas son issues de Sentry que llegan por email | Una tabla de alertas propia, o avisar por WhatsApp desde el número de avisos | Sentry ya junta los repetidos y avisa una sola vez; una alerta por WhatsApp no llega justo cuando lo que falla es WhatsApp o su token |
+| 54 | Sentry solo para errores, con un manejador propio en Fastify | La instrumentación automática (`--import`, integración de Fastify) | La integración no documenta Fastify 5 y medir el rendimiento no hace falta; nada se carga antes que la aplicación |
+| 55 | Los errores permanentes no se reintentan | Reintentar todo error 3 veces | Un token revocado no se arregla esperando: reintentar solo demora la alerta |
+| 56 | `/health` falla si la cola se atrasa | Mirar solo que el worker dé vueltas | Con los 5 lugares ocupados por tareas colgadas, la vuelta sigue y no sale nada |
+| 57 | Monitor externo con Sentry Uptime | UptimeRobot u otro servicio aparte | Un solo lugar, revisa cada minuto y la alerta llega igual que las demás. Sentry no corre en nuestro servidor: si este se cae, el monitor sigue |
+| 58 | Sentry en la Unión Europea | Estados Unidos | Para la Ley 25.326 la Unión Europea tiene protección adecuada (9.2); no se puede cambiar después |
+| 59 | Las alertas del webhook de Meta salen en el momento | Programar una tarea por cada cambio de cuenta | No guardan ni contestan nada: una alerta es un log con transporte. Una tarea sumaría una fila y una vuelta sin ganar nada |
 
 ---
 
