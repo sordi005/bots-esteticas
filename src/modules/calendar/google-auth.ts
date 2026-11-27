@@ -1,6 +1,7 @@
 import { sign } from 'node:crypto';
 import { z } from 'zod';
 import type { GoogleServiceAccount } from '../../shared/config.js';
+import type { CredentialProvider, CredentialRejectionSource } from '../../shared/credential-rejection.js';
 
 /**
  * El token de acceso de la cuenta de servicio de Google (8.4), con `node:crypto` en vez de la
@@ -8,7 +9,10 @@ import type { GoogleServiceAccount } from '../../shared/config.js';
  * un JWT firmado con RS256 se canjea por un token que dura una hora. Ni la clave, ni el JWT, ni el
  * token aparecen en los errores.
  */
-export class GoogleApiError extends Error {
+/** Un 403 por el límite de pedidos se arregla esperando: no es una credencial rechazada. */
+const RATE_LIMIT_REASONS: readonly string[] = ['rateLimitExceeded', 'userRateLimitExceeded'];
+
+export class GoogleApiError extends Error implements CredentialRejectionSource {
   override name = 'GoogleApiError';
   readonly status: number;
   /** El motivo que da Google, por ejemplo `invalid_grant` o `duplicate`. */
@@ -18,6 +22,16 @@ export class GoogleApiError extends Error {
     super(message);
     this.status = status;
     this.reason = reason;
+  }
+
+  /**
+   * 401: la cuenta de servicio no sirve (clave borrada). 403: el calendario dejó de estar compartido.
+   * No se arreglan reintentando (errores permanentes, 6.7).
+   */
+  get rejectedCredential(): CredentialProvider | null {
+    if (this.status === 401) return 'google';
+    if (this.status === 403 && !(this.reason !== null && RATE_LIMIT_REASONS.includes(this.reason))) return 'google';
+    return null;
   }
 }
 

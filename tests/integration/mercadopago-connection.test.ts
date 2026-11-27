@@ -8,7 +8,9 @@ import {
   completeMercadoPagoConnection,
   loadMercadoPagoCredential,
   refreshMercadoPagoToken,
+  refreshTokenJobHandler,
   TOKEN_REFRESH_LEAD_MS,
+  TOKEN_REFRESH_RETRY_MS,
 } from '../../src/modules/mercadopago/connection.js';
 import { createOAuthState } from '../../src/modules/mercadopago/oauth.js';
 import { tenantCredentials } from '../../src/modules/tenants/schema.js';
@@ -194,5 +196,45 @@ describe('refreshMercadoPagoToken', () => {
 
     await expect(promise).rejects.toThrow(MercadoPagoApiError);
     expect(await loadMercadoPagoCredential(db, key, tenantId)).toMatchObject({ accessToken: 'APP_USR-acceso' });
+  });
+});
+
+describe('refreshTokenJobHandler: la tarea de renovación (8.3, H14)', () => {
+  async function runHandler(tenantId: string, error: Error, lastAttempt: boolean) {
+    const job = await refreshJob(tenantId);
+    const handler = refreshTokenJobHandler(deps(tokenClient({ refreshToken: () => Promise.reject(error) })));
+    const claimed = { id: job.id, tenantId, kind: job.kind, key: job.key, payload: {}, attempts: 3, lockToken: 'x' };
+    await expect(handler(claimed, { signal: new AbortController().signal, lastAttempt })).rejects.toBe(error);
+    return refreshJob(tenantId);
+  }
+
+  it('si el último intento falla por un error que se reintenta, se vuelve a programar para 24 horas después', async () => {
+    const { tenantId } = await createTenantFixture(db);
+    await connect(tenantId, tokenClient({ exchangeCode: () => Promise.resolve(grant()) }));
+
+    const job = await runHandler(tenantId, new MercadoPagoApiError('Mercado Pago respondió 500', 500, null), true);
+
+    expect(TOKEN_REFRESH_RETRY_MS).toBe(DAY_MS);
+    expect(job.runAt).toEqual(new Date(NOW.getTime() + DAY_MS));
+  });
+
+  it('antes del último intento no se reprograma: siguen los reintentos de la cola', async () => {
+    const { tenantId } = await createTenantFixture(db);
+    await connect(tenantId, tokenClient({ exchangeCode: () => Promise.resolve(grant()) }));
+    const before = await refreshJob(tenantId);
+
+    const job = await runHandler(tenantId, new MercadoPagoApiError('Mercado Pago respondió 500', 500, null), false);
+
+    expect(job.runAt).toEqual(before.runAt);
+  });
+
+  it('con invalid_grant no se reprograma: la dueña tiene que volver a conectar', async () => {
+    const { tenantId } = await createTenantFixture(db);
+    await connect(tenantId, tokenClient({ exchangeCode: () => Promise.resolve(grant()) }));
+    const before = await refreshJob(tenantId);
+
+    const job = await runHandler(tenantId, new MercadoPagoApiError('invalid_grant', 400, 'invalid_grant'), true);
+
+    expect(job.runAt).toEqual(before.runAt);
   });
 });

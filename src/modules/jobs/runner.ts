@@ -1,9 +1,11 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Logger } from 'pino';
+import { raiseAlert } from '../../shared/alerts.js';
+import { rejectedCredential } from '../../shared/credential-rejection.js';
 import type { Queryable } from '../../shared/db.js';
 import type { HealthCheck } from '../../shared/health.js';
 import { safeErrorMessage } from '../../shared/logger.js';
-import { claimJobs, completeJob, failJob, type ClaimedJob } from './queue.js';
+import { claimJobs, completeJob, failExpiredJobs, failJob, oldestOverdueJob, type ClaimedJob } from './queue.js';
 import { DEFAULT_RETRY_POLICY, nextRetryAt, type RetryPolicy } from './retry-policy.js';
 import type { JobKind } from './schema.js';
 
@@ -12,7 +14,14 @@ import type { JobKind } from './schema.js';
  * las ejecuta con su handler y las cierra o las reprograma. Corre dentro del mismo
  * proceso que el servidor.
  */
-export type JobHandler = (job: ClaimedJob, context: { signal: AbortSignal }) => Promise<void>;
+export interface JobContext {
+  /** Se cancela cuando vence el tiempo del handler. */
+  signal: AbortSignal;
+  /** Si falla, no le quedan intentos (la renovación de Mercado Pago se reprograma, 8.3). */
+  lastAttempt: boolean;
+}
+
+export type JobHandler = (job: ClaimedJob, context: JobContext) => Promise<void>;
 
 export interface JobRunnerOptions {
   db: Queryable;
@@ -31,6 +40,8 @@ export interface JobRunnerOptions {
   retryPolicy?: RetryPolicy;
   /** [S] El worker está sano si completó una vuelta en este tiempo (sección 10.2). */
   healthyWithinMs?: number;
+  /** [S] La cola está sana si ninguna tarea pendiente venció hace más que esto (sección 10.2). */
+  maxQueueDelayMs?: number;
 }
 
 export interface JobRunner {
@@ -39,8 +50,10 @@ export interface JobRunner {
   stop(): Promise<void>;
   /** Una vuelta: toma lo vencido y espera a que termine. Para tests y herramientas. */
   runOnce(): Promise<void>;
-  /** Chequeo de salud para /health. */
+  /** Chequeo de salud para /health: la vuelta corre. */
   check: HealthCheck;
+  /** Chequeo de salud para /health: la cola avanza (10.2). */
+  queueCheck: HealthCheck;
 }
 
 export class JobTimeoutError extends Error {
@@ -68,6 +81,7 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     timeoutMs = 60_000,
     retryPolicy = DEFAULT_RETRY_POLICY,
     healthyWithinMs = 30_000,
+    maxQueueDelayMs = 120_000,
   } = options;
   const kinds = (Object.keys(handlers) as JobKind[]).filter((kind) => handlers[kind]);
   const inFlight = new Set<Promise<void>>();
@@ -77,6 +91,15 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
 
   /** Toma tantas tareas como lugares libres haya y las larga, sin esperar a que terminen. */
   async function poll(): Promise<void> {
+    for (const job of await failExpiredJobs(db, { kinds, now: now(), maxAttempts: retryPolicy.maxAttempts })) {
+      raiseAlert(logger, {
+        kind: 'job_failed',
+        tenantId: job.tenantId,
+        detail: job.kind,
+        ids: { jobId: job.id, jobKey: job.key },
+      });
+    }
+
     const free = concurrency - inFlight.size;
     const jobs =
       free > 0
@@ -109,14 +132,22 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     try {
       await runHandler(job);
     } catch (error) {
-      const retryAt = nextRetryAt(job.attempts, now(), retryPolicy);
+      // Una credencial rechazada no se arregla reintentando (errores permanentes, 6.7).
+      const rejected = rejectedCredential(error);
+      const retryAt = rejected ? null : nextRetryAt(job.attempts, now(), retryPolicy);
+      const ids = { jobId: job.id, jobKey: job.key, jobKind: job.kind };
       try {
         if (!(await failJob(db, job, { error: describeError(error), retryAt }))) {
           log.warn({ err: error }, STALE_JOB_MESSAGE);
+        } else if (rejected) {
+          log.warn({ err: error }, 'Un tercero rechazó la credencial: la tarea no se reintenta');
+          raiseAlert(logger, { kind: 'credential_rejected', tenantId: job.tenantId, detail: rejected, ids });
         } else if (retryAt) {
           log.warn({ err: error, retryAt }, 'Falló una tarea programada; se reintenta');
         } else {
-          log.error({ err: error }, 'Falló una tarea programada y no le quedan intentos');
+          // Una tarea que se reprograma sola no queda fallida, pero alerta igual (6.7).
+          log.warn({ err: error }, 'Falló una tarea programada y no le quedan intentos');
+          raiseAlert(logger, { kind: 'job_failed', tenantId: job.tenantId, detail: job.kind, ids });
         }
       } catch (recordError) {
         log.error({ err: recordError }, 'No se pudo registrar el fallo de una tarea programada');
@@ -150,7 +181,8 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     });
 
     try {
-      await Promise.race([handler(job, { signal: controller.signal }), timedOut]);
+      const lastAttempt = job.attempts >= retryPolicy.maxAttempts;
+      await Promise.race([handler(job, { signal: controller.signal, lastAttempt }), timedOut]);
     } catch (error) {
       // Un handler que respeta la señal falla con su propio error al cancelarse.
       throw controller.signal.aborted ? new JobTimeoutError(timeoutMs) : error;
@@ -203,6 +235,13 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
         );
       }
       return Promise.resolve();
+    },
+
+    async queueCheck() {
+      const oldest = await oldestOverdueJob(db, { kinds, dueBefore: new Date(now().getTime() - maxQueueDelayMs) });
+      if (oldest) {
+        throw new Error(`La cola está atrasada: hay una tarea pendiente desde ${oldest.toISOString()}`);
+      }
     },
   };
 }

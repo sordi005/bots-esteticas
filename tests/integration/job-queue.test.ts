@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   claimJobs,
+  failExpiredJobs,
   completeJob,
   EXPIRED_LEASE_ERROR,
   failJob,
@@ -201,6 +202,9 @@ describe('claimJobs: tomar las tareas vencidas', () => {
     }
 
     expect(await claim(now)).toEqual([]);
+    const expired = await failExpiredJobs(db, { kinds: ['process_conversation'], now, maxAttempts: MAX_ATTEMPTS });
+
+    expect(expired).toEqual([expect.objectContaining({ tenantId, kind: 'process_conversation', key: 'conversacion-1' })]);
     expect(await readJob('conversacion-1')).toMatchObject({
       status: 'failed',
       lastError: EXPIRED_LEASE_ERROR,

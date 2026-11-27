@@ -190,7 +190,7 @@ const worker = buildWorker({
 
 const server = buildServer({
   logger,
-  healthChecks: { database: database.ping, worker: worker.check },
+  healthChecks: { database: database.ping, worker: worker.check, queue: worker.queueCheck },
   ...(whatsappWebhook ? { whatsappWebhook } : {}),
   ...(mercadoPagoRoutes ? { mercadoPago: mercadoPagoRoutes } : {}),
   reportError: reportException,

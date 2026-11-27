@@ -10,7 +10,9 @@ import {
 } from '../../src/modules/jobs/runner.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
 import { createDatabase } from '../../src/shared/db.js';
+import { WhatsAppApiError } from '../../src/modules/whatsapp/client.js';
 import { createLogger } from '../../src/shared/logger.js';
+import { captureLogs } from '../support/log-capture.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, single } from './support/fixtures.js';
 import { gate } from './support/gate.js';
@@ -297,5 +299,142 @@ describe('check: la salud del worker en /health (sección 10.2)', () => {
     await worker.stop();
 
     await expect(worker.check()).rejects.toThrow('no está corriendo');
+  });
+});
+
+describe('alertas de las tareas (10.3)', () => {
+  it('un reintento no alerta: todavía puede salir', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const { logger: captured, alerts } = captureLogs();
+
+    await runner(() => Promise.reject(new Error('Meta no responde')), { now: clock.now, logger: captured }).runOnce();
+
+    expect(alerts()).toEqual([]);
+  });
+
+  it('al fallar el último intento levanta la alerta de tareas fallidas, con el tipo de tarea', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const { logger: captured, alerts } = captureLogs();
+    const failing = runner(() => Promise.reject(new Error('Meta no responde')), { now: clock.now, logger: captured });
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await failing.runOnce();
+      clock.set((await readJob('conversacion-1')).runAt);
+    }
+
+    const job = await readJob('conversacion-1');
+    expect(alerts()).toEqual([
+      expect.objectContaining({ alert: 'job_failed', tenantId, detail: 'process_conversation', jobId: job.id }),
+    ]);
+  });
+
+  it('una credencial rechazada no se reintenta: falla en ese intento y alerta de credenciales (6.7)', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const { logger: captured, alerts } = captureLogs();
+    const revoked = new WhatsAppApiError('Meta rechazó el mensaje: token vencido', 401, 190);
+
+    await runner(() => Promise.reject(revoked), { now: clock.now, logger: captured }).runOnce();
+
+    const job = await readJob('conversacion-1');
+    expect(job).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(alerts()).toEqual([
+      expect.objectContaining({ alert: 'credential_rejected', tenantId, detail: 'whatsapp', jobId: job.id }),
+    ]);
+  });
+
+  it('una tarea que se reprograma sola no queda fallida, pero alerta igual al tercer fallo seguido', async () => {
+    const clock = fakeClock();
+    await schedule('bloqueos', clock.now());
+    const { logger: captured, alerts } = captureLogs();
+    const failing = runner(
+      async () => {
+        // Como la copia de bloqueos: al empezar anota la vuelta siguiente.
+        await schedule('bloqueos', clock.later(120_000));
+        throw new Error('Google no responde');
+      },
+      { now: clock.now, logger: captured },
+    );
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await failing.runOnce();
+      clock.set((await readJob('bloqueos')).runAt);
+    }
+
+    expect((await readJob('bloqueos')).status).toBe('pending');
+    expect(alerts()).toEqual([expect.objectContaining({ alert: 'job_failed', detail: 'process_conversation' })]);
+  });
+
+  it('una tarea cuyo último intento venció sin terminar queda fallida y alerta', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const { logger: captured, alerts } = captureLogs();
+    // Cada intento se cuelga: nunca cierra la tarea, así que vence su plazo.
+    const hung = runner(() => new Promise<void>(() => undefined), { now: clock.now, logger: captured, timeoutMs: 10 });
+    const stuck = async () => {
+      const job = await readJob('conversacion-1');
+      await db.update(scheduledJobs).set({ status: 'running', attempts: 3, lockToken: crypto.randomUUID(), lockedUntil: clock.now() }).where(eq(scheduledJobs.id, job.id));
+    };
+    await stuck();
+    clock.set(clock.later(1));
+
+    await hung.runOnce();
+
+    const job = await readJob('conversacion-1');
+    expect(job.status).toBe('failed');
+    expect(alerts()).toEqual([expect.objectContaining({ alert: 'job_failed', jobId: job.id, detail: 'process_conversation' })]);
+  });
+
+  it('el handler sabe si está en su último intento', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const seen: boolean[] = [];
+    const failing = runner(
+      (_job, { lastAttempt }) => {
+        seen.push(lastAttempt);
+        return Promise.reject(new Error('falla'));
+      },
+      { now: clock.now },
+    );
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await failing.runOnce();
+      clock.set((await readJob('conversacion-1')).runAt);
+    }
+
+    expect(seen).toEqual([false, false, true]);
+  });
+});
+
+describe('queueCheck: la cola avanza (10.2)', () => {
+  it('sana si no hay tareas atrasadas', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.later(60_000));
+
+    await expect(runner(() => Promise.resolve(), { now: clock.now }).queueCheck()).resolves.toBeUndefined();
+  });
+
+  it('una tarea pendiente vencida hace 2 minutos todavía está bien; más, no', async () => {
+    const clock = fakeClock();
+    await schedule('conversacion-1', clock.now());
+    const worker = runner(() => Promise.resolve(), { now: clock.now });
+
+    clock.set(clock.later(120_000));
+    await expect(worker.queueCheck()).resolves.toBeUndefined();
+
+    clock.set(clock.later(1_000));
+    await expect(worker.queueCheck()).rejects.toThrow('atrasada');
+  });
+
+  it('solo cuentan los tipos que el worker sabe ejecutar', async () => {
+    const clock = fakeClock();
+    await scheduleJob(db, { tenantId, kind: 'send_notification', key: 'aviso-1', runAt: clock.now() });
+    const worker = runner(() => Promise.resolve(), { now: clock.now });
+
+    clock.set(clock.later(600_000));
+
+    await expect(worker.queueCheck()).resolves.toBeUndefined();
   });
 });

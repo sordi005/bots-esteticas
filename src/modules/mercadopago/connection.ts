@@ -1,6 +1,7 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+import { rejectedCredential } from '../../shared/credential-rejection.js';
 import { scheduleJob } from '../jobs/queue.js';
 import type { JobHandler } from '../jobs/runner.js';
 import { loadCredential, saveCredential } from '../tenants/credentials.js';
@@ -12,6 +13,9 @@ import { verifyOAuthState } from './oauth.js';
  * (tipo `mercadopago`) con su vencimiento, y la tarea "renovar el token" corre 30 días antes.
  */
 export const TOKEN_REFRESH_LEAD_MS = 30 * 86_400_000;
+
+/** [S] Si la renovación falla en todos los intentos, vuelve a probar al día siguiente: hay 30 días de margen (8.3). */
+export const TOKEN_REFRESH_RETRY_MS = 86_400_000;
 
 /** Lo que se guarda cifrado. `userId` es la cuenta de Mercado Pago que autorizó. */
 export const mercadoPagoCredentialSchema = z.object({
@@ -96,7 +100,7 @@ export type RefreshResult = 'refreshed' | 'not_connected';
 
 /**
  * Renueva el token del negocio. Si Mercado Pago lo rechaza, lanza: la cola reintenta y, después del
- * último intento, la tarea queda fallida con el error en el log (la alerta a Yordi llega en H14).
+ * último intento, alerta (10.3). Con `invalid_grant` no reintenta: alerta de credenciales.
  */
 export async function refreshMercadoPagoToken(
   deps: MercadoPagoConnectionDependencies,
@@ -111,8 +115,21 @@ export async function refreshMercadoPagoToken(
 }
 
 export function refreshTokenJobHandler(deps: MercadoPagoConnectionDependencies): JobHandler {
-  return async (job) => {
-    const result = await refreshMercadoPagoToken(deps, { tenantId: job.tenantId });
-    deps.logger.info({ tenantId: job.tenantId, result }, 'Renovación del token de Mercado Pago');
+  return async (job, { lastAttempt }) => {
+    try {
+      const result = await refreshMercadoPagoToken(deps, { tenantId: job.tenantId });
+      deps.logger.info({ tenantId: job.tenantId, result }, 'Renovación del token de Mercado Pago');
+    } catch (error) {
+      // Un error que se reintenta, en el último intento: la tarea alerta y vuelve mañana (8.3).
+      if (lastAttempt && !rejectedCredential(error)) {
+        await scheduleJob(deps.db, {
+          tenantId: job.tenantId,
+          kind: 'refresh_mercadopago_token',
+          key: job.tenantId,
+          runAt: new Date(deps.now().getTime() + TOKEN_REFRESH_RETRY_MS),
+        });
+      }
+      throw error;
+    }
   };
 }

@@ -1,11 +1,20 @@
 import { z } from 'zod';
+import type { CredentialProvider, CredentialRejectionSource } from '../../shared/credential-rejection.js';
 import { toGraphPayload, type OutgoingMessage } from './outgoing.js';
 
 /**
  * Cliente de la API de WhatsApp Cloud (sección 8.1). Recibe `fetch` por parámetro para
  * poder probarlo sin red. El token de acceso nunca aparece en los errores ni en los logs.
  */
-export class WhatsAppApiError extends Error {
+/**
+ * Códigos de Meta que dicen que el token no sirve (6.7): inválido, vencido, revocado o sin permisos.
+ * developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes
+ */
+function isRejectedToken(code: number): boolean {
+  return code === 0 || code === 3 || code === 10 || code === 190 || (code >= 200 && code <= 299) || code === 131005;
+}
+
+export class WhatsAppApiError extends Error implements CredentialRejectionSource {
   override name = 'WhatsAppApiError';
   readonly status: number;
   /** Código de error de Meta, por ejemplo 131030 (número no permitido). */
@@ -15,6 +24,11 @@ export class WhatsAppApiError extends Error {
     super(message);
     this.status = status;
     this.code = code;
+  }
+
+  /** Un token rechazado no se arregla reintentando (errores permanentes, 6.7). */
+  get rejectedCredential(): CredentialProvider | null {
+    return this.code !== null && isRejectedToken(this.code) ? 'whatsapp' : null;
   }
 }
 

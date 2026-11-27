@@ -84,23 +84,41 @@ interface ClaimedRow extends Record<string, unknown> {
   lock_token: string;
 }
 
-/**
- * Toma hasta `limit` tareas vencidas: las pendientes cuya hora llegó y las que estaban
- * en ejecución con el plazo vencido (se cayó quien las ejecutaba). `SKIP LOCKED` hace que
- * dos llamadas simultáneas nunca tomen la misma tarea.
- */
-export async function claimJobs(db: Queryable, options: ClaimOptions): Promise<ClaimedJob[]> {
-  const { kinds, limit, now, leaseMs, maxAttempts } = options;
-  if (kinds.length === 0 || limit <= 0) return [];
-
-  const kindList = sql.join(
+function kindList(kinds: readonly JobKind[]) {
+  return sql.join(
     kinds.map((kind) => sql`${kind}`),
     sql`, `,
   );
+}
 
-  // Una ejecución con el plazo vencido que ya usó todos sus intentos no se vuelve a tomar:
-  // queda fallida, igual que si hubiera fallado sin reintento.
-  await db.execute(sql`
+/** Una tarea cuyo último intento venció sin terminar (6.7). */
+export interface ExpiredJob {
+  id: string;
+  tenantId: string;
+  kind: JobKind;
+  key: string;
+}
+
+interface ExpiredRow extends Record<string, unknown> {
+  id: string;
+  tenant_id: string;
+  kind: JobKind;
+  key: string;
+}
+
+/**
+ * Una ejecución con el plazo vencido que ya usó todos sus intentos no se vuelve a tomar: queda
+ * fallida, igual que si hubiera fallado sin reintento (o pendiente para su vuelta siguiente, si se
+ * programó de nuevo mientras corría). Devuelve esas tareas, para la alerta de tareas fallidas (10.3).
+ */
+export async function failExpiredJobs(
+  db: Queryable,
+  options: Pick<ClaimOptions, 'kinds' | 'now' | 'maxAttempts'>,
+): Promise<ExpiredJob[]> {
+  const { kinds, now, maxAttempts } = options;
+  if (kinds.length === 0) return [];
+
+  const result = await db.execute<ExpiredRow>(sql`
     update scheduled_jobs set
       status = case when rerun_at is null then 'failed'::job_status else 'pending'::job_status end,
       run_at = coalesce(rerun_at, run_at),
@@ -113,18 +131,31 @@ export async function claimJobs(db: Queryable, options: ClaimOptions): Promise<C
     where status = 'running'
       and locked_until <= ${now}
       and attempts >= ${maxAttempts}
-      and kind in (${kindList})
+      and kind in (${kindList(kinds)})
+    returning id, tenant_id, kind, key
   `);
+  return result.rows.map((row) => ({ id: row.id, tenantId: row.tenant_id, kind: row.kind, key: row.key }));
+}
+
+/**
+ * Toma hasta `limit` tareas vencidas: las pendientes cuya hora llegó y las que estaban
+ * en ejecución con el plazo vencido (se cayó quien las ejecutaba) y les quedan intentos; las
+ * que no, las cierra `failExpiredJobs`. `SKIP LOCKED` hace que dos llamadas simultáneas nunca
+ * tomen la misma tarea.
+ */
+export async function claimJobs(db: Queryable, options: ClaimOptions): Promise<ClaimedJob[]> {
+  const { kinds, limit, now, leaseMs, maxAttempts } = options;
+  if (kinds.length === 0 || limit <= 0) return [];
 
   // MATERIALIZED: la consulta que bloquea se ejecuta una sola vez. Si Postgres la metiera
   // dentro del UPDATE, podría volver a ejecutarla y tomar más filas que el límite.
   const result = await db.execute<ClaimedRow>(sql`
     with next as materialized (
       select id from scheduled_jobs
-      where kind in (${kindList})
+      where kind in (${kindList(kinds)})
         and (
           (status = 'pending' and run_at <= ${now})
-          or (status = 'running' and locked_until <= ${now})
+          or (status = 'running' and locked_until <= ${now} and attempts < ${maxAttempts})
         )
       order by run_at
       limit ${limit}
@@ -221,4 +252,28 @@ export async function failJob(
     .where(heldBy(job))
     .returning({ id: scheduledJobs.id });
   return updated.length > 0;
+}
+
+/**
+ * La hora de la tarea pendiente más atrasada de estos tipos, si venció antes de `dueBefore`; si no,
+ * null. Es el chequeo de la cola de /health (10.2): usa el índice de las pendientes vencidas.
+ */
+export async function oldestOverdueJob(
+  db: Queryable,
+  options: { kinds: readonly JobKind[]; dueBefore: Date },
+): Promise<Date | null> {
+  if (options.kinds.length === 0) return null;
+  const [oldest] = await db
+    .select({ runAt: scheduledJobs.runAt })
+    .from(scheduledJobs)
+    .where(
+      and(
+        eq(scheduledJobs.status, 'pending'),
+        sql`${scheduledJobs.runAt} < ${options.dueBefore}`,
+        sql`${scheduledJobs.kind} in (${kindList(options.kinds)})`,
+      ),
+    )
+    .orderBy(scheduledJobs.runAt)
+    .limit(1);
+  return oldest?.runAt ?? null;
 }

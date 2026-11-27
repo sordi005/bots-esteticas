@@ -1,11 +1,15 @@
 import { z } from 'zod';
+import type { CredentialProvider, CredentialRejectionSource } from '../../shared/credential-rejection.js';
 
 /**
  * Cliente de la API de Mercado Pago (8.3), con `fetch` y Zod en vez del SDK (decisión 39). Recibe
  * `fetch` por parámetro para probarlo sin red. Ni los tokens ni el secreto de la aplicación
  * aparecen en los errores ni en los logs. Formatos de mercadopago.com.ar/developers/es/reference.
  */
-export class MercadoPagoApiError extends Error {
+/** Al renovar el token: la dueña desvinculó la aplicación, cambió la contraseña o se borró la aplicación (8.3). */
+const REJECTED_TOKEN_CODES: readonly string[] = ['invalid_grant', 'invalid_client'];
+
+export class MercadoPagoApiError extends Error implements CredentialRejectionSource {
   override name = 'MercadoPagoApiError';
   readonly status: number;
   /** El código de error de Mercado Pago, por ejemplo `invalid_grant`. */
@@ -15,6 +19,11 @@ export class MercadoPagoApiError extends Error {
     super(message);
     this.status = status;
     this.code = code;
+  }
+
+  /** Un token rechazado no se arregla reintentando (errores permanentes, 6.7): la dueña tiene que volver a conectar. */
+  get rejectedCredential(): CredentialProvider | null {
+    return this.code !== null && REJECTED_TOKEN_CODES.includes(this.code) ? 'mercadopago' : null;
   }
 }
 
