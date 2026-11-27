@@ -38,7 +38,8 @@ export interface InboxSummary {
   /** Mensajes con un remitente que no es un número válido. */
   invalid: number;
   statusesUpdated: number;
-  failedDeliveries: { messageId: string; errors: { code: number; title: string }[] }[];
+  /** Envíos que Meta no pudo entregar, con su negocio: la alerta de envíos fallidos (10.3). */
+  failedDeliveries: { tenantId: string; messageId: string; errors: { code: number; title: string }[] }[];
 }
 
 const WA_ID = /^[1-9][0-9]{7,14}$/;
@@ -134,7 +135,7 @@ export async function recordWebhookEvents(
     } else {
       if (await recordStatus(db, tenantId, event)) summary.statusesUpdated += 1;
       if (event.status === 'failed') {
-        summary.failedDeliveries.push({ messageId: event.messageId, errors: event.errors });
+        summary.failedDeliveries.push({ tenantId, messageId: event.messageId, errors: event.errors });
       }
     }
   }

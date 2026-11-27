@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
 import { z } from 'zod';
+import { raiseAlert } from '../../shared/alerts.js';
 import type { Queryable } from '../../shared/db.js';
 import { sendWhatsAppMessage } from '../conversation/outbox.js';
 import { scheduleJob } from '../jobs/queue.js';
@@ -131,13 +132,20 @@ export async function sendNotification(
   if (!notification) return 'not_found';
   if (notification.status !== 'pending') return 'already_handled';
 
-  const markFailed = async (reason: string): Promise<SendNotificationResult> => {
+  /** `code`: el error de Meta, si lo hubo. La alerta se agrupa por negocio y código (10.3). */
+  const markFailed = async (reason: string, code?: number | null): Promise<SendNotificationResult> => {
     // Solo el motivo: el contenido del aviso no va al log (10.1).
     logger.warn({ kind: notification.kind, reason }, 'No se pudo enviar un aviso');
     await db
       .update(notifications)
       .set({ status: 'failed', lastError: reason })
       .where(and(thisNotification, eq(notifications.status, 'pending')));
+    raiseAlert(deps.logger, {
+      kind: 'delivery_failed',
+      tenantId,
+      detail: code === undefined || code === null ? 'aviso' : String(code),
+      ids: { notificationId, notificationKind: notification.kind },
+    });
     return 'failed';
   };
 
@@ -194,10 +202,10 @@ export async function sendNotification(
       const hasFallback = index < versions.length - 1;
       if (error.code === OUTSIDE_SERVICE_WINDOW && hasFallback) continue;
       if (error.code === OUTSIDE_SERVICE_WINDOW) {
-        return await markFailed(`Fuera de la ventana de 24 horas (${String(OUTSIDE_SERVICE_WINDOW)})`);
+        return await markFailed(`Fuera de la ventana de 24 horas (${String(OUTSIDE_SERVICE_WINDOW)})`, error.code);
       }
       if (version.type === 'template' && isTemplateError(error.code)) {
-        return await markFailed(`La plantilla ${version.name} no se pudo enviar (${String(error.code)})`);
+        return await markFailed(`La plantilla ${version.name} no se pudo enviar (${String(error.code)})`, error.code);
       }
       throw error;
     }

@@ -11,6 +11,7 @@ import { oauthRedirectUri } from './modules/mercadopago/oauth.js';
 import type { MercadoPagoRoutesOptions } from './modules/mercadopago/routes.js';
 import { createWhatsAppClient } from './modules/whatsapp/client.js';
 import { withRecipientOverride } from './modules/whatsapp/recipient-override.js';
+import { alertAccountChanges, alertFailedDeliveries } from './modules/whatsapp/webhook-alerts.js';
 import type { WhatsAppWebhookOptions } from './modules/whatsapp/webhook-routes.js';
 import { chooseConversationMode } from './conversation-mode.js';
 import { buildServer } from './server.js';
@@ -55,10 +56,9 @@ const whatsappWebhook: WhatsAppWebhookOptions | undefined = config.whatsapp
           ...(config.notificationsNumber ? { notificationsPhoneNumberId: config.notificationsNumber.phoneNumberId } : {}),
         });
         log[counts.unknownNumber > 0 ? 'warn' : 'info'](counts, 'Webhook de WhatsApp guardado');
-        for (const failure of failedDeliveries) {
-          log.warn(failure, 'Meta no pudo entregar un mensaje');
-        }
+        alertFailedDeliveries(logger, failedDeliveries);
       },
+      onAccountChanges: (changes) => alertAccountChanges({ db: database.db, logger }, changes),
     }
   : undefined;
 if (!whatsappWebhook) {

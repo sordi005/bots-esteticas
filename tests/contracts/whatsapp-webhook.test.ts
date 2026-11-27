@@ -161,14 +161,56 @@ describe('parseWebhook: ecos de la coexistencia', () => {
   });
 });
 
+describe('parseWebhook: cambios de la cuenta (H14)', () => {
+  it('account_update trae la cuenta de WhatsApp Business y el evento, como PARTNER_REMOVED', () => {
+    // Ejemplo oficial: developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/account_update
+    expect(parseWebhook(fixture('account-update-partner-removed'))).toEqual({
+      events: [],
+      accountChanges: [{ kind: 'account_update', wabaId: '980198427658004', event: 'PARTNER_REMOVED' }],
+      ignored: 0,
+    });
+  });
+
+  it('sin waba_info, la cuenta es la de la entrada', () => {
+    const body = fixture('account-update-partner-removed') as {
+      entry: { changes: { value: Record<string, unknown> }[] }[];
+    };
+    const change = body.entry[0]?.changes[0];
+    if (change) change.value = { event: 'ACCOUNT_VIOLATION' };
+
+    expect(parseWebhook(body).accountChanges).toEqual([
+      { kind: 'account_update', wabaId: '2949482758682047', event: 'ACCOUNT_VIOLATION' },
+    ]);
+  });
+
+  it('message_template_status_update trae la cuenta, la plantilla y su estado nuevo', () => {
+    // Ejemplo oficial: developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/message_template_status_update
+    expect(parseWebhook(fixture('template-status-update'))).toEqual({
+      events: [],
+      accountChanges: [
+        {
+          kind: 'template_status',
+          wabaId: '102290129340398',
+          event: 'APPROVED',
+          templateId: '1689556908129832',
+          templateName: 'order_confirmation',
+          language: 'en-US',
+          reason: 'NONE',
+        },
+      ],
+      ignored: 0,
+    });
+  });
+});
+
 describe('parseWebhook: lo que no se procesa', () => {
-  it('ignora cambios de otros campos, como los de la cuenta (H14)', () => {
+  it('ignora cambios de otros campos, como la calidad del número', () => {
     const body = fixture('text') as { entry: { changes: { field: string }[] }[] };
     const [entry] = body.entry;
     const [change] = entry?.changes ?? [];
-    if (change) change.field = 'account_update';
+    if (change) change.field = 'phone_number_quality_update';
 
-    expect(parseWebhook(body)).toEqual({ events: [], ignored: 1 });
+    expect(parseWebhook(body)).toEqual({ events: [], accountChanges: [], ignored: 1 });
   });
 
   it('cuenta como ignorado un cambio con un formato inesperado, sin romper el resto', () => {
@@ -177,11 +219,11 @@ describe('parseWebhook: lo que no se procesa', () => {
         object: 'whatsapp_business_account',
         entry: [{ id: '1', changes: [{ field: 'messages', value: { algo: 'distinto' } }] }],
       }),
-    ).toEqual({ events: [], ignored: 1 });
+    ).toEqual({ events: [], accountChanges: [], ignored: 1 });
   });
 
   it('no acepta algo que no es un webhook de WhatsApp', () => {
-    expect(parseWebhook({ object: 'page', entry: [] })).toEqual({ events: [], ignored: 1 });
-    expect(parseWebhook('texto')).toEqual({ events: [], ignored: 1 });
+    expect(parseWebhook({ object: 'page', entry: [] })).toEqual({ events: [], accountChanges: [], ignored: 1 });
+    expect(parseWebhook('texto')).toEqual({ events: [], accountChanges: [], ignored: 1 });
   });
 });

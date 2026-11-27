@@ -169,6 +169,13 @@
       "when": 1795566117332,
       "tag": "0023_feriados_inamovibles_2027",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795739800306,
+      "tag": "0024_observabilidad",
+      "breakpoints": true
     }
   ]
 }

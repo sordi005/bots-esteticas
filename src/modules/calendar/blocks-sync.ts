@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
+import { raiseAlert } from '../../shared/alerts.js';
 import { professionals } from '../catalog/schema.js';
 import { scheduleJob } from '../jobs/queue.js';
 import type { JobHandler } from '../jobs/runner.js';
@@ -63,8 +64,14 @@ export async function syncCalendarBlocks(
   const blocks = busyBlocks(events, row.timeZone);
   await db.transaction((tx) => replaceCalendarBlocks(tx, { tenantId, professionalId, blocks }));
 
+  // Una alerta por turno (8.4, 10.3): se repite en cada copia, pero Sentry la junta en un issue.
   for (const edit of await manualEdits(deps, { tenantId, professionalId, window, events })) {
-    logger.warn({ tenantId, ...edit }, 'Evento de un turno editado a mano en Google Calendar');
+    raiseAlert(logger, {
+      kind: 'calendar_event_edited',
+      tenantId,
+      detail: edit.appointmentId,
+      ids: { appointmentId: edit.appointmentId, professionalId, problem: edit.problem },
+    });
   }
   return 'synced';
 }

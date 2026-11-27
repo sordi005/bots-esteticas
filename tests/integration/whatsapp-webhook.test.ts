@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { recordWebhookEvents } from '../../src/modules/conversation/inbox.js';
 import { conversations, messages } from '../../src/modules/conversation/schema.js';
 import { customers } from '../../src/modules/customers/schema.js';
+import type { AccountChange } from '../../src/modules/whatsapp/webhook-payload.js';
 import { buildServer } from '../../src/server.js';
 import { createDatabase } from '../../src/shared/db.js';
 import { testDatabaseUrl } from './support/database.js';
@@ -211,5 +212,52 @@ describe('POST /webhooks/whatsapp: estados de los mensajes enviados', () => {
         .where(and(eq(messages.tenantId, tenantId), eq(messages.whatsappMessageId, outbound))),
     );
     expect(sent.pricingCategory).toBe('service');
+  });
+});
+
+describe('POST /webhooks/whatsapp: alertas (H14)', () => {
+  it('un envío fallido vuelve con su negocio, para la alerta de envíos fallidos', async () => {
+    const { tenantId, phoneNumberId } = await connectedTenant();
+    const messageId = wamid();
+    const errors = [{ code: 131026, title: 'Message undeliverable' }];
+
+    const summary = await recordWebhookEvents(
+      db,
+      [{ kind: 'status', phoneNumberId, messageId, recipientId: CUSTOMER, status: 'failed', timestamp: new Date(), pricingCategory: null, errors }],
+      { now: new Date() },
+    );
+
+    expect(summary.failedDeliveries).toEqual([{ tenantId, messageId, errors }]);
+  });
+
+  it('los cambios de la cuenta van a su propio callback y se responde 200', async () => {
+    const received: AccountChange[] = [];
+    const alerting = buildServer({
+      healthChecks: {},
+      whatsappWebhook: {
+        appSecret: APP_SECRET,
+        verifyToken: VERIFY_TOKEN,
+        onEvents: () => Promise.resolve(),
+        onAccountChanges: (changes) => {
+          received.push(...changes);
+          return Promise.resolve();
+        },
+      },
+    });
+    const body = JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [{ id: '2949482758682047', changes: [{ field: 'account_update', value: { event: 'PARTNER_REMOVED' } }] }],
+    });
+
+    const response = await alerting.inject({
+      method: 'POST',
+      url: '/webhooks/whatsapp',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    });
+    await alerting.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(received).toEqual([{ kind: 'account_update', wabaId: '2949482758682047', event: 'PARTNER_REMOVED' }]);
   });
 });

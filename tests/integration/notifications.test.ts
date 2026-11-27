@@ -21,6 +21,7 @@ import { UNIQUE_VIOLATION } from '../../src/shared/postgres-errors.js';
 import { testDatabaseUrl } from './support/database.js';
 import { createTenantFixture, FIXTURE_CUSTOMER_PHONE, single } from './support/fixtures.js';
 import { expectConstraintViolation } from './support/postgres-errors.js';
+import { captureLogs } from '../support/log-capture.js';
 import { connectWhatsApp } from './support/whatsapp.js';
 
 /**
@@ -131,11 +132,12 @@ function send(
   client: WhatsAppClient & WhatsAppMediaClient,
   notificationsNumber?: { phoneNumberId: string; accessToken: string },
   preferTemplates = false,
+  log = logger,
 ) {
   return sendNotification(
     {
       db,
-      logger,
+      logger: log,
       client,
       credentialsKey,
       now: () => NOW,
@@ -292,12 +294,30 @@ describe('sendNotification: avisos a la dueña (8.2)', () => {
           : outsideWindow(),
     });
 
-    expect(await send(tenant, id, client)).toBe('failed');
+    const { logger: captured, alerts } = captureLogs();
+    expect(await send(tenant, id, client, undefined, false, captured)).toBe('failed');
 
     expect(await notificationRow(id)).toMatchObject({
       status: 'failed',
       lastError: expect.stringMatching(/aviso_cancelacion.*132001/) as unknown,
     });
+    // La alerta de envíos fallidos (10.3), agrupada por negocio y código de error de Meta.
+    expect(alerts()).toEqual([
+      expect.objectContaining({ alert: 'delivery_failed', tenantId: tenant.tenantId, detail: '132001', notificationId: id }),
+    ]);
+  });
+
+  it('un aviso que no sale por otro motivo (sin teléfono de la dueña) también alerta', async () => {
+    const tenant = await readyTenant({ ownerPhone: null });
+    const id = await ownerNotice(tenant, CANCELLATION_TEMPLATE);
+    const { client } = fakeClient({});
+    const { logger: captured, alerts } = captureLogs();
+
+    expect(await send(tenant, id, client, undefined, false, captured)).toBe('failed');
+
+    expect(alerts()).toEqual([
+      expect.objectContaining({ alert: 'delivery_failed', tenantId: tenant.tenantId, detail: 'aviso', notificationId: id }),
+    ]);
   });
 
   it('con preferTemplates (solo desarrollo) sale directo la plantilla, sin probar el mensaje libre', async () => {

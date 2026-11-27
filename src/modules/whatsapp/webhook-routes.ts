@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyBaseLogger, FastifyPluginAsync } from 'fastify';
 import { isValidSignature } from './signature.js';
-import { parseWebhook, type WebhookEvent } from './webhook-payload.js';
+import { parseWebhook, type AccountChange, type WebhookEvent } from './webhook-payload.js';
 
 /**
  * Webhook de WhatsApp Cloud API (sección 6.5, CLAUDE.md regla 6): valida la firma, guarda
@@ -12,6 +12,8 @@ export interface WhatsAppWebhookOptions {
   verifyToken: string;
   /** Guarda los eventos. Si falla, el webhook responde 500 y Meta reintenta: guardar es idempotente. */
   onEvents: (events: WebhookEvent[], log: FastifyBaseLogger) => Promise<void>;
+  /** Los cambios de la cuenta (H14): alertan en el momento, sin guardar nada (decisión 59). */
+  onAccountChanges?: (changes: AccountChange[], log: FastifyBaseLogger) => Promise<void>;
 }
 
 const PATH = '/webhooks/whatsapp';
@@ -60,10 +62,11 @@ export const whatsappWebhookRoutes: FastifyPluginAsync<WhatsAppWebhookOptions> =
       return reply.code(400).send();
     }
 
-    const { events, ignored } = parseWebhook(body);
+    const { events, accountChanges, ignored } = parseWebhook(body);
     if (ignored > 0) request.log.info({ ignored }, 'Cambios del webhook de WhatsApp ignorados');
 
     await options.onEvents(events, request.log);
+    if (accountChanges.length > 0) await options.onAccountChanges?.(accountChanges, request.log);
     return reply.code(200).send();
   });
 

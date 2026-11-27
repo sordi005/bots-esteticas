@@ -47,6 +47,32 @@ export interface EchoEvent {
 
 export type WebhookEvent = InboundMessageEvent | MessageStatusEvent | EchoEvent;
 
+/**
+ * Un cambio de la cuenta de WhatsApp Business (`account_update`, H14): por ejemplo, el número se
+ * desconectó de la coexistencia (PARTNER_REMOVED). Solo se alerta (10.3): no se guarda nada.
+ */
+export interface AccountUpdateEvent {
+  kind: 'account_update';
+  /** La cuenta de WhatsApp Business: identifica al negocio (8.1). */
+  wabaId: string;
+  event: string;
+}
+
+/** Una plantilla cambió de estado en Meta (`message_template_status_update`, H14). */
+export interface TemplateStatusEvent {
+  kind: 'template_status';
+  wabaId: string;
+  /** APPROVED, REJECTED, PAUSED, DISABLED, FLAGGED… */
+  event: string;
+  templateId: string;
+  templateName: string;
+  language: string;
+  /** El motivo que da Meta (`NONE` si no hay). */
+  reason: string | null;
+}
+
+export type AccountChange = AccountUpdateEvent | TemplateStatusEvent;
+
 const unixSeconds = z.string().regex(/^\d+$/);
 
 const messageSchema = z.looseObject({
@@ -90,23 +116,77 @@ const echoValueSchema = z.looseObject({
   message_echoes: z.array(z.unknown()),
 });
 
+// Formatos de developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference (H14).
+const accountUpdateSchema = z.looseObject({
+  event: z.string().min(1),
+  waba_info: z.looseObject({ waba_id: z.string().min(1) }).optional(),
+});
+
+const templateStatusSchema = z.looseObject({
+  event: z.string().min(1),
+  // En el ejemplo oficial llega como número.
+  message_template_id: z.union([z.number(), z.string().min(1)]),
+  message_template_name: z.string().min(1),
+  message_template_language: z.string().min(1),
+  reason: z.string().nullish(),
+});
+
 const envelopeSchema = z.object({
   object: z.literal('whatsapp_business_account'),
   entry: z.array(
-    z.object({ changes: z.array(z.object({ field: z.string(), value: z.unknown() })) }),
+    z.object({
+      // La cuenta de WhatsApp Business.
+      id: z.string().optional(),
+      changes: z.array(z.object({ field: z.string(), value: z.unknown() })),
+    }),
   ),
 });
 
 const fromUnixSeconds = (seconds: string) => new Date(Number(seconds) * 1000);
 
-export function parseWebhook(body: unknown): { events: WebhookEvent[]; ignored: number } {
+/** Un cambio de la cuenta, si el campo es uno de los que se alertan (H14). */
+function accountChange(field: string, value: unknown, entryId: string | undefined): AccountChange | null {
+  if (field === 'account_update') {
+    const update = accountUpdateSchema.safeParse(value);
+    // PARTNER_REMOVED trae la cuenta desconectada en waba_info; en el ejemplo oficial no es la de la entrada.
+    const wabaId = update.success ? (update.data.waba_info?.waba_id ?? entryId) : undefined;
+    return update.success && wabaId ? { kind: 'account_update', wabaId, event: update.data.event } : null;
+  }
+  if (field === 'message_template_status_update') {
+    const status = templateStatusSchema.safeParse(value);
+    if (!status.success || !entryId) return null;
+    return {
+      kind: 'template_status',
+      wabaId: entryId,
+      event: status.data.event,
+      templateId: String(status.data.message_template_id),
+      templateName: status.data.message_template_name,
+      language: status.data.message_template_language,
+      reason: status.data.reason ?? null,
+    };
+  }
+  return null;
+}
+
+const ACCOUNT_FIELDS: readonly string[] = ['account_update', 'message_template_status_update'];
+
+export function parseWebhook(body: unknown): { events: WebhookEvent[]; accountChanges: AccountChange[]; ignored: number } {
   const envelope = envelopeSchema.safeParse(body);
-  if (!envelope.success) return { events: [], ignored: 1 };
+  if (!envelope.success) return { events: [], accountChanges: [], ignored: 1 };
 
   const events: WebhookEvent[] = [];
+  const accountChanges: AccountChange[] = [];
   let ignored = 0;
 
-  for (const change of envelope.data.entry.flatMap((entry) => entry.changes)) {
+  const changes = envelope.data.entry.flatMap((entry) => entry.changes.map((change) => ({ ...change, entryId: entry.id })));
+  for (const change of changes) {
+    if (ACCOUNT_FIELDS.includes(change.field)) {
+      const parsed = accountChange(change.field, change.value, change.entryId);
+      if (parsed) accountChanges.push(parsed);
+      else ignored += 1;
+      continue;
+    }
+
     if (change.field === 'smb_message_echoes') {
       const value = echoValueSchema.safeParse(change.value);
       if (!value.success) {
@@ -132,7 +212,7 @@ export function parseWebhook(body: unknown): { events: WebhookEvent[]; ignored: 
       continue;
     }
 
-    // Otros campos (cambios de la cuenta, H14) llegan en hitos futuros.
+    // Los demás campos (calidad del número, historial…) no se procesan.
     const value = change.field === 'messages' ? valueSchema.safeParse(change.value) : null;
     if (!value?.success) {
       ignored += 1;
@@ -166,7 +246,7 @@ export function parseWebhook(body: unknown): { events: WebhookEvent[]; ignored: 
     }
   }
 
-  return { events, ignored };
+  return { events, accountChanges, ignored };
 }
 
 const textMessage = z.object({ text: z.object({ body: z.string() }) });

@@ -49,6 +49,16 @@ export const tenants = pgTable(
     usesVoseo: boolean('uses_voseo').notNull().default(true),
     /** Identifica al negocio en los webhooks de WhatsApp (sección 6.5). */
     whatsappPhoneNumberId: text('whatsapp_phone_number_id').unique(),
+    /**
+     * La cuenta de WhatsApp Business (8.1, H14): `account_update` y los cambios de plantillas llegan
+     * por la cuenta, no por el número.
+     */
+    whatsappBusinessAccountId: text('whatsapp_business_account_id').unique(),
+    /**
+     * Desde cuándo el número está en coexistencia (8.1), según Meta al conectarlo. Null: no lo está.
+     * La alerta de ecos (10.3) cuenta desde acá si todavía no llegó ninguno.
+     */
+    whatsappCoexistenceSince: instant('whatsapp_coexistence_since'),
     /** A dónde le llegan los avisos a la dueña (sección 8.2). */
     ownerPhone: text('owner_phone'),
     createdAt: createdAt(),

@@ -25,3 +25,20 @@ export function coexistenceStatus(body: unknown): CoexistenceStatus {
   if (parsed.data.platform_type !== 'CLOUD_API') return 'not_connected';
   return parsed.data.is_on_biz_app ? 'coexistence' : 'api_only';
 }
+
+/**
+ * Desde cuándo el número está en coexistencia, al conectarlo (8.1, H14). La alerta de ecos (10.3)
+ * cuenta desde acá si todavía no llegó ninguno: reconectar no reinicia la fecha, y si Meta no
+ * contestó algo claro queda lo que había.
+ */
+export function coexistenceSince(status: CoexistenceStatus, current: Date | null, now: Date): Date | null {
+  switch (status) {
+    case 'coexistence':
+      return current ?? now;
+    case 'api_only':
+    case 'not_connected':
+      return null;
+    case 'unknown':
+      return current;
+  }
+}

@@ -80,8 +80,9 @@ function nextRunOf(fixture: BookableFixture) {
     .where(and(eq(scheduledJobs.tenantId, fixture.tenantId), eq(scheduledJobs.kind, 'sync_calendar_blocks')));
 }
 
+/** Las alertas que se levantaron (10.3): un evento de turno editado a mano. */
 const warnings = (lines: string[]) =>
-  lines.map((line) => JSON.parse(line) as { level: number; msg: string; appointmentId?: string; problem?: string }).filter((line) => line.level === 40);
+  lines.map((line) => JSON.parse(line) as { level: number; alert?: string }).filter((line) => line.alert !== undefined);
 
 describe('syncCalendarBlocks: copia los eventos ocupados de la profesional (D4)', () => {
   it('lee desde ahora hasta la anticipación máxima y guarda solo lo que bloquea', async () => {
@@ -182,24 +183,35 @@ describe('syncCalendarBlocks: el evento de un turno editado a mano (8.4, D10)', 
     expect(warnings(lines)).toEqual([]);
   });
 
-  it('movido a mano: lo avisa en el log, sin tocar el turno ni el evento', async () => {
+  it('movido a mano: levanta una alerta (10.3), sin tocar el turno ni el evento', async () => {
     const { fixture, appointmentId, ours } = await confirmedWithEvent();
     const google = fakeGoogleCalendar({ events: [ours(at('2026-10-05', '12:00'), at('2026-10-05', '13:00'))] });
 
     const { result, lines } = run(fixture, google);
     await result;
 
-    expect(warnings(lines)).toEqual([expect.objectContaining({ appointmentId, problem: 'moved' })]);
+    expect(warnings(lines)).toEqual([
+      expect.objectContaining({
+        level: 50,
+        alert: 'calendar_event_edited',
+        tenantId: fixture.tenantId,
+        detail: appointmentId,
+        professionalId: fixture.professionalId,
+        problem: 'moved',
+      }),
+    ]);
     expect(google.saved).toEqual([]);
   });
 
-  it('borrado a mano: lo avisa en el log', async () => {
+  it('borrado a mano: levanta una alerta', async () => {
     const { fixture, appointmentId } = await confirmedWithEvent();
 
     const { result, lines } = run(fixture, fakeGoogleCalendar({ events: [] }));
     await result;
 
-    expect(warnings(lines)).toEqual([expect.objectContaining({ appointmentId, problem: 'deleted' })]);
+    expect(warnings(lines)).toEqual([
+      expect.objectContaining({ alert: 'calendar_event_edited', detail: appointmentId, problem: 'deleted' }),
+    ]);
   });
 
   it('si la tarea del turno todavía no corrió, no es una edición a mano', async () => {

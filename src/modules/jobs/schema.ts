@@ -19,6 +19,8 @@ export const jobKind = pgEnum('job_kind', [
   // Google Calendar (H12): copiar los bloqueos de una profesional y reflejar un turno en su calendario.
   'sync_calendar_blocks',
   'sync_appointment_event',
+  // Observabilidad (H14): las revisiones periódicas de las alertas de un negocio (10.3).
+  'check_alerts',
 ]);
 
 export const jobStatus = pgEnum('job_status', ['pending', 'running', 'done', 'failed']);
