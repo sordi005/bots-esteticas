@@ -1,5 +1,6 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Logger } from 'pino';
+import { alertChecksJobHandler } from './modules/alerts/check-job.js';
 import { appointmentEventJobHandler } from './modules/calendar/appointment-sync.js';
 import { calendarBlocksJobHandler } from './modules/calendar/blocks-sync.js';
 import type { GoogleCalendarClient } from './modules/calendar/client.js';
@@ -57,6 +58,8 @@ export function buildWorker(dependencies: WorkerDependencies): JobRunner {
     send_appointment_reminder: reminderJobHandler({ db, logger, now }),
     // Con Mercado Pago, antes de vencer una seña se busca su pago (decisión 42).
     expire_reservation: reservationExpiryJobHandler({ db, logger, now, ...(mercadoPago ? { mercadoPago } : {}) }),
+    // Las revisiones periódicas de las alertas (H14, 10.3).
+    check_alerts: alertChecksJobHandler({ db, logger, now }),
   };
 
   if (conversations) {

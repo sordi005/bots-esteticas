@@ -1,3 +1,4 @@
+import { scheduleAlertChecks } from './modules/alerts/check-job.js';
 import { createAgentResponder } from './modules/conversation/agent/agent-responder.js';
 import { createAnthropicLlmClient } from './modules/conversation/agent/anthropic-client.js';
 import type { ToolContext } from './modules/conversation/tools/tool.js';
@@ -215,6 +216,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       );
   });
 }
+
+// La revisión de alertas de cada negocio activo (10.3) arranca ahora y se reprograma sola.
+const alertChecks = await scheduleAlertChecks(database.db, new Date());
+logger.info({ tenants: alertChecks }, 'Revisión de alertas programada');
 
 worker.start();
 await server.listen({ host: config.host, port: config.port });

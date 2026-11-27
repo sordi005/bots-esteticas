@@ -59,11 +59,12 @@ pnpm build && pnpm start  # compilar a dist/ y correr como en producción
 pnpm db:generate          # después de cambiar un schema.ts: genera la migración SQL
 pnpm db:reset             # borra la base de desarrollo y la rearma (migrate + seed). Ojo: es la de todos los worktrees
 pnpm db:down              # apagar Postgres, también para los otros worktrees (los datos quedan en el volumen)
-pnpm whatsapp:connect <negocio>  # guarda número y token de WhatsApp (los lee de .env), cifrado, y dice si está en coexistencia
+pnpm whatsapp:connect <negocio>  # guarda número, cuenta (WABA) y token de WhatsApp (los lee de .env), cifrado, y si está en coexistencia
 pnpm owner:phone <negocio> <teléfono>  # teléfono de la dueña para los avisos (+549…, sin el 15)
-pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (necesita WHATSAPP_BUSINESS_ACCOUNT_ID)
+pnpm whatsapp:templates <negocio>  # estado y texto de las plantillas en Meta (con la cuenta guardada al conectar)
 pnpm mercadopago:connect <negocio>  # link para que la dueña conecte Mercado Pago (vence en 15 min; necesita MERCADOPAGO_* y el túnel)
 pnpm calendar:connect <negocio> <profesional> <gmail>  # conecta su Google Calendar (necesita GOOGLE_SERVICE_ACCOUNT_KEY)
+pnpm alert:test                  # manda una alerta de prueba a Sentry: tiene que llegar el email (necesita SENTRY_DSN)
 ```
 
 Para probar con el número de prueba de Meta y un celular argentino, poné en `.env` `WHATSAPP_TEST_RECIPIENT` con el número como figura en la lista de permitidos (con el 15): todo envío va ahí (sección 8.1). Para recibir los avisos de la dueña en ese mismo celular (fase 0), cargalo con `pnpm owner:phone estetica-ejemplo +549…` (como lo identifica WhatsApp: con el 9 y sin el 15). Sin `NOTIFICATIONS_PHONE_NUMBER_ID`, los avisos salen del número de prueba. Como la dueña y la clienta son el mismo celular, el 131047 no se da solo: para probar los avisos con plantilla, `WHATSAPP_PREFER_TEMPLATES=true` (solo desarrollo).
@@ -90,13 +91,15 @@ src/
     tenants/  catalog/  scheduling/  customers/  payments/
     whatsapp/  mercadopago/  conversation/  notifications/  calendar/
     jobs/
+    alerts/      # la tarea "revisar alertas" (10.3): qué alertar es una función pura
     admin/       # por ahora solo su schema.ts; el panel es H15
     # cada módulo declara sus tablas en su schema.ts
     # reporting/ todavía no existe: entra en H16
-  shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias
+  shared/        # config, db, columnas comunes, migraciones, logger, health, zonas horarias,
+                 # Sentry y alertas
   seeds/         # datos de ejemplo ("Estética Ejemplo")
-  cli/           # comandos: conectar WhatsApp, Mercado Pago y Calendar,
-                 # cargar el teléfono de la dueña y revisar las plantillas
+  cli/           # comandos: conectar WhatsApp, Mercado Pago y Calendar, cargar el teléfono
+                 # de la dueña, revisar las plantillas y la alerta de prueba
   server.ts      # arma Fastify y registra rutas (no escucha: se testea con inject)
   main.ts        # punto de entrada: config, base, listen y apagado ordenado
   migrate.ts     # punto de entrada: aplica las migraciones
@@ -175,6 +178,16 @@ El detalle está en la sección 6.7 de la especificación.
 - Un handler puede correr más de una vez (reintentos, plazo vencido): antes de actuar, verifica que la acción siga siendo válida (regla 7). Recibe un `signal` que se cancela a los 60 s.
 - La cola recibe la hora por parámetro: en los tests se mueve el reloj, no se espera.
 - Los tests que toman tareas borran `scheduled_jobs` en `beforeEach`: la cola es una sola para todos los negocios y un claim tomaría las de otro test.
+
+## Observabilidad
+
+El detalle está en las secciones 10.2 y 10.3 de la especificación.
+
+- Una alerta: solo con `raiseAlert` de `shared/alerts.ts`. Es un log de nivel `error` con el campo `alert` y un mensaje de Sentry con huella fija (tipo, negocio y el `detail` que la distingue): lo que se repite cae en el mismo issue y avisa una sola vez. Lleva solo ids y códigos, nunca teléfonos, nombres ni textos. Un tipo nuevo va en `ALERT_TITLES`.
+- En los tests, las alertas se leen del log: `captureLogs()` de `tests/support/log-capture.ts`. Sin `SENTRY_DSN` (desarrollo y tests) Sentry no envía nada; en producción el servidor no arranca sin ella.
+- Sentry va solo para errores (decisión 54): sin integraciones automáticas ni tracing, y `beforeSend` borra el pedido, el usuario y el texto de las consultas de Drizzle. Un error de una ruta llega por el `setErrorHandler` de `server.ts` (solo los 5xx).
+- Un error que no se arregla reintentando (token revocado, `invalid_grant`) lo marca el cliente de cada tercero con `rejectedCredential` (`shared/credential-rejection.ts`): el worker no reintenta esa tarea y alerta de credenciales.
+- Si no llega una alerta: ¿salió el log con el campo `alert`? Si salió, el problema está del lado de Sentry (DSN, reglas de alerta del proyecto). `pnpm alert:test` prueba el camino entero.
 
 ## Reglas no negociables
 
