@@ -7,6 +7,7 @@ import {
   EXPIRED_LEASE_ERROR,
   failJob,
   scheduleJob,
+  scheduleJobs,
   type ClaimedJob,
 } from '../../src/modules/jobs/queue.js';
 import { scheduledJobs } from '../../src/modules/jobs/schema.js';
@@ -127,6 +128,28 @@ describe('scheduleJob: una fila por tarea y clave (sección 6.7)', () => {
 
     expect((await readJob('misma-clave')).runAt).toEqual(at(4));
     expect((await readJob('misma-clave', other.tenantId)).runAt).toEqual(at(9));
+  });
+});
+
+describe('scheduleJobs: varias tareas en una sola consulta', () => {
+  it('crea las nuevas y actualiza las existentes con las mismas reglas que scheduleJob', async () => {
+    await schedule('en-curso', at(0));
+    await claimOne(at(0));
+    await schedule('pendiente', at(30));
+
+    await scheduleJobs(db, [
+      { tenantId, kind: 'process_conversation', key: 'nueva', runAt: at(10) },
+      { tenantId, kind: 'process_conversation', key: 'pendiente', runAt: at(20) },
+      { tenantId, kind: 'process_conversation', key: 'en-curso', runAt: at(20) },
+    ]);
+
+    expect(await readJob('nueva')).toMatchObject({ status: 'pending', runAt: at(10) });
+    expect(await readJob('pendiente')).toMatchObject({ status: 'pending', runAt: at(20) });
+    expect(await readJob('en-curso')).toMatchObject({ status: 'running', rerunAt: at(20) });
+  });
+
+  it('sin tareas no hace nada', async () => {
+    await expect(scheduleJobs(db, [])).resolves.toBeUndefined();
   });
 });
 

@@ -6,7 +6,7 @@ import { instantToLocal } from '../../shared/time-zone.js';
 import { holidays } from '../catalog/schema.js';
 import { loadHumanAttention } from '../conversation/handoff.js';
 import { handoffs, messages } from '../conversation/schema.js';
-import { scheduleJob } from '../jobs/queue.js';
+import { scheduleJob, scheduleJobs } from '../jobs/queue.js';
 import type { JobHandler } from '../jobs/runner.js';
 import { tenants } from '../tenants/schema.js';
 import { evaluateAlertChecks, type AlertCheckInput } from './checks.js';
@@ -110,8 +110,9 @@ export function alertChecksJobHandler(deps: AlertCheckDependencies): JobHandler 
  */
 export async function scheduleAlertChecks(db: Queryable, now: Date): Promise<number> {
   const active = await db.select({ id: tenants.id }).from(tenants).where(eq(tenants.status, 'active'));
-  for (const tenant of active) {
-    await scheduleJob(db, { tenantId: tenant.id, kind: 'check_alerts', key: tenant.id, runAt: now });
-  }
+  await scheduleJobs(
+    db,
+    active.map((tenant) => ({ tenantId: tenant.id, kind: 'check_alerts' as const, key: tenant.id, runAt: now })),
+  );
   return active.length;
 }

@@ -26,18 +26,30 @@ export interface ScheduleJobInput {
  * - terminada o fallida: vuelve a pendiente, con los intentos en cero.
  */
 export async function scheduleJob(db: Queryable, input: ScheduleJobInput): Promise<void> {
+  await scheduleJobs(db, [input]);
+}
+
+/**
+ * Como `scheduleJob`, para varias tareas en una sola consulta (la revisión de alertas de todos los
+ * negocios, al arrancar). Cada tarea tiene que ser distinta: Postgres no deja actualizar dos veces
+ * la misma fila en un mismo insert.
+ */
+export async function scheduleJobs(db: Queryable, inputs: readonly ScheduleJobInput[]): Promise<void> {
+  if (inputs.length === 0) return;
   const isRunning = sql`${scheduledJobs.status} = 'running'`;
   const isFinished = sql`${scheduledJobs.status} in ('done', 'failed')`;
 
   await db
     .insert(scheduledJobs)
-    .values({
-      tenantId: input.tenantId,
-      kind: input.kind,
-      key: input.key,
-      payload: input.payload ?? {},
-      runAt: input.runAt,
-    })
+    .values(
+      inputs.map((input) => ({
+        tenantId: input.tenantId,
+        kind: input.kind,
+        key: input.key,
+        payload: input.payload ?? {},
+        runAt: input.runAt,
+      })),
+    )
     .onConflictDoUpdate({
       target: [scheduledJobs.tenantId, scheduledJobs.kind, scheduledJobs.key],
       // Todas las expresiones leen la fila como estaba antes de este UPDATE.
