@@ -16,11 +16,26 @@ import { chooseConversationMode } from './conversation-mode.js';
 import { buildServer } from './server.js';
 import { DEFAULT_GRAPH_API_VERSION, loadConfig } from './shared/config.js';
 import { createDatabase } from './shared/db.js';
+import { installFatalErrorHandlers } from './shared/fatal-errors.js';
 import { createLogger } from './shared/logger.js';
+import { flushSentry, initSentry, reportException } from './shared/sentry.js';
 import { buildWorker, type WorkerDependencies } from './worker.js';
 
 const config = loadConfig(process.env);
 const logger = createLogger(config);
+
+// Sentry (10.2): errores y alertas (10.3). Primero que nada, para que lo que falle al arrancar llegue.
+if (config.sentryDsn) {
+  initSentry({ dsn: config.sentryDsn, environment: config.nodeEnv });
+} else {
+  logger.warn('Sin SENTRY_DSN los errores y las alertas quedan solo en el log');
+}
+installFatalErrorHandlers({
+  logger,
+  report: reportException,
+  flush: () => flushSentry(),
+  exit: (code) => process.exit(code),
+});
 const database = createDatabase(config.databaseUrl);
 
 // Sin este handler, un error en una conexión inactiva del pool tira abajo el proceso.
@@ -178,6 +193,7 @@ const server = buildServer({
   healthChecks: { database: database.ping, worker: worker.check },
   ...(whatsappWebhook ? { whatsappWebhook } : {}),
   ...(mercadoPagoRoutes ? { mercadoPago: mercadoPagoRoutes } : {}),
+  reportError: reportException,
 });
 server.addHook('onClose', () => database.close());
 
@@ -189,6 +205,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     worker
       .stop()
       .then(() => server.close())
+      .then(() => flushSentry())
       .then(
         () => process.exit(0),
         (error: unknown) => {

@@ -58,6 +58,8 @@ const REQUIRED_IN_PRODUCTION = [
   'WHATSAPP_VERIFY_TOKEN',
   // Desde H8 producción procesa conversaciones (6.7): sin la clave del modelo no tiene sentido arrancar.
   'ANTHROPIC_API_KEY',
+  // Desde H14 las alertas llegan por Sentry (10.3): sin ella, en producción nadie se entera de nada.
+  'SENTRY_DSN',
 ] as const;
 
 const envSchema = z
@@ -136,6 +138,11 @@ const envSchema = z
     GOOGLE_SERVICE_ACCOUNT_KEY: z.preprocess(
       (value) => (value === '' ? undefined : value),
       googleServiceAccountKey.optional(),
+    ),
+    /** El proyecto de Sentry (10.2): errores y alertas. Sin ella no se envía nada (desarrollo y tests). */
+    SENTRY_DSN: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.url({ protocol: /^https$/, error: 'Tiene que ser el DSN del proyecto, una URL https' }).optional(),
     ),
     /** Dónde nos encuentra Mercado Pago: la vuelta de OAuth y los avisos de pago (8.3). */
     PUBLIC_BASE_URL: z.preprocess(
@@ -246,6 +253,8 @@ export interface Config {
   } | null;
   /** La cuenta de servicio de Google Calendar (8.4). Sin ella, el calendario queda apagado. */
   googleServiceAccount: GoogleServiceAccount | null;
+  /** Null: no se envía nada a Sentry y las alertas quedan solo en el log (10.2). En producción es obligatoria. */
+  sentryDsn: string | null;
 }
 
 export interface GoogleServiceAccount {
@@ -306,5 +315,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
           }
         : null,
     googleServiceAccount: data.GOOGLE_SERVICE_ACCOUNT_KEY ?? null,
+    sentryDsn: data.SENTRY_DSN ?? null,
   };
 }

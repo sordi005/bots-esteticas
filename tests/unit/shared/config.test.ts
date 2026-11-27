@@ -13,6 +13,7 @@ const PRODUCTION = {
   WHATSAPP_APP_SECRET: 'secreto-de-la-app',
   WHATSAPP_VERIFY_TOKEN: 'token-de-verificacion',
   ANTHROPIC_API_KEY: 'sk-ant-clave-de-prueba',
+  SENTRY_DSN: 'https://clave@o1.ingest.de.sentry.io/1',
 };
 
 function captureError(action: () => unknown): Error {
@@ -42,6 +43,7 @@ describe('loadConfig', () => {
       anthropicModel: 'claude-haiku-5-5',
       mercadoPago: null,
       googleServiceAccount: null,
+      sentryDsn: null,
     });
   });
 
@@ -63,6 +65,7 @@ describe('loadConfig', () => {
       anthropicModel: 'claude-haiku-5-5',
       mercadoPago: null,
       googleServiceAccount: null,
+      sentryDsn: 'https://clave@o1.ingest.de.sentry.io/1',
     });
   });
 
@@ -106,7 +109,7 @@ describe('loadConfig', () => {
     expect(error.message).toContain('WHATSAPP_PREFER_TEMPLATES');
   });
 
-  it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY', 'ANTHROPIC_API_KEY'])(
+  it.each(['WHATSAPP_APP_SECRET', 'WHATSAPP_VERIFY_TOKEN', 'CREDENTIALS_ENCRYPTION_KEY', 'ANTHROPIC_API_KEY', 'SENTRY_DSN'])(
     'en producción %s es obligatoria',
     (name) => {
       const error = captureError(() => loadConfig({ ...PRODUCTION, [name]: undefined }));
@@ -378,6 +381,26 @@ describe('loadConfig', () => {
       expect(error.message).toContain('GOOGLE_SERVICE_ACCOUNT_KEY');
       expect(error.message).not.toContain('PRIVATE KEY');
       expect(error.message).not.toContain(value);
+    });
+  });
+
+  describe('Sentry (10.2)', () => {
+    it('vacía en .env no se envía nada: desarrollo y tests', () => {
+      expect(loadConfig({ DATABASE_URL: databaseUrl, SENTRY_DSN: '' }).sentryDsn).toBeNull();
+    });
+
+    it('lee el DSN del proyecto', () => {
+      const dsn = 'https://abc123@o4508.ingest.de.sentry.io/4509';
+
+      expect(loadConfig({ DATABASE_URL: databaseUrl, SENTRY_DSN: dsn }).sentryDsn).toBe(dsn);
+    });
+
+    it('un DSN que no es una URL https no arranca, y el error no lo muestra', () => {
+      const error = captureError(() => loadConfig({ DATABASE_URL: databaseUrl, SENTRY_DSN: 'clave-suelta' }));
+
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(error.message).toContain('SENTRY_DSN');
+      expect(error.message).not.toContain('clave-suelta');
     });
   });
 });
